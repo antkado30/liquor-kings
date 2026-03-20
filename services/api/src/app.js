@@ -1,3 +1,4 @@
+import cartRouter from "./routes/cart.routes.js";
 import express from "express";
 import cors from "cors";
 import supabase from "./config/supabase.js";
@@ -8,6 +9,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use("/bottles", bottlesRouter);
+app.use("/cart", cartRouter);
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", message: "Liquor Kings API running" });
