@@ -27,5 +27,22 @@ router.get("/search", async (req, res) => {
     data,
   });
 });
-
+router.get("/:id", async (req, res) => {
+    const { id } = req.params;
+  
+    const { data, error } = await supabase
+      .from("bottles")
+      .select("id, name, mlcc_code, upc, image_url, size, size_ml, category, subcategory, state_min_price, shelf_price, is_active, created_at, updated_at")
+      .eq("id", id)
+      .single();
+  
+    if (error) {
+      return res.status(404).json({ error: "Bottle not found" });
+    }
+  
+    res.json({
+      success: true,
+      data,
+    });
+  });
 export default router;
