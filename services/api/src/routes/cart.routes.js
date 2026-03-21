@@ -252,4 +252,60 @@ router.delete("/items/:itemId", async (req, res) => {
     });
   });
 
+  router.delete("/:storeId/items", async (req, res) => {
+    const { storeId } = req.params;
+
+    const { data: cart, error: cartError } = await supabase
+      .from("carts")
+      .select("*")
+      .eq("store_id", storeId)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (cartError) {
+      return res.status(500).json({ error: cartError.message });
+    }
+
+    if (!cart) {
+      return res.json({
+        success: true,
+        clearedCount: 0,
+      });
+    }
+
+    const { data: cartItems, error: itemsError } = await supabase
+      .from("cart_items")
+      .select("id")
+      .eq("cart_id", cart.id);
+
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const ids = (cartItems ?? []).map((row) => row.id);
+
+    if (ids.length === 0) {
+      return res.json({
+        success: true,
+        clearedCount: 0,
+      });
+    }
+
+    const { error: deleteError } = await supabase
+      .from("cart_items")
+      .delete()
+      .eq("cart_id", cart.id);
+
+    if (deleteError) {
+      return res.status(500).json({ error: deleteError.message });
+    }
+
+    res.json({
+      success: true,
+      clearedCount: ids.length,
+    });
+  });
+
   export default router;
