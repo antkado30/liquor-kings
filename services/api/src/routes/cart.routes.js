@@ -177,5 +177,48 @@ router.post("/:storeId/items", async (req, res) => {
       item: savedItem,
     });
   });
+router.patch("/items/:itemId", async (req, res) => {
+    const { itemId } = req.params;
+    const { quantity } = req.body;
+
+    const qty = Number(quantity);
+
+    if (!Number.isInteger(qty) || qty <= 0) {
+      return res.status(400).json({ error: "quantity must be a positive integer" });
+    }
+
+    const { data: existingItem, error: fetchError } = await supabase
+      .from("cart_items")
+      .select("*")
+      .eq("id", itemId)
+      .maybeSingle();
+
+    if (fetchError) {
+      return res.status(500).json({ error: fetchError.message });
+    }
+
+    if (!existingItem) {
+      return res.status(404).json({ error: "Cart item not found" });
+    }
+
+    const { data: updatedItem, error: updateError } = await supabase
+      .from("cart_items")
+      .update({
+        quantity: qty,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", itemId)
+      .select("*")
+      .single();
+
+    if (updateError) {
+      return res.status(500).json({ error: updateError.message });
+    }
+
+    res.json({
+      success: true,
+      item: updatedItem,
+    });
+  });
 
   export default router;
