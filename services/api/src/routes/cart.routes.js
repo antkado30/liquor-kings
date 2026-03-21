@@ -220,5 +220,36 @@ router.patch("/items/:itemId", async (req, res) => {
       item: updatedItem,
     });
   });
+router.delete("/items/:itemId", async (req, res) => {
+    const { itemId } = req.params;
+
+    const { data: existingItem, error: fetchError } = await supabase
+      .from("cart_items")
+      .select("*")
+      .eq("id", itemId)
+      .maybeSingle();
+
+    if (fetchError) {
+      return res.status(500).json({ error: fetchError.message });
+    }
+
+    if (!existingItem) {
+      return res.status(404).json({ error: "Cart item not found" });
+    }
+
+    const { error: deleteError } = await supabase
+      .from("cart_items")
+      .delete()
+      .eq("id", itemId);
+
+    if (deleteError) {
+      return res.status(500).json({ error: deleteError.message });
+    }
+
+    res.json({
+      success: true,
+      deletedItemId: itemId,
+    });
+  });
 
   export default router;
