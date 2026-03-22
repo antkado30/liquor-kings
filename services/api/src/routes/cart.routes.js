@@ -476,4 +476,63 @@ router.get("/:storeId/history/:cartId", async (req, res) => {
     });
   });
 
+router.post("/:storeId/validate", async (req, res) => {
+    const { storeId } = req.params;
+
+    const { data: cart, error: cartError } = await supabase
+      .from("carts")
+      .select("*")
+      .eq("store_id", storeId)
+      .eq("status", "submitted")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (cartError) {
+      return res.status(500).json({ error: cartError.message });
+    }
+
+    if (!cart) {
+      return res.status(404).json({ error: "Submitted cart not found" });
+    }
+
+    const { data: cartItems, error: itemsError } = await supabase
+      .from("cart_items")
+      .select("id")
+      .eq("cart_id", cart.id);
+
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const itemCount = (cartItems ?? []).length;
+
+    if (itemCount === 0) {
+      return res.status(400).json({ error: "Cannot validate an empty submitted cart" });
+    }
+
+    const { data: updatedCart, error: updateError } = await supabase
+      .from("carts")
+      .update({
+        validation_status: "pending",
+        validation_requested_at: new Date().toISOString(),
+        validation_completed_at: null,
+        validation_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", cart.id)
+      .select("*")
+      .single();
+
+    if (updateError) {
+      return res.status(500).json({ error: updateError.message });
+    }
+
+    res.json({
+      success: true,
+      cart: updatedCart,
+      itemCount,
+    });
+  });
+
   export default router;
