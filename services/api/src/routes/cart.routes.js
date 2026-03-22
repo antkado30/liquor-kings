@@ -364,4 +364,53 @@ router.post("/:storeId/submit", async (req, res) => {
     });
   });
 
+router.get("/:storeId/history", async (req, res) => {
+    const { storeId } = req.params;
+
+    const { data: carts, error: cartError } = await supabase
+      .from("carts")
+      .select("*")
+      .eq("store_id", storeId)
+      .eq("status", "submitted")
+      .order("updated_at", { ascending: false })
+      .limit(20);
+
+    if (cartError) {
+      return res.status(500).json({ error: cartError.message });
+    }
+
+    if (!carts || carts.length === 0) {
+      return res.json({
+        success: true,
+        history: [],
+      });
+    }
+
+    const cartIds = carts.map((c) => c.id);
+
+    const { data: items, error: itemsError } = await supabase
+      .from("cart_items")
+      .select("id, cart_id")
+      .in("cart_id", cartIds);
+
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const itemCountByCartId = {};
+    for (const row of items ?? []) {
+      itemCountByCartId[row.cart_id] = (itemCountByCartId[row.cart_id] ?? 0) + 1;
+    }
+
+    const historyWithItemCounts = carts.map((cart) => ({
+      ...cart,
+      itemCount: itemCountByCartId[cart.id] ?? 0,
+    }));
+
+    res.json({
+      success: true,
+      history: historyWithItemCounts,
+    });
+  });
+
   export default router;
