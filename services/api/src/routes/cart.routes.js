@@ -535,4 +535,62 @@ router.post("/:storeId/validate", async (req, res) => {
     });
   });
 
+router.patch("/:storeId/history/:cartId/validation-result", async (req, res) => {
+    const { storeId, cartId } = req.params;
+    const { validationStatus, validationError } = req.body;
+
+    if (validationStatus !== "validated" && validationStatus !== "failed") {
+      return res.status(400).json({
+        error: "validationStatus must be either validated or failed",
+      });
+    }
+
+    const uuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(cartId)) {
+      return res.status(404).json({ error: "Submitted cart not found" });
+    }
+
+    const { data: submittedCart, error: cartError } = await supabase
+      .from("carts")
+      .select("*")
+      .eq("id", cartId)
+      .eq("store_id", storeId)
+      .eq("status", "submitted")
+      .maybeSingle();
+
+    if (cartError) {
+      return res.status(500).json({ error: cartError.message });
+    }
+
+    if (!submittedCart) {
+      return res.status(404).json({ error: "Submitted cart not found" });
+    }
+
+    const completedAt = new Date().toISOString();
+    const updatePayload = {
+      validation_status: validationStatus,
+      validation_completed_at: completedAt,
+      updated_at: completedAt,
+      validation_error:
+        validationStatus === "validated" ? null : (validationError ?? null),
+    };
+
+    const { data: updatedCart, error: updateError } = await supabase
+      .from("carts")
+      .update(updatePayload)
+      .eq("id", submittedCart.id)
+      .select("*")
+      .single();
+
+    if (updateError) {
+      return res.status(500).json({ error: updateError.message });
+    }
+
+    res.json({
+      success: true,
+      cart: updatedCart,
+    });
+  });
+
   export default router;
