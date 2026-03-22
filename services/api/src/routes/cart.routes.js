@@ -308,4 +308,60 @@ router.delete("/items/:itemId", async (req, res) => {
     });
   });
 
+router.post("/:storeId/submit", async (req, res) => {
+    const { storeId } = req.params;
+
+    const { data: cart, error: cartError } = await supabase
+      .from("carts")
+      .select("*")
+      .eq("store_id", storeId)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (cartError) {
+      return res.status(500).json({ error: cartError.message });
+    }
+
+    if (!cart) {
+      return res.status(404).json({ error: "Active cart not found" });
+    }
+
+    const { data: cartItems, error: itemsError } = await supabase
+      .from("cart_items")
+      .select("id")
+      .eq("cart_id", cart.id);
+
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const itemCount = (cartItems ?? []).length;
+
+    if (itemCount === 0) {
+      return res.status(400).json({ error: "Cannot submit an empty cart" });
+    }
+
+    const { data: updatedCart, error: updateError } = await supabase
+      .from("carts")
+      .update({
+        status: "submitted",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", cart.id)
+      .select("*")
+      .single();
+
+    if (updateError) {
+      return res.status(500).json({ error: updateError.message });
+    }
+
+    res.json({
+      success: true,
+      cart: updatedCart,
+      itemCount,
+    });
+  });
+
   export default router;
