@@ -567,6 +567,15 @@ router.patch("/:storeId/history/:cartId/validation-result", async (req, res) => 
       return res.status(404).json({ error: "Submitted cart not found" });
     }
 
+    if (
+      submittedCart.execution_status === "pending" ||
+      submittedCart.execution_status === "executed"
+    ) {
+      return res.status(400).json({
+        error: "Cannot change validation result after execution has been requested",
+      });
+    }
+
     const completedAt = new Date().toISOString();
     const updatePayload = {
       validation_status: validationStatus,
@@ -590,6 +599,69 @@ router.patch("/:storeId/history/:cartId/validation-result", async (req, res) => 
     res.json({
       success: true,
       cart: updatedCart,
+    });
+  });
+
+router.post("/:storeId/execute", async (req, res) => {
+    const { storeId } = req.params;
+
+    const { data: cart, error: cartError } = await supabase
+      .from("carts")
+      .select("*")
+      .eq("store_id", storeId)
+      .eq("status", "submitted")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (cartError) {
+      return res.status(500).json({ error: cartError.message });
+    }
+
+    if (!cart) {
+      return res.status(404).json({ error: "Submitted cart not found" });
+    }
+
+    if (cart.validation_status !== "validated") {
+      return res.status(400).json({ error: "Cart must be validated before execution" });
+    }
+
+    const { data: cartItems, error: itemsError } = await supabase
+      .from("cart_items")
+      .select("id")
+      .eq("cart_id", cart.id);
+
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const itemCount = (cartItems ?? []).length;
+
+    if (itemCount === 0) {
+      return res.status(400).json({ error: "Cannot execute an empty submitted cart" });
+    }
+
+    const { data: updatedCart, error: updateError } = await supabase
+      .from("carts")
+      .update({
+        execution_status: "pending",
+        execution_requested_at: new Date().toISOString(),
+        execution_completed_at: null,
+        execution_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", cart.id)
+      .select("*")
+      .single();
+
+    if (updateError) {
+      return res.status(500).json({ error: updateError.message });
+    }
+
+    res.json({
+      success: true,
+      cart: updatedCart,
+      itemCount,
     });
   });
 
