@@ -697,7 +697,13 @@ router.post("/:storeId/execute", async (req, res) => {
 
 router.patch("/:storeId/history/:cartId/execution-result", async (req, res) => {
     const { storeId, cartId } = req.params;
-    const { executionStatus, executionError } = req.body;
+    const {
+      executionStatus,
+      executionError,
+      externalOrderRef,
+      executionNotes,
+      receiptSnapshot,
+    } = req.body;
 
     if (executionStatus !== "executed" && executionStatus !== "failed") {
       return res.status(400).json({
@@ -738,9 +744,28 @@ router.patch("/:storeId/history/:cartId/execution-result", async (req, res) => {
       execution_status: executionStatus,
       execution_completed_at: completedAt,
       updated_at: completedAt,
-      execution_error:
-        executionStatus === "executed" ? null : (executionError ?? null),
     };
+
+    if (executionStatus === "executed") {
+      Object.assign(updatePayload, {
+        placed_at: completedAt,
+        external_order_ref: externalOrderRef ?? null,
+        execution_notes: executionNotes ?? null,
+        receipt_snapshot: receiptSnapshot ?? null,
+        execution_error: null,
+      });
+    } else {
+      Object.assign(updatePayload, {
+        execution_error: executionError ?? null,
+        execution_notes: executionNotes ?? null,
+      });
+      if (externalOrderRef !== undefined) {
+        updatePayload.external_order_ref = externalOrderRef;
+      }
+      if (receiptSnapshot !== undefined) {
+        updatePayload.receipt_snapshot = receiptSnapshot;
+      }
+    }
 
     const { data: updatedCart, error: updateError } = await supabase
       .from("carts")
