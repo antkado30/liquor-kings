@@ -496,6 +496,21 @@ router.post("/:storeId/validate", async (req, res) => {
       return res.status(404).json({ error: "Submitted cart not found" });
     }
 
+    if (
+      cart.execution_status === "pending" ||
+      cart.execution_status === "executed"
+    ) {
+      return res.status(400).json({
+        error: "Cannot request validation after execution has been requested",
+      });
+    }
+
+    if (cart.validation_status === "pending" || cart.validation_status === "validated") {
+      return res.status(400).json({
+        error: "Validation has already been requested for this cart",
+      });
+    }
+
     const { data: cartItems, error: itemsError } = await supabase
       .from("cart_items")
       .select("id")
@@ -567,6 +582,12 @@ router.patch("/:storeId/history/:cartId/validation-result", async (req, res) => 
       return res.status(404).json({ error: "Submitted cart not found" });
     }
 
+    if (submittedCart.validation_status !== "pending") {
+      return res.status(400).json({
+        error: "Validation result can only be recorded after validation has been requested",
+      });
+    }
+
     if (
       submittedCart.execution_status === "pending" ||
       submittedCart.execution_status === "executed"
@@ -620,6 +641,15 @@ router.post("/:storeId/execute", async (req, res) => {
 
     if (!cart) {
       return res.status(404).json({ error: "Submitted cart not found" });
+    }
+
+    if (
+      cart.execution_status === "pending" ||
+      cart.execution_status === "executed"
+    ) {
+      return res.status(400).json({
+        error: "Execution has already been requested for this cart",
+      });
     }
 
     if (cart.validation_status !== "validated") {
