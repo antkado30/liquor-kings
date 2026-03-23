@@ -784,4 +784,109 @@ router.patch("/:storeId/history/:cartId/execution-result", async (req, res) => {
     });
   });
 
+router.get("/:storeId/latest-submitted-summary", async (req, res) => {
+    const { storeId } = req.params;
+
+    const { data: cart, error: cartError } = await supabase
+      .from("carts")
+      .select("*")
+      .eq("store_id", storeId)
+      .eq("status", "submitted")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (cartError) {
+      return res.status(500).json({ error: cartError.message });
+    }
+
+    if (!cart) {
+      return res.status(404).json({ error: "Submitted cart not found" });
+    }
+
+    const { data: cartItems, error: itemsError } = await supabase
+      .from("cart_items")
+      .select("id")
+      .eq("cart_id", cart.id);
+
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const itemCount = (cartItems ?? []).length;
+
+    res.json({
+      success: true,
+      summary: {
+        id: cart.id,
+        store_id: cart.store_id,
+        status: cart.status,
+        validation_status: cart.validation_status,
+        execution_status: cart.execution_status,
+        placed_at: cart.placed_at,
+        external_order_ref: cart.external_order_ref,
+        execution_notes: cart.execution_notes,
+        receipt_snapshot: cart.receipt_snapshot,
+        created_at: cart.created_at,
+        updated_at: cart.updated_at,
+        itemCount,
+      },
+    });
+  });
+
+router.get("/:storeId/history/:cartId/summary", async (req, res) => {
+    const { storeId, cartId } = req.params;
+
+    const uuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(cartId)) {
+      return res.status(404).json({ error: "Submitted cart not found" });
+    }
+
+    const { data: cart, error: cartError } = await supabase
+      .from("carts")
+      .select("*")
+      .eq("id", cartId)
+      .eq("store_id", storeId)
+      .eq("status", "submitted")
+      .maybeSingle();
+
+    if (cartError) {
+      return res.status(500).json({ error: cartError.message });
+    }
+
+    if (!cart) {
+      return res.status(404).json({ error: "Submitted cart not found" });
+    }
+
+    const { data: cartItems, error: itemsError } = await supabase
+      .from("cart_items")
+      .select("id")
+      .eq("cart_id", cart.id);
+
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const itemCount = (cartItems ?? []).length;
+
+    res.json({
+      success: true,
+      summary: {
+        id: cart.id,
+        store_id: cart.store_id,
+        status: cart.status,
+        validation_status: cart.validation_status,
+        execution_status: cart.execution_status,
+        placed_at: cart.placed_at,
+        external_order_ref: cart.external_order_ref,
+        execution_notes: cart.execution_notes,
+        receipt_snapshot: cart.receipt_snapshot,
+        created_at: cart.created_at,
+        updated_at: cart.updated_at,
+        itemCount,
+      },
+    });
+  });
+
   export default router;
