@@ -5,6 +5,12 @@ import {
   getSubmittedCartById,
   isUuid,
 } from "../services/cart.service.js";
+import {
+  recordExecutionResult,
+  recordValidationResult,
+  requestExecution,
+  requestValidation,
+} from "../services/cart-state.service.js";
 
 const router = express.Router();
 
@@ -153,220 +159,32 @@ router.get("/:storeId/history/:cartId", async (req, res) => {
 router.post("/:storeId/validate", async (req, res) => {
     const { storeId } = req.params;
 
-    const { data: cart, error: cartError } = await supabase
-      .from("carts")
-      .select("*")
-      .eq("store_id", storeId)
-      .eq("status", "submitted")
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { statusCode, body } = await requestValidation(supabase, storeId);
 
-    if (cartError) {
-      return res.status(500).json({ error: cartError.message });
-    }
-
-    if (!cart) {
-      return res.status(404).json({ error: "Submitted cart not found" });
-    }
-
-    if (
-      cart.execution_status === "pending" ||
-      cart.execution_status === "executed"
-    ) {
-      return res.status(400).json({
-        error: "Cannot request validation after execution has been requested",
-      });
-    }
-
-    if (cart.validation_status === "pending" || cart.validation_status === "validated") {
-      return res.status(400).json({
-        error: "Validation has already been requested for this cart",
-      });
-    }
-
-    const { data: cartItems, error: itemsError } = await supabase
-      .from("cart_items")
-      .select("id")
-      .eq("cart_id", cart.id);
-
-    if (itemsError) {
-      return res.status(500).json({ error: itemsError.message });
-    }
-
-    const itemCount = (cartItems ?? []).length;
-
-    if (itemCount === 0) {
-      return res.status(400).json({ error: "Cannot validate an empty submitted cart" });
-    }
-
-    const { data: updatedCart, error: updateError } = await supabase
-      .from("carts")
-      .update({
-        validation_status: "pending",
-        validation_requested_at: new Date().toISOString(),
-        validation_completed_at: null,
-        validation_error: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", cart.id)
-      .select("*")
-      .single();
-
-    if (updateError) {
-      return res.status(500).json({ error: updateError.message });
-    }
-
-    res.json({
-      success: true,
-      cart: updatedCart,
-      itemCount,
-    });
+    return res.status(statusCode).json(body);
   });
 
 router.patch("/:storeId/history/:cartId/validation-result", async (req, res) => {
     const { storeId, cartId } = req.params;
     const { validationStatus, validationError } = req.body;
 
-    if (validationStatus !== "validated" && validationStatus !== "failed") {
-      return res.status(400).json({
-        error: "validationStatus must be either validated or failed",
-      });
-    }
+    const { statusCode, body } = await recordValidationResult(
+      supabase,
+      storeId,
+      cartId,
+      validationStatus,
+      validationError,
+    );
 
-    const uuidPattern =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidPattern.test(cartId)) {
-      return res.status(404).json({ error: "Submitted cart not found" });
-    }
-
-    const { data: submittedCart, error: cartError } = await supabase
-      .from("carts")
-      .select("*")
-      .eq("id", cartId)
-      .eq("store_id", storeId)
-      .eq("status", "submitted")
-      .maybeSingle();
-
-    if (cartError) {
-      return res.status(500).json({ error: cartError.message });
-    }
-
-    if (!submittedCart) {
-      return res.status(404).json({ error: "Submitted cart not found" });
-    }
-
-    if (submittedCart.validation_status !== "pending") {
-      return res.status(400).json({
-        error: "Validation result can only be recorded after validation has been requested",
-      });
-    }
-
-    if (
-      submittedCart.execution_status === "pending" ||
-      submittedCart.execution_status === "executed"
-    ) {
-      return res.status(400).json({
-        error: "Cannot change validation result after execution has been requested",
-      });
-    }
-
-    const completedAt = new Date().toISOString();
-    const updatePayload = {
-      validation_status: validationStatus,
-      validation_completed_at: completedAt,
-      updated_at: completedAt,
-      validation_error:
-        validationStatus === "validated" ? null : (validationError ?? null),
-    };
-
-    const { data: updatedCart, error: updateError } = await supabase
-      .from("carts")
-      .update(updatePayload)
-      .eq("id", submittedCart.id)
-      .select("*")
-      .single();
-
-    if (updateError) {
-      return res.status(500).json({ error: updateError.message });
-    }
-
-    res.json({
-      success: true,
-      cart: updatedCart,
-    });
+    return res.status(statusCode).json(body);
   });
 
 router.post("/:storeId/execute", async (req, res) => {
     const { storeId } = req.params;
 
-    const { data: cart, error: cartError } = await supabase
-      .from("carts")
-      .select("*")
-      .eq("store_id", storeId)
-      .eq("status", "submitted")
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { statusCode, body } = await requestExecution(supabase, storeId);
 
-    if (cartError) {
-      return res.status(500).json({ error: cartError.message });
-    }
-
-    if (!cart) {
-      return res.status(404).json({ error: "Submitted cart not found" });
-    }
-
-    if (
-      cart.execution_status === "pending" ||
-      cart.execution_status === "executed"
-    ) {
-      return res.status(400).json({
-        error: "Execution has already been requested for this cart",
-      });
-    }
-
-    if (cart.validation_status !== "validated") {
-      return res.status(400).json({ error: "Cart must be validated before execution" });
-    }
-
-    const { data: cartItems, error: itemsError } = await supabase
-      .from("cart_items")
-      .select("id")
-      .eq("cart_id", cart.id);
-
-    if (itemsError) {
-      return res.status(500).json({ error: itemsError.message });
-    }
-
-    const itemCount = (cartItems ?? []).length;
-
-    if (itemCount === 0) {
-      return res.status(400).json({ error: "Cannot execute an empty submitted cart" });
-    }
-
-    const { data: updatedCart, error: updateError } = await supabase
-      .from("carts")
-      .update({
-        execution_status: "pending",
-        execution_requested_at: new Date().toISOString(),
-        execution_completed_at: null,
-        execution_error: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", cart.id)
-      .select("*")
-      .single();
-
-    if (updateError) {
-      return res.status(500).json({ error: updateError.message });
-    }
-
-    res.json({
-      success: true,
-      cart: updatedCart,
-      itemCount,
-    });
+    return res.status(statusCode).json(body);
   });
 
 router.patch("/:storeId/history/:cartId/execution-result", async (req, res) => {
@@ -379,83 +197,18 @@ router.patch("/:storeId/history/:cartId/execution-result", async (req, res) => {
       receiptSnapshot,
     } = req.body;
 
-    if (executionStatus !== "executed" && executionStatus !== "failed") {
-      return res.status(400).json({
-        error: "executionStatus must be either executed or failed",
-      });
-    }
+    const { statusCode, body } = await recordExecutionResult(
+      supabase,
+      storeId,
+      cartId,
+      executionStatus,
+      executionError,
+      externalOrderRef,
+      executionNotes,
+      receiptSnapshot,
+    );
 
-    const uuidPattern =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidPattern.test(cartId)) {
-      return res.status(404).json({ error: "Submitted cart not found" });
-    }
-
-    const { data: submittedCart, error: cartError } = await supabase
-      .from("carts")
-      .select("*")
-      .eq("id", cartId)
-      .eq("store_id", storeId)
-      .eq("status", "submitted")
-      .maybeSingle();
-
-    if (cartError) {
-      return res.status(500).json({ error: cartError.message });
-    }
-
-    if (!submittedCart) {
-      return res.status(404).json({ error: "Submitted cart not found" });
-    }
-
-    if (submittedCart.execution_status !== "pending") {
-      return res.status(400).json({
-        error: "Execution result can only be recorded after execution has been requested",
-      });
-    }
-
-    const completedAt = new Date().toISOString();
-    const updatePayload = {
-      execution_status: executionStatus,
-      execution_completed_at: completedAt,
-      updated_at: completedAt,
-    };
-
-    if (executionStatus === "executed") {
-      Object.assign(updatePayload, {
-        placed_at: completedAt,
-        external_order_ref: externalOrderRef ?? null,
-        execution_notes: executionNotes ?? null,
-        receipt_snapshot: receiptSnapshot ?? null,
-        execution_error: null,
-      });
-    } else {
-      Object.assign(updatePayload, {
-        execution_error: executionError ?? null,
-        execution_notes: executionNotes ?? null,
-      });
-      if (externalOrderRef !== undefined) {
-        updatePayload.external_order_ref = externalOrderRef;
-      }
-      if (receiptSnapshot !== undefined) {
-        updatePayload.receipt_snapshot = receiptSnapshot;
-      }
-    }
-
-    const { data: updatedCart, error: updateError } = await supabase
-      .from("carts")
-      .update(updatePayload)
-      .eq("id", submittedCart.id)
-      .select("*")
-      .single();
-
-    if (updateError) {
-      return res.status(500).json({ error: updateError.message });
-    }
-
-    res.json({
-      success: true,
-      cart: updatedCart,
-    });
+    return res.status(statusCode).json(body);
   });
 
 export default router;
