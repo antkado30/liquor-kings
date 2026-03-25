@@ -1,5 +1,10 @@
 import express from "express";
 import supabase from "../config/supabase.js";
+import {
+  getCartItemsDetailed,
+  getSubmittedCartById,
+  isUuid,
+} from "../services/cart.service.js";
 
 const router = express.Router();
 
@@ -111,19 +116,15 @@ router.get("/:storeId/history", async (req, res) => {
 router.get("/:storeId/history/:cartId", async (req, res) => {
     const { storeId, cartId } = req.params;
 
-    const uuidPattern =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidPattern.test(cartId)) {
+    if (!isUuid(cartId)) {
       return res.status(404).json({ error: "Submitted cart not found" });
     }
 
-    const { data: submittedCart, error: cartError } = await supabase
-      .from("carts")
-      .select("*")
-      .eq("id", cartId)
-      .eq("store_id", storeId)
-      .eq("status", "submitted")
-      .maybeSingle();
+    const { data: submittedCart, error: cartError } = await getSubmittedCartById(
+      supabase,
+      storeId,
+      cartId,
+    );
 
     if (cartError) {
       return res.status(500).json({ error: cartError.message });
@@ -133,32 +134,10 @@ router.get("/:storeId/history/:cartId", async (req, res) => {
       return res.status(404).json({ error: "Submitted cart not found" });
     }
 
-    const { data: items, error: itemsError } = await supabase
-      .from("cart_items")
-      .select(`
-      id,
-      cart_id,
-      bottle_id,
-      quantity,
-      created_at,
-      updated_at,
-      bottles (
-        id,
-        name,
-        mlcc_code,
-        upc,
-        image_url,
-        size,
-        size_ml,
-        category,
-        subcategory,
-        state_min_price,
-        shelf_price,
-        is_active
-      )
-    `)
-      .eq("cart_id", submittedCart.id)
-      .order("created_at", { ascending: true });
+    const { data: items, error: itemsError } = await getCartItemsDetailed(
+      supabase,
+      submittedCart.id,
+    );
 
     if (itemsError) {
       return res.status(500).json({ error: itemsError.message });
