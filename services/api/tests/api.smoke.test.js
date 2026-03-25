@@ -2,39 +2,10 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import request from "supertest";
 import app from "../src/app.js";
 import supabase from "../src/config/supabase.js";
-
-const TEST_CART_ID = "72c66a45-1368-4a8d-8e3f-947c209f55e9";
-
-async function resetTestCartState() {
-  const { error } = await supabase
-    .from("carts")
-    .update({
-      status: "submitted",
-      validation_status: "not_requested",
-      validation_requested_at: null,
-      validation_completed_at: null,
-      validation_error: null,
-      execution_status: "not_requested",
-      execution_requested_at: null,
-      execution_completed_at: null,
-      execution_error: null,
-      placed_at: null,
-      external_order_ref: null,
-      execution_notes: null,
-      receipt_snapshot: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", TEST_CART_ID);
-
-  if (error) throw error;
-}
+import { bottleId, cartId, mlccCode, storeId } from "./helpers/test-data.js";
+import { resetTestCartState } from "./helpers/cart-reset.js";
 
 describe("Liquor Kings API smoke tests", () => {
-  const storeId = "81f24b52-c121-4c9d-ab7c-7483a1e3423a";
-  const bottleId = "148aa893-b6ff-406c-b32d-47678a04e5e1";
-  const cartId = "72c66a45-1368-4a8d-8e3f-947c209f55e9";
-  const mlccCode = "TEST-06cdc92d";
-
   it("GET /health", async () => {
     const res = await request(app).get("/health");
 
@@ -145,15 +116,12 @@ describe("Liquor Kings API smoke tests", () => {
 });
 
 describe("cart lifecycle smoke tests", () => {
-  const storeId = "81f24b52-c121-4c9d-ab7c-7483a1e3423a";
-  const cartId = "72c66a45-1368-4a8d-8e3f-947c209f55e9";
-
   beforeAll(async () => {
-    await resetTestCartState();
+    await resetTestCartState(supabase, cartId);
   });
 
   afterAll(async () => {
-    await resetTestCartState();
+    await resetTestCartState(supabase, cartId);
   });
 
   it("A) POST /cart/:storeId/validate", async () => {
