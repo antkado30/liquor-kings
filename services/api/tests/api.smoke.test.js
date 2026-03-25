@@ -113,6 +113,61 @@ describe("Liquor Kings API smoke tests", () => {
     expect(res.status).toBe(404);
     expect(res.body.error).toBe("Submitted cart not found");
   });
+
+  it("GET /inventory/:storeId", async () => {
+    const res = await request(app).get(`/inventory/${storeId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.storeId).toBe(storeId);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it("GET /inventory/:storeId?limit=5", async () => {
+    const res = await request(app)
+      .get(`/inventory/${storeId}`)
+      .query({ limit: 5 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.data.length).toBeLessThanOrEqual(5);
+  });
+
+  it("GET /inventory/:storeId/summary", async () => {
+    const res = await request(app).get(`/inventory/${storeId}/summary`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.summary).toBeTruthy();
+    expect(typeof res.body.summary.totalRows).toBe("number");
+  });
+
+  it("GET /inventory/:storeId/:inventoryId (detail when rows exist)", async () => {
+    const list = await request(app).get(`/inventory/${storeId}`);
+
+    expect(list.status).toBe(200);
+    expect(list.body.success).toBe(true);
+    if (!list.body.data.length) {
+      expect(list.body.data).toEqual([]);
+      return;
+    }
+
+    const inventoryId = list.body.data[0].id;
+    const res = await request(app).get(`/inventory/${storeId}/${inventoryId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it("GET /inventory/:storeId/not-a-real-id (invalid inventory id)", async () => {
+    const res = await request(app).get(
+      `/inventory/${storeId}/not-a-real-id`,
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Inventory item not found");
+  });
 });
 
 describe("cart lifecycle smoke tests", () => {

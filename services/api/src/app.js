@@ -5,12 +5,14 @@ import express from "express";
 import cors from "cors";
 import supabase from "./config/supabase.js";
 import bottlesRouter from "./routes/bottles.routes.js";
+import inventoryRouter from "./routes/inventory.routes.js";
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 app.use("/bottles", bottlesRouter);
+app.use("/inventory", inventoryRouter);
 app.use("/cart", cartRouter);
 app.use("/cart", cartSummaryRouter);
 app.use("/cart", cartLifecycleRouter);
