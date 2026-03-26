@@ -143,6 +143,120 @@ describe("Liquor Kings API smoke tests", () => {
     expect(typeof res.body.summary.totalRows).toBe("number");
   });
 
+  it("GET /inventory/:storeId/lookup?q=test", async () => {
+    const res = await request(app)
+      .get(`/inventory/${storeId}/lookup`)
+      .query({ q: "test" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.storeId).toBe(storeId);
+    expect(res.body.query).toBe("test");
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it("GET /inventory/:storeId/lookup with no q", async () => {
+    const res = await request(app).get(`/inventory/${storeId}/lookup`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Lookup query is required");
+  });
+
+  it("GET /inventory/:storeId/bottle/:bottleId", async () => {
+    const res = await request(app).get(
+      `/inventory/${storeId}/bottle/${bottleId}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.storeId).toBe(storeId);
+    expect(res.body.bottleId).toBe(bottleId);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it("GET /inventory/:storeId/bottle/not-a-real-id", async () => {
+    const res = await request(app).get(
+      `/inventory/${storeId}/bottle/not-a-real-id`,
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Inventory item not found");
+  });
+
+  it("GET /inventory/:storeId/low-stock", async () => {
+    const res = await request(app).get(`/inventory/${storeId}/low-stock`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.storeId).toBe(storeId);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it("GET /inventory/:storeId/out-of-stock", async () => {
+    const res = await request(app).get(`/inventory/${storeId}/out-of-stock`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.storeId).toBe(storeId);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it("GET /inventory/:storeId/reorder-candidates", async () => {
+    const res = await request(app).get(
+      `/inventory/${storeId}/reorder-candidates`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.storeId).toBe(storeId);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it("GET /inventory/:storeId/location/:location", async () => {
+    const list = await request(app).get(`/inventory/${storeId}`);
+
+    expect(list.status).toBe(200);
+    expect(list.body.success).toBe(true);
+    expect(Array.isArray(list.body.data)).toBe(true);
+
+    if (!list.body.data.length) {
+      expect(list.body.data).toEqual([]);
+      return;
+    }
+
+    const firstLocation = list.body.data[0].location;
+    const usableLocation =
+      typeof firstLocation === "string" ? firstLocation.trim() : "";
+
+    if (!usableLocation) {
+      expect(
+        firstLocation === null ||
+          firstLocation === undefined ||
+          (typeof firstLocation === "string" && firstLocation.trim() === ""),
+      ).toBe(true);
+      return;
+    }
+
+    const res = await request(app).get(
+      `/inventory/${storeId}/location/${encodeURIComponent(usableLocation)}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.storeId).toBe(storeId);
+    expect(res.body.location).toBe(usableLocation);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it("GET /inventory/:storeId/location/  (missing/empty location)", async () => {
+    const res = await request(app).get(
+      `/inventory/${storeId}/location/%20`,
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Location is required");
+  });
+
   it("GET /inventory/:storeId/:inventoryId (detail when rows exist)", async () => {
     const list = await request(app).get(`/inventory/${storeId}`);
 
