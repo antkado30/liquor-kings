@@ -12,6 +12,11 @@ import {
   getReorderCandidatesForStore,
   lookupInventoryForStore,
 } from "../services/inventory.service.js";
+import {
+  updateInventoryLocation,
+  updateInventoryQuantity,
+  updateInventoryReorderSettings,
+} from "../services/inventory-state.service.js";
 
 const router = express.Router();
 
@@ -183,6 +188,49 @@ router.get("/:storeId/location/:location", async (req, res) => {
   });
 });
 
+router.patch("/:storeId/:inventoryId/quantity", async (req, res) => {
+  const { storeId, inventoryId } = req.params;
+  const { quantity } = req.body;
+
+  const { statusCode, body } = await updateInventoryQuantity(
+    supabase,
+    storeId,
+    inventoryId,
+    quantity,
+  );
+
+  return res.status(statusCode).json(body);
+});
+
+router.patch("/:storeId/:inventoryId/location", async (req, res) => {
+  const { storeId, inventoryId } = req.params;
+  const { location, locationNote } = req.body;
+
+  const { statusCode, body } = await updateInventoryLocation(
+    supabase,
+    storeId,
+    inventoryId,
+    location,
+    locationNote,
+  );
+
+  return res.status(statusCode).json(body);
+});
+
+router.patch("/:storeId/:inventoryId/reorder-settings", async (req, res) => {
+  const { storeId, inventoryId } = req.params;
+  const { lowStockThreshold, reorderPoint } = req.body ?? {};
+
+  const { statusCode, body } = await updateInventoryReorderSettings(
+    supabase,
+    storeId,
+    inventoryId,
+    lowStockThreshold,
+    reorderPoint,
+  );
+
+  return res.status(statusCode).json(body);
+});
 
 router.get("/:storeId/:inventoryId", async (req, res) => {
   const { storeId, inventoryId } = req.params;

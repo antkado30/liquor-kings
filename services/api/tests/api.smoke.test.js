@@ -284,6 +284,185 @@ describe("Liquor Kings API smoke tests", () => {
   });
 });
 
+describe("inventory action smoke tests", () => {
+  let baseline = null;
+
+  beforeAll(async () => {
+    const list = await request(app).get(`/inventory/${storeId}`);
+
+    expect(list.status).toBe(200);
+    expect(list.body.success).toBe(true);
+
+    if (!list.body.data?.length) {
+      expect(list.body.data ?? []).toEqual([]);
+      return;
+    }
+
+    const row = list.body.data[0];
+    baseline = {
+      id: row.id,
+      quantity: row.quantity,
+      location: row.location,
+      location_note: row.location_note,
+      low_stock_threshold: row.low_stock_threshold,
+      reorder_point: row.reorder_point,
+    };
+  });
+
+  afterAll(async () => {
+    if (!baseline) {
+      return;
+    }
+
+    await supabase
+      .from("inventory")
+      .update({
+        quantity: baseline.quantity,
+        location: baseline.location,
+        location_note: baseline.location_note,
+        low_stock_threshold: baseline.low_stock_threshold,
+        reorder_point: baseline.reorder_point,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", baseline.id)
+      .eq("store_id", storeId);
+  });
+
+  it("A) PATCH /inventory/:storeId/:inventoryId/quantity", async () => {
+    if (!baseline) {
+      const list = await request(app).get(`/inventory/${storeId}`);
+
+      expect(list.status).toBe(200);
+      expect(list.body.success).toBe(true);
+      expect(list.body.data ?? []).toEqual([]);
+      return;
+    }
+
+    const inventoryId = baseline.id;
+    const newQty = Number(baseline.quantity ?? 0) + 1;
+    const res = await request(app)
+      .patch(`/inventory/${storeId}/${inventoryId}/quantity`)
+      .send({ quantity: newQty });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.quantity).toBe(newQty);
+  });
+
+  it("B) PATCH /inventory/:storeId/:inventoryId/quantity (invalid negative)", async () => {
+    if (!baseline) {
+      const list = await request(app).get(`/inventory/${storeId}`);
+
+      expect(list.status).toBe(200);
+      expect(list.body.success).toBe(true);
+      expect(list.body.data ?? []).toEqual([]);
+      return;
+    }
+
+    const inventoryId = baseline.id;
+    const res = await request(app)
+      .patch(`/inventory/${storeId}/${inventoryId}/quantity`)
+      .send({ quantity: -1 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Quantity must be a non-negative integer");
+  });
+
+  it("C) PATCH /inventory/:storeId/:inventoryId/location", async () => {
+    if (!baseline) {
+      const list = await request(app).get(`/inventory/${storeId}`);
+
+      expect(list.status).toBe(200);
+      expect(list.body.success).toBe(true);
+      expect(list.body.data ?? []).toEqual([]);
+      return;
+    }
+
+    const inventoryId = baseline.id;
+    const res = await request(app)
+      .patch(`/inventory/${storeId}/${inventoryId}/location`)
+      .send({
+        location: "VITEST-LOCATION",
+        locationNote: "temporary test note",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.location).toBe("VITEST-LOCATION");
+  });
+
+  it("D) PATCH /inventory/:storeId/:inventoryId/location (empty location)", async () => {
+    if (!baseline) {
+      const list = await request(app).get(`/inventory/${storeId}`);
+
+      expect(list.status).toBe(200);
+      expect(list.body.success).toBe(true);
+      expect(list.body.data ?? []).toEqual([]);
+      return;
+    }
+
+    const inventoryId = baseline.id;
+    const res = await request(app)
+      .patch(`/inventory/${storeId}/${inventoryId}/location`)
+      .send({ location: "   " });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Location is required");
+  });
+
+  it("E) PATCH /inventory/:storeId/:inventoryId/reorder-settings", async () => {
+    if (!baseline) {
+      const list = await request(app).get(`/inventory/${storeId}`);
+
+      expect(list.status).toBe(200);
+      expect(list.body.success).toBe(true);
+      expect(list.body.data ?? []).toEqual([]);
+      return;
+    }
+
+    const inventoryId = baseline.id;
+    const res = await request(app)
+      .patch(`/inventory/${storeId}/${inventoryId}/reorder-settings`)
+      .send({
+        lowStockThreshold: 3,
+        reorderPoint: 5,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.low_stock_threshold).toBe(3);
+    expect(res.body.data.reorder_point).toBe(5);
+  });
+
+  it("F) PATCH /inventory/:storeId/:inventoryId/reorder-settings (no fields)", async () => {
+    if (!baseline) {
+      const list = await request(app).get(`/inventory/${storeId}`);
+
+      expect(list.status).toBe(200);
+      expect(list.body.success).toBe(true);
+      expect(list.body.data ?? []).toEqual([]);
+      return;
+    }
+
+    const inventoryId = baseline.id;
+    const res = await request(app)
+      .patch(`/inventory/${storeId}/${inventoryId}/reorder-settings`)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("At least one reorder setting is required");
+  });
+
+  it("G) PATCH /inventory/:storeId/not-a-real-id/quantity", async () => {
+    const res = await request(app)
+      .patch(`/inventory/${storeId}/not-a-real-id/quantity`)
+      .send({ quantity: 1 });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Inventory item not found");
+  });
+});
+
 describe("cart lifecycle smoke tests", () => {
   beforeAll(async () => {
     await resetTestCartState(supabase, cartId);
