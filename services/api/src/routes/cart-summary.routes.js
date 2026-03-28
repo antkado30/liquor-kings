@@ -6,6 +6,10 @@ import {
   getLatestCartByStatus,
   getSubmittedCartById,
 } from "../services/cart.service.js";
+import {
+  getActiveCartAvailability,
+  getSubmittedCartAvailability,
+} from "../services/cart-availability.service.js";
 import { isUuid } from "../utils/validation.js";
 
 const router = express.Router();
@@ -41,6 +45,17 @@ router.get("/:storeId/active-summary", async (req, res) => {
       summary: buildCartSummary(cart, cartItems),
     });
   });
+
+router.get("/:storeId/active-availability", async (req, res) => {
+  const { storeId } = req.params;
+
+  const { statusCode, body } = await getActiveCartAvailability(
+    supabase,
+    storeId,
+  );
+
+  return res.status(statusCode).json(body);
+});
 
 
 router.get("/:storeId/overview", async (req, res) => {
@@ -132,6 +147,19 @@ router.get("/:storeId/latest-submitted-summary", async (req, res) => {
       summary: buildCartSummary(cart, cartItems),
     });
   });
+
+
+router.get("/:storeId/history/:cartId/availability", async (req, res) => {
+  const { storeId, cartId } = req.params;
+
+  const { statusCode, body } = await getSubmittedCartAvailability(
+    supabase,
+    storeId,
+    cartId,
+  );
+
+  return res.status(statusCode).json(body);
+});
 
 
 router.get("/:storeId/history/:cartId/summary", async (req, res) => {

@@ -98,6 +98,66 @@ describe("Liquor Kings API smoke tests", () => {
     expect(res.body.summary.id).toBe(cartId);
   });
 
+  it("A) GET /cart/:storeId/active-availability", async () => {
+    const res = await request(app).get(
+      `/cart/${storeId}/active-availability`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body).toHaveProperty("success");
+    expect(res.body).toHaveProperty("cart");
+    expect(res.body).toHaveProperty("items");
+
+    if (res.body.cart === null) {
+      expect(res.body.items).toEqual([]);
+    } else {
+      expect(Array.isArray(res.body.items)).toBe(true);
+    }
+  });
+
+  it("B) GET /cart/:storeId/history/:cartId/availability", async () => {
+    const res = await request(app).get(
+      `/cart/${storeId}/history/${cartId}/availability`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.cart.id).toBe(cartId);
+    expect(Array.isArray(res.body.items)).toBe(true);
+  });
+
+  it("C) GET /cart/:storeId/history/not-a-real-cart-id/availability", async () => {
+    const res = await request(app).get(
+      `/cart/${storeId}/history/not-a-real-cart-id/availability`,
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Submitted cart not found");
+  });
+
+  it("D) submitted availability item shape when items exist", async () => {
+    const res = await request(app).get(
+      `/cart/${storeId}/history/${cartId}/availability`,
+    );
+
+    expect(res.status).toBe(200);
+    if (!res.body.items?.length) {
+      return;
+    }
+
+    const first = res.body.items[0];
+    expect(first).toHaveProperty("cartItemId");
+    expect(first).toHaveProperty("bottleId");
+    expect(first).toHaveProperty("cartQuantity");
+    expect(first).toHaveProperty("inventoryMatches");
+    expect(first).toHaveProperty("availability");
+    expect(first.availability).toHaveProperty("hasInventoryMatch");
+    expect(first.availability).toHaveProperty("totalInventoryQuantity");
+    expect(first.availability).toHaveProperty("hasOutOfStockMatch");
+    expect(first.availability).toHaveProperty("hasLowStockMatch");
+  });
+
   it("GET /cart/:storeId/overview", async () => {
     const res = await request(app).get(`/cart/${storeId}/overview`);
 
