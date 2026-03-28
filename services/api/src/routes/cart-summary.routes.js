@@ -10,6 +10,10 @@ import {
   getActiveCartAvailability,
   getSubmittedCartAvailability,
 } from "../services/cart-availability.service.js";
+import {
+  buildExecutionPayloadForSubmittedCart,
+  buildLatestExecutionPayloadForStore,
+} from "../services/cart-execution-payload.service.js";
 import { isUuid } from "../utils/validation.js";
 
 const router = express.Router();
@@ -148,11 +152,35 @@ router.get("/:storeId/latest-submitted-summary", async (req, res) => {
     });
   });
 
+router.get("/:storeId/execution-payload/latest", async (req, res) => {
+  const { storeId } = req.params;
+
+  const { statusCode, body } = await buildLatestExecutionPayloadForStore(
+    supabase,
+    storeId,
+  );
+
+  return res.status(statusCode).json(body);
+});
+
 
 router.get("/:storeId/history/:cartId/availability", async (req, res) => {
   const { storeId, cartId } = req.params;
 
   const { statusCode, body } = await getSubmittedCartAvailability(
+    supabase,
+    storeId,
+    cartId,
+  );
+
+  return res.status(statusCode).json(body);
+});
+
+
+router.get("/:storeId/history/:cartId/execution-payload", async (req, res) => {
+  const { storeId, cartId } = req.params;
+
+  const { statusCode, body } = await buildExecutionPayloadForSubmittedCart(
     supabase,
     storeId,
     cartId,

@@ -158,6 +158,68 @@ describe("Liquor Kings API smoke tests", () => {
     expect(first.availability).toHaveProperty("hasLowStockMatch");
   });
 
+  it("A) GET /cart/:storeId/history/:cartId/execution-payload", async () => {
+    const res = await request(app).get(
+      `/cart/${storeId}/history/${cartId}/execution-payload`,
+    );
+
+    expect([200, 400]).toContain(res.status);
+
+    if (res.status === 200) {
+      expect(res.body.success).toBe(true);
+      expect(res.body.payload).toBeDefined();
+    } else {
+      expect(res.body.error).toBe(
+        "Cart must be validated before execution payload can be built",
+      );
+    }
+  });
+
+  it("B) GET /cart/:storeId/execution-payload/latest", async () => {
+    const res = await request(app).get(
+      `/cart/${storeId}/execution-payload/latest`,
+    );
+
+    expect([200, 400, 404]).toContain(res.status);
+
+    if (res.status === 200) {
+      expect(res.body.success).toBe(true);
+      expect(res.body.payload).toBeDefined();
+    } else if (res.status === 404) {
+      expect(res.body.error).toBe("Submitted cart not found");
+    } else {
+      expect(res.body.error).toBe(
+        "Cart must be validated before execution payload can be built",
+      );
+    }
+  });
+
+  it("C) GET /cart/:storeId/history/not-a-real-cart-id/execution-payload", async () => {
+    const res = await request(app).get(
+      `/cart/${storeId}/history/not-a-real-cart-id/execution-payload`,
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Submitted cart not found");
+  });
+
+  it("D) execution-payload payload shape when 200", async () => {
+    const res = await request(app).get(
+      `/cart/${storeId}/history/${cartId}/execution-payload`,
+    );
+
+    if (res.status !== 200) {
+      return;
+    }
+
+    expect(res.body.payload).toHaveProperty("cart");
+    expect(res.body.payload).toHaveProperty("store");
+    expect(res.body.payload).toHaveProperty("items");
+    expect(res.body.payload).toHaveProperty("summary");
+    expect(res.body.payload.summary).toHaveProperty("itemCount");
+    expect(res.body.payload.summary).toHaveProperty("totalQuantity");
+  });
+
   it("GET /cart/:storeId/overview", async () => {
     const res = await request(app).get(`/cart/${storeId}/overview`);
 
