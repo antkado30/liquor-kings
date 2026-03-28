@@ -1,6 +1,6 @@
 import express from "express";
 import supabase from "../config/supabase.js";
-import { isUuid } from "../services/cart.service.js";
+import { isUuid } from "../utils/validation.js";
 import {
   getInventoryByBottleId,
   getInventoryForStore,

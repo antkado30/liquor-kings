@@ -1,4 +1,4 @@
-import { isUuid } from "./cart.service.js";
+import { isUuid } from "../utils/validation.js";
 
 const INVENTORY_SELECT = `
   id,

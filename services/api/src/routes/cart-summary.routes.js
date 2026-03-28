@@ -5,8 +5,8 @@ import {
   getCartItems,
   getLatestCartByStatus,
   getSubmittedCartById,
-  isUuid,
 } from "../services/cart.service.js";
+import { isUuid } from "../utils/validation.js";
 
 const router = express.Router();
 

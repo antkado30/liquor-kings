@@ -1,5 +1,4 @@
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from "../utils/validation.js";
 
 export const requestValidation = async (supabase, storeId) => {
   const { data: cart, error: cartError } = await supabase
@@ -92,7 +91,7 @@ export const recordValidationResult = async (
     };
   }
 
-  if (!UUID_PATTERN.test(cartId)) {
+  if (!isUuid(cartId)) {
     return { statusCode: 404, body: { error: "Submitted cart not found" } };
   }
 
@@ -252,7 +251,7 @@ export const recordExecutionResult = async (
     };
   }
 
-  if (!UUID_PATTERN.test(cartId)) {
+  if (!isUuid(cartId)) {
     return { statusCode: 404, body: { error: "Submitted cart not found" } };
   }
 

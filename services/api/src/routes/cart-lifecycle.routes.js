@@ -3,8 +3,8 @@ import supabase from "../config/supabase.js";
 import {
   getCartItemsDetailed,
   getSubmittedCartById,
-  isUuid,
 } from "../services/cart.service.js";
+import { isUuid } from "../utils/validation.js";
 import {
   recordExecutionResult,
   recordValidationResult,
