@@ -4,6 +4,7 @@ import {
   claimNextQueuedExecutionRun,
   createExecutionRunFromCart,
   getExecutionRunById,
+  heartbeatExecutionRun,
   listExecutionRunsForCart,
   updateExecutionRunStatus,
 } from "../services/execution-run.service.js";
@@ -24,10 +25,11 @@ router.post("/from-cart/:storeId/:cartId", async (req, res) => {
 
 
 router.post("/claim-next", async (req, res) => {
-  const { workerNotes } = req.body ?? {};
+  const { workerId, workerNotes } = req.body ?? {};
 
   const { statusCode, body } = await claimNextQueuedExecutionRun(
     supabase,
+    workerId,
     workerNotes,
   );
 
@@ -52,6 +54,23 @@ router.get("/:runId", async (req, res) => {
   const { runId } = req.params;
 
   const { statusCode, body } = await getExecutionRunById(supabase, runId);
+
+  return res.status(statusCode).json(body);
+});
+
+router.patch("/:runId/heartbeat", async (req, res) => {
+  const { runId } = req.params;
+  const { workerId, progressStage, progressMessage, workerNotes } =
+    req.body ?? {};
+
+  const { statusCode, body } = await heartbeatExecutionRun(
+    supabase,
+    runId,
+    workerId,
+    progressStage,
+    progressMessage,
+    workerNotes,
+  );
 
   return res.status(statusCode).json(body);
 });

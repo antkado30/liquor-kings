@@ -206,18 +206,28 @@ export const updateExecutionRunStatus = async (
     patch.started_at = nowIso;
   }
 
+  if (status === "running") {
+    patch.heartbeat_at = nowIso;
+  }
+
   if (status === "succeeded") {
     patch.finished_at = nowIso;
     patch.error_message = null;
+    patch.heartbeat_at = nowIso;
+    patch.progress_stage = "completed";
   }
 
   if (status === "failed") {
     patch.finished_at = nowIso;
     patch.error_message = errorMessage ?? null;
+    patch.heartbeat_at = nowIso;
+    patch.progress_stage = "failed";
   }
 
   if (status === "canceled") {
     patch.finished_at = nowIso;
+    patch.heartbeat_at = nowIso;
+    patch.progress_stage = "canceled";
   }
 
   const { data: updatedRun, error: updateError } = await supabase
@@ -237,7 +247,102 @@ export const updateExecutionRunStatus = async (
   };
 };
 
-export const claimNextQueuedExecutionRun = async (supabase, workerNotes) => {
+export const heartbeatExecutionRun = async (
+  supabase,
+  runId,
+  workerId,
+  progressStage,
+  progressMessage,
+  workerNotes,
+) => {
+  if (!isUuid(runId)) {
+    return {
+      statusCode: 404,
+      body: { error: "Execution run not found" },
+    };
+  }
+
+  const { data: run, error: fetchError } = await supabase
+    .from("execution_runs")
+    .select("*")
+    .eq("id", runId)
+    .maybeSingle();
+
+  if (fetchError) {
+    return serverError(fetchError.message);
+  }
+
+  if (!run) {
+    return {
+      statusCode: 404,
+      body: { error: "Execution run not found" },
+    };
+  }
+
+  if (run.status !== "running") {
+    return {
+      statusCode: 400,
+      body: {
+        error: "Heartbeat can only be recorded for a running execution run",
+      },
+    };
+  }
+
+  if (
+    run.worker_id != null &&
+    workerId !== undefined &&
+    run.worker_id !== workerId
+  ) {
+    return {
+      statusCode: 400,
+      body: { error: "Execution run is owned by a different worker" },
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  const patch = {
+    heartbeat_at: nowIso,
+    updated_at: nowIso,
+  };
+
+  if (workerId !== undefined && run.worker_id == null) {
+    patch.worker_id = workerId;
+  }
+
+  if (progressStage !== undefined) {
+    patch.progress_stage = progressStage;
+  }
+
+  if (progressMessage !== undefined) {
+    patch.progress_message = progressMessage;
+  }
+
+  if (workerNotes !== undefined) {
+    patch.worker_notes = workerNotes;
+  }
+
+  const { data: updatedRun, error: updateError } = await supabase
+    .from("execution_runs")
+    .update(patch)
+    .eq("id", runId)
+    .select("*")
+    .single();
+
+  if (updateError) {
+    return serverError(updateError.message);
+  }
+
+  return {
+    statusCode: 200,
+    body: { success: true, data: updatedRun },
+  };
+};
+
+export const claimNextQueuedExecutionRun = async (
+  supabase,
+  workerId,
+  workerNotes,
+) => {
   const { data: candidates, error: listError } = await supabase
     .from("execution_runs")
     .select("*")
@@ -266,7 +371,12 @@ export const claimNextQueuedExecutionRun = async (supabase, workerNotes) => {
       status: "running",
       updated_at: now,
       started_at: startedAt,
+      heartbeat_at: now,
     };
+
+    if (workerId !== undefined) {
+      patch.worker_id = workerId;
+    }
 
     if (workerNotes !== undefined) {
       patch.worker_notes = workerNotes;

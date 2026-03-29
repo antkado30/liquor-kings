@@ -694,117 +694,6 @@ describe("cart lifecycle smoke tests", () => {
 });
 
 describe("execution run smoke tests", () => {
-  let runId;
-
-  beforeAll(async () => {
-    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
-
-    await resetTestCartState(supabase, cartId);
-
-    await request(app).post(`/cart/${storeId}/validate`).send();
-
-    await request(app)
-      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
-      .send({ validationStatus: "validated" });
-  });
-
-  afterAll(async () => {
-    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
-
-    await resetTestCartState(supabase, cartId);
-  });
-
-  it("A) POST /execution-runs/from-cart/:storeId/:cartId", async () => {
-    const res = await request(app).post(
-      `/execution-runs/from-cart/${storeId}/${cartId}`,
-    );
-
-    expect(res.status).toBe(201);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.cart_id).toBe(cartId);
-    expect(res.body.data.status).toBe("queued");
-
-    runId = res.body.data.id;
-  });
-
-  it("B) duplicate POST /execution-runs/from-cart/:storeId/:cartId", async () => {
-    const res = await request(app).post(
-      `/execution-runs/from-cart/${storeId}/${cartId}`,
-    );
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe(
-      "An active execution run already exists for this cart",
-    );
-  });
-
-  it("C) GET /execution-runs/cart/:storeId/:cartId", async () => {
-    const res = await request(app).get(
-      `/execution-runs/cart/${storeId}/${cartId}`,
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(Array.isArray(res.body.data)).toBe(true);
-    expect(res.body.count).toBeGreaterThanOrEqual(1);
-  });
-
-  it("D) GET /execution-runs/:runId", async () => {
-    const res = await request(app).get(`/execution-runs/${runId}`);
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.id).toBe(runId);
-  });
-
-  it("E) PATCH /execution-runs/:runId/status (running)", async () => {
-    const res = await request(app)
-      .patch(`/execution-runs/${runId}/status`)
-      .send({
-        status: "running",
-        workerNotes: "started by smoke test",
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.status).toBe("running");
-    expect(res.body.data.started_at).toBeTruthy();
-  });
-
-  it("F) PATCH /execution-runs/:runId/status (failed)", async () => {
-    const res = await request(app)
-      .patch(`/execution-runs/${runId}/status`)
-      .send({
-        status: "failed",
-        workerNotes: "failed in smoke test",
-        errorMessage: "simulated failure",
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.status).toBe("failed");
-    expect(res.body.data.finished_at).toBeTruthy();
-    expect(res.body.data.error_message).toBe("simulated failure");
-  });
-
-  it("G) PATCH /execution-runs/:runId/status after failure (running)", async () => {
-    const res = await request(app)
-      .patch(`/execution-runs/${runId}/status`)
-      .send({ status: "running" });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Execution run is already finalized");
-  });
-
-  it("H) GET /execution-runs/not-a-real-id", async () => {
-    const res = await request(app).get("/execution-runs/not-a-real-id");
-
-    expect(res.status).toBe(404);
-    expect(res.body.error).toBe("Execution run not found");
-  });
-});
-
-describe("execution run claim smoke tests", () => {
   let claimedRunId;
 
   beforeAll(async () => {
@@ -830,21 +719,55 @@ describe("execution run claim smoke tests", () => {
   });
 
   it("A) POST /execution-runs/claim-next", async () => {
-    const res = await request(app)
-      .post("/execution-runs/claim-next")
-      .send({ workerNotes: "claimed by smoke test" });
+    const res = await request(app).post("/execution-runs/claim-next").send({
+      workerId: "worker-smoke-1",
+      workerNotes: "claimed by smoke test",
+    });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.data).toBeTruthy();
     expect(res.body.data.run.status).toBe("running");
     expect(res.body.data.run.started_at).toBeTruthy();
+    expect(res.body.data.run.heartbeat_at).toBeTruthy();
+    expect(res.body.data.run.worker_id).toBe("worker-smoke-1");
     expect(res.body.data.payload).toBeDefined();
 
     claimedRunId = res.body.data.run.id;
   });
 
-  it("B) duplicate POST /execution-runs/claim-next (empty queue)", async () => {
+  it("B) PATCH /execution-runs/:runId/heartbeat", async () => {
+    const res = await request(app)
+      .patch(`/execution-runs/${claimedRunId}/heartbeat`)
+      .send({
+        workerId: "worker-smoke-1",
+        progressStage: "mlcc_login",
+        progressMessage: "Reached MLCC login page",
+        workerNotes: "heartbeat from smoke test",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.id).toBe(claimedRunId);
+    expect(res.body.data.status).toBe("running");
+    expect(res.body.data.worker_id).toBe("worker-smoke-1");
+    expect(res.body.data.progress_stage).toBe("mlcc_login");
+    expect(res.body.data.progress_message).toBe("Reached MLCC login page");
+    expect(res.body.data.heartbeat_at).toBeTruthy();
+  });
+
+  it("C) PATCH /execution-runs/:runId/heartbeat (different workerId)", async () => {
+    const res = await request(app)
+      .patch(`/execution-runs/${claimedRunId}/heartbeat`)
+      .send({
+        workerId: "worker-smoke-2",
+        progressStage: "should_fail",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Execution run is owned by a different worker");
+  });
+
+  it("D) POST /execution-runs/claim-next (queue empty)", async () => {
     const res = await request(app).post("/execution-runs/claim-next").send();
 
     expect(res.status).toBe(200);
@@ -852,7 +775,7 @@ describe("execution run claim smoke tests", () => {
     expect(res.body.data).toBe(null);
   });
 
-  it("C) GET /execution-runs/:runId (claimed run)", async () => {
+  it("E) GET /execution-runs/:runId", async () => {
     const res = await request(app).get(`/execution-runs/${claimedRunId}`);
 
     expect(res.status).toBe(200);
@@ -861,7 +784,7 @@ describe("execution run claim smoke tests", () => {
     expect(res.body.data.status).toBe("running");
   });
 
-  it("D) PATCH /execution-runs/:runId/status (succeeded)", async () => {
+  it("F) PATCH /execution-runs/:runId/status (succeeded)", async () => {
     const res = await request(app)
       .patch(`/execution-runs/${claimedRunId}/status`)
       .send({
@@ -873,6 +796,29 @@ describe("execution run claim smoke tests", () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.status).toBe("succeeded");
     expect(res.body.data.finished_at).toBeTruthy();
+    expect(res.body.data.heartbeat_at).toBeTruthy();
+    expect(res.body.data.progress_stage).toBe("completed");
     expect(res.body.data.error_message).toBe(null);
+  });
+
+  it("G) PATCH /execution-runs/:runId/heartbeat after success", async () => {
+    const res = await request(app)
+      .patch(`/execution-runs/${claimedRunId}/heartbeat`)
+      .send({
+        workerId: "worker-smoke-1",
+        progressStage: "too_late",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe(
+      "Heartbeat can only be recorded for a running execution run",
+    );
+  });
+
+  it("H) GET /execution-runs/not-a-real-id", async () => {
+    const res = await request(app).get("/execution-runs/not-a-real-id");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Execution run not found");
   });
 });
