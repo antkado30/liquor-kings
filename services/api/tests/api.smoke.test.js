@@ -5,8 +5,10 @@ import supabase from "../src/config/supabase.js";
 import { bottleId, cartId, mlccCode, storeId } from "./helpers/test-data.js";
 import { resetTestCartState } from "./helpers/cart-reset.js";
 import { adaptExecutionPayloadToMlccOrder } from "../src/workers/mlcc-adapter.js";
+import { buildMlccDryRunPlan } from "../src/workers/mlcc-dry-run.js";
 import {
   preflightClaimedRunPayload,
+  processOneMlccDryRun,
   processOneRun,
 } from "../src/workers/execution-worker.js";
 
@@ -1046,6 +1048,151 @@ describe("MLCC adapter and worker preflight smoke tests", () => {
     const result = await preflightClaimedRunPayload({
       apiBaseUrl,
       workerId: "worker-preflight-1",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.claimed).toBe(false);
+  });
+});
+
+describe("MLCC dry-run worker smoke tests", () => {
+  let server;
+  let apiBaseUrl;
+  let dryRunRunId;
+
+  beforeAll(async () => {
+    await new Promise((resolve, reject) => {
+      server = app.listen(0, "127.0.0.1", (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        const addr = server.address();
+
+        apiBaseUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+
+    await resetTestCartState(supabase, cartId);
+
+    await request(app).post(`/cart/${storeId}/validate`).send();
+
+    await request(app)
+      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+      .send({ validationStatus: "validated" });
+
+    await request(app).post(
+      `/execution-runs/from-cart/${storeId}/${cartId}`,
+    );
+  });
+
+  afterAll(async () => {
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+
+    await resetTestCartState(supabase, cartId);
+
+    await new Promise((resolve, reject) => {
+      server.close((err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        resolve();
+      });
+    });
+  });
+
+  it("A) buildMlccDryRunPlan on a valid synthetic payload", () => {
+    const synthetic = {
+      cart: { id: "cart-dry-synth", store_id: "store-dry-synth" },
+      store: {
+        id: "store-dry-synth",
+        store_name: "Dry Run Store",
+        liquor_license: "LIC-1",
+      },
+      items: [
+        {
+          cartItemId: "ci-dry-1",
+          bottleId: "bottle-dry-1",
+          bottle: {
+            mlcc_code: "9000123456",
+            name: "Dry bottle",
+          },
+          quantity: 1,
+        },
+      ],
+    };
+
+    const result = buildMlccDryRunPlan(synthetic);
+
+    expect(result.ready).toBe(true);
+    expect(result.plan).toBeTruthy();
+    expect(result.plan.mode).toBe("mlcc_dry_run");
+    expect(result.plan.items.length).toBe(1);
+    expect(result.plan.summary.itemCount).toBe(1);
+  });
+
+  it("B) buildMlccDryRunPlan on invalid synthetic payload item", () => {
+    const synthetic = {
+      cart: { id: "cart-dry-synth", store_id: "store-dry-synth" },
+      store: {
+        id: "store-dry-synth",
+        store_name: "Dry Run Store",
+      },
+      items: [
+        {
+          cartItemId: "ci-bad-dry",
+          bottleId: "bottle-bad-dry",
+          bottle: {
+            name: "No MLCC",
+          },
+          quantity: 1,
+        },
+      ],
+    };
+
+    const result = buildMlccDryRunPlan(synthetic);
+
+    expect(result.ready).toBe(false);
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0].message).toBe("Bottle is missing MLCC code");
+  });
+
+  it("C) processOneMlccDryRun succeeds on a queued real run", async () => {
+    const result = await processOneMlccDryRun({
+      apiBaseUrl,
+      workerId: "worker-mlcc-dry-run-1",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.claimed).toBe(true);
+    expect(result.runId).toBeTruthy();
+    expect(result.plan).toBeTruthy();
+    expect(result.plan.mode).toBe("mlcc_dry_run");
+
+    dryRunRunId = result.runId;
+  });
+
+  it("D) GET /execution-runs/:runId after successful dry run", async () => {
+    const res = await request(app).get(`/execution-runs/${dryRunRunId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.id).toBe(dryRunRunId);
+    expect(res.body.data.status).toBe("succeeded");
+    expect(res.body.data.progress_stage).toBe("completed");
+    expect(res.body.data.worker_id).toBe("worker-mlcc-dry-run-1");
+  });
+
+  it("E) processOneMlccDryRun again when queue is empty", async () => {
+    const result = await processOneMlccDryRun({
+      apiBaseUrl,
+      workerId: "worker-mlcc-dry-run-1",
     });
 
     expect(result.success).toBe(true);

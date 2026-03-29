@@ -3,6 +3,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { buildMlccPreflightReport } from "./mlcc-adapter.js";
+import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
 
 function joinApiPath(apiBaseUrl, pathname) {
   const base = apiBaseUrl.replace(/\/$/, "");
@@ -232,6 +233,70 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
     claimed: true,
     runId: run.id,
     preflight,
+  };
+}
+
+export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
+  const claimBody = await claimNextRun({
+    apiBaseUrl,
+    workerId,
+    workerNotes: "claimed by local MLCC dry-run worker",
+  });
+
+  if (claimBody.data === null) {
+    return {
+      success: true,
+      claimed: false,
+    };
+  }
+
+  const { run, payload } = claimBody.data;
+  const planResult = buildMlccDryRunPlan(payload);
+
+  if (!planResult.ready) {
+    const errorMessage = planResult.errors.map((e) => e.message).join("; ");
+
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      status: "failed",
+      workerNotes: "MLCC dry run failed during plan generation",
+      errorMessage,
+    });
+
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      plan: null,
+      errors: planResult.errors,
+    };
+  }
+
+  await heartbeatRun({
+    apiBaseUrl,
+    runId: run.id,
+    workerId,
+    progressStage: "mlcc_dry_run_plan_ready",
+    progressMessage: "MLCC dry-run plan generated successfully",
+    workerNotes: "MLCC dry-run plan ready",
+  });
+
+  await finalizeRun({
+    apiBaseUrl,
+    runId: run.id,
+    status: "succeeded",
+    workerNotes:
+      "MLCC dry run completed successfully; no live MLCC actions were performed",
+    errorMessage: undefined,
+  });
+
+  return {
+    success: true,
+    claimed: true,
+    runId: run.id,
+    plan: planResult.plan,
   };
 }
 
