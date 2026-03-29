@@ -236,3 +236,71 @@ export const updateExecutionRunStatus = async (
     body: { success: true, data: updatedRun },
   };
 };
+
+export const claimNextQueuedExecutionRun = async (supabase, workerNotes) => {
+  const { data: candidates, error: listError } = await supabase
+    .from("execution_runs")
+    .select("*")
+    .eq("status", "queued")
+    .order("created_at", { ascending: true })
+    .limit(10);
+
+  if (listError) {
+    return serverError(listError.message);
+  }
+
+  const queue = candidates ?? [];
+
+  if (queue.length === 0) {
+    return {
+      statusCode: 200,
+      body: { success: true, data: null },
+    };
+  }
+
+  for (const candidate of queue) {
+    const now = new Date().toISOString();
+    const startedAt = candidate.started_at ?? now;
+
+    const patch = {
+      status: "running",
+      updated_at: now,
+      started_at: startedAt,
+    };
+
+    if (workerNotes !== undefined) {
+      patch.worker_notes = workerNotes;
+    }
+
+    const { data: claimedRun, error: updateError } = await supabase
+      .from("execution_runs")
+      .update(patch)
+      .eq("id", candidate.id)
+      .eq("status", "queued")
+      .select("*")
+      .maybeSingle();
+
+    if (updateError) {
+      return serverError(updateError.message);
+    }
+
+    if (claimedRun) {
+      return {
+        statusCode: 200,
+        body: {
+          success: true,
+          data: {
+            run: claimedRun,
+            payload: claimedRun.payload_snapshot,
+          },
+        },
+      };
+    }
+  }
+
+  return {
+    statusCode: 200,
+    body: { success: true, data: null },
+  };
+};
+

@@ -1,6 +1,7 @@
 import express from "express";
 import supabase from "../config/supabase.js";
 import {
+  claimNextQueuedExecutionRun,
   createExecutionRunFromCart,
   getExecutionRunById,
   listExecutionRunsForCart,
@@ -16,6 +17,18 @@ router.post("/from-cart/:storeId/:cartId", async (req, res) => {
     supabase,
     storeId,
     cartId,
+  );
+
+  return res.status(statusCode).json(body);
+});
+
+
+router.post("/claim-next", async (req, res) => {
+  const { workerNotes } = req.body ?? {};
+
+  const { statusCode, body } = await claimNextQueuedExecutionRun(
+    supabase,
+    workerNotes,
   );
 
   return res.status(statusCode).json(body);

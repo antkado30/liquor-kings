@@ -803,3 +803,76 @@ describe("execution run smoke tests", () => {
     expect(res.body.error).toBe("Execution run not found");
   });
 });
+
+describe("execution run claim smoke tests", () => {
+  let claimedRunId;
+
+  beforeAll(async () => {
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+
+    await resetTestCartState(supabase, cartId);
+
+    await request(app).post(`/cart/${storeId}/validate`).send();
+
+    await request(app)
+      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+      .send({ validationStatus: "validated" });
+
+    await request(app).post(
+      `/execution-runs/from-cart/${storeId}/${cartId}`,
+    );
+  });
+
+  afterAll(async () => {
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+
+    await resetTestCartState(supabase, cartId);
+  });
+
+  it("A) POST /execution-runs/claim-next", async () => {
+    const res = await request(app)
+      .post("/execution-runs/claim-next")
+      .send({ workerNotes: "claimed by smoke test" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toBeTruthy();
+    expect(res.body.data.run.status).toBe("running");
+    expect(res.body.data.run.started_at).toBeTruthy();
+    expect(res.body.data.payload).toBeDefined();
+
+    claimedRunId = res.body.data.run.id;
+  });
+
+  it("B) duplicate POST /execution-runs/claim-next (empty queue)", async () => {
+    const res = await request(app).post("/execution-runs/claim-next").send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toBe(null);
+  });
+
+  it("C) GET /execution-runs/:runId (claimed run)", async () => {
+    const res = await request(app).get(`/execution-runs/${claimedRunId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.id).toBe(claimedRunId);
+    expect(res.body.data.status).toBe("running");
+  });
+
+  it("D) PATCH /execution-runs/:runId/status (succeeded)", async () => {
+    const res = await request(app)
+      .patch(`/execution-runs/${claimedRunId}/status`)
+      .send({
+        status: "succeeded",
+        workerNotes: "completed by smoke test",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe("succeeded");
+    expect(res.body.data.finished_at).toBeTruthy();
+    expect(res.body.data.error_message).toBe(null);
+  });
+});
