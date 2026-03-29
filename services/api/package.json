@@ -8,7 +8,8 @@
     "start": "node src/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "worker:run-once": "node src/workers/execution-worker.js"
+    "worker:run-once": "node src/workers/execution-worker.js",
+    "worker:mlcc-browser-dry-run": "node src/workers/mlcc-browser-worker.js"
   },
   "keywords": [],
   "author": "",
@@ -17,7 +18,8 @@
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "playwright": "^1.49.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.14",

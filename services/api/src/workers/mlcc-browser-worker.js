@@ -1,0 +1,439 @@
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+
+import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
+import {
+  claimNextRun,
+  finalizeRun,
+  heartbeatRun,
+} from "./execution-worker.js";
+
+export function buildMlccBrowserConfig({ payload, env }) {
+  if (!payload) {
+    return {
+      ready: false,
+      config: null,
+      errors: [
+        {
+          type: "config",
+          message: "Execution payload is missing",
+        },
+      ],
+    };
+  }
+
+  if (!payload.store) {
+    return {
+      ready: false,
+      config: null,
+      errors: [
+        {
+          type: "config",
+          message: "Store is missing from execution payload",
+        },
+      ],
+    };
+  }
+
+  const errors = [];
+
+  const usernameRaw = payload.store.mlcc_username;
+  const username =
+    typeof usernameRaw === "string" ? usernameRaw.trim() : "";
+
+  if (!username) {
+    errors.push({
+      type: "config",
+      message: "Store is missing MLCC username",
+    });
+  }
+
+  const passwordRaw = env?.MLCC_PASSWORD;
+  const password =
+    typeof passwordRaw === "string" ? passwordRaw.trim() : "";
+
+  if (!password) {
+    errors.push({
+      type: "config",
+      message: "MLCC password is not configured",
+    });
+  }
+
+  const loginUrlRaw = env?.MLCC_LOGIN_URL;
+  const loginUrl =
+    typeof loginUrlRaw === "string" ? loginUrlRaw.trim() : "";
+
+  if (!loginUrl) {
+    errors.push({
+      type: "config",
+      message: "MLCC login URL is not configured",
+    });
+  }
+
+  if (errors.length > 0) {
+    return {
+      ready: false,
+      config: null,
+      errors,
+    };
+  }
+
+  const safeTargetRaw = env?.MLCC_SAFE_TARGET_URL;
+  let safeTargetUrl = null;
+
+  if (
+    typeof safeTargetRaw === "string" &&
+    safeTargetRaw.trim() !== ""
+  ) {
+    safeTargetUrl = safeTargetRaw.trim();
+  }
+
+  const headless = env?.MLCC_HEADLESS === "false" ? false : true;
+
+  return {
+    ready: true,
+    config: {
+      username,
+      password,
+      loginUrl,
+      safeTargetUrl,
+      headless,
+    },
+    errors: [],
+  };
+}
+
+const USERNAME_SELECTORS = [
+  'input[name="username"]',
+  'input[name="email"]',
+  'input[id*="user" i]',
+  'input[type="email"]',
+  'input[type="text"]',
+];
+
+const PASSWORD_SELECTORS = [
+  'input[type="password"]',
+  'input[name*="password" i]',
+];
+
+async function fillFirstVisible(page, selectors, value) {
+  for (const sel of selectors) {
+    const loc = page.locator(sel).first();
+
+    try {
+      await loc.waitFor({ state: "visible", timeout: 8000 });
+      await loc.fill(value);
+
+      return true;
+    } catch {
+      // try next selector
+    }
+  }
+
+  return false;
+}
+
+async function clickFirstSubmit(page) {
+  const buttonSubmit = page.locator('button[type="submit"]').first();
+
+  if (
+    (await buttonSubmit.count()) > 0 &&
+    (await buttonSubmit.isVisible().catch(() => false))
+  ) {
+    await buttonSubmit.click();
+
+    return true;
+  }
+
+  const inputSubmit = page.locator('input[type="submit"]').first();
+
+  if (
+    (await inputSubmit.count()) > 0 &&
+    (await inputSubmit.isVisible().catch(() => false))
+  ) {
+    await inputSubmit.click();
+
+    return true;
+  }
+
+  const textButton = page.getByRole("button", {
+    name: /sign\s*in|log\s*in|login/i,
+  }).first();
+
+  if (
+    (await textButton.count()) > 0 &&
+    (await textButton.isVisible().catch(() => false))
+  ) {
+    await textButton.click();
+
+    return true;
+  }
+
+  return false;
+}
+
+async function hasObviousLoginError(page) {
+  const errorLoc = page
+    .locator(
+      '[role="alert"], .error, .validation-summary-errors, [class*="error"]',
+    )
+    .first();
+
+  return errorLoc.isVisible().catch(() => false);
+}
+
+export async function loginAndVerifyMlccLanding({ page, config }) {
+  await page.goto(config.loginUrl, { waitUntil: "domcontentloaded" });
+
+  const userOk = await fillFirstVisible(
+    page,
+    USERNAME_SELECTORS,
+    config.username,
+  );
+
+  if (!userOk) {
+    throw new Error("MLCC login failed");
+  }
+
+  const pwdOk = await fillFirstVisible(
+    page,
+    PASSWORD_SELECTORS,
+    config.password,
+  );
+
+  if (!pwdOk) {
+    throw new Error("MLCC login failed");
+  }
+
+  const clicked = await clickFirstSubmit(page);
+
+  if (!clicked) {
+    throw new Error("MLCC login failed");
+  }
+
+  await page.waitForLoadState("domcontentloaded", { timeout: 60000 }).catch(
+    () => {},
+  );
+
+  await new Promise((r) => setTimeout(r, 1500));
+
+  if (await hasObviousLoginError(page)) {
+    throw new Error("MLCC login failed");
+  }
+
+  const passwordStill = page.locator('input[type="password"]').first();
+  const stillVisible = await passwordStill.isVisible().catch(() => false);
+
+  if (stillVisible) {
+    throw new Error("MLCC login failed");
+  }
+
+  const finalUrl = page.url();
+  let title = null;
+
+  try {
+    const t = await page.title();
+
+    title = t || null;
+  } catch {
+    title = null;
+  }
+
+  return { finalUrl, title };
+}
+
+export async function processOneMlccBrowserDryRun({
+  apiBaseUrl,
+  workerId,
+  env,
+}) {
+  const claimBody = await claimNextRun({
+    apiBaseUrl,
+    workerId,
+    workerNotes: "claimed by MLCC browser dry-run worker",
+  });
+
+  if (claimBody.data === null) {
+    return {
+      success: true,
+      claimed: false,
+    };
+  }
+
+  const { run, payload } = claimBody.data;
+
+  const planResult = buildMlccDryRunPlan(payload);
+
+  if (!planResult.ready) {
+    const errorMessage = planResult.errors.map((e) => e.message).join("; ");
+
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      status: "failed",
+      workerNotes: "MLCC browser dry run failed during payload preflight",
+      errorMessage,
+    });
+
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+    };
+  }
+
+  const browserConfig = buildMlccBrowserConfig({ payload, env });
+
+  if (!browserConfig.ready) {
+    const errorMessage = browserConfig.errors.map((e) => e.message).join("; ");
+
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      status: "failed",
+      workerNotes: "MLCC browser dry run failed during browser config validation",
+      errorMessage,
+    });
+
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+    };
+  }
+
+  const config = browserConfig.config;
+  let browser;
+
+  try {
+    const { chromium } = await import("playwright");
+
+    browser = await chromium.launch({ headless: config.headless });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+
+    await heartbeatRun({
+      apiBaseUrl,
+      runId: run.id,
+      workerId,
+      progressStage: "mlcc_browser_launching",
+      progressMessage: "Launching MLCC browser dry-run session",
+    });
+
+    await loginAndVerifyMlccLanding({ page, config });
+
+    await heartbeatRun({
+      apiBaseUrl,
+      runId: run.id,
+      workerId,
+      progressStage: "mlcc_authenticated",
+      progressMessage: "MLCC login succeeded",
+    });
+
+    if (config.safeTargetUrl) {
+      await page.goto(config.safeTargetUrl, {
+        waitUntil: "domcontentloaded",
+      });
+
+      await heartbeatRun({
+        apiBaseUrl,
+        runId: run.id,
+        workerId,
+        progressStage: "mlcc_safe_navigation_complete",
+        progressMessage: "MLCC safe target navigation completed",
+      });
+    } else {
+      await heartbeatRun({
+        apiBaseUrl,
+        runId: run.id,
+        workerId,
+        progressStage: "mlcc_safe_navigation_complete",
+        progressMessage: "MLCC authenticated landing verified",
+      });
+    }
+
+    const finalUrl = page.url();
+    let title = null;
+
+    try {
+      const t = await page.title();
+
+      title = t || null;
+    } catch {
+      title = null;
+    }
+
+    const result = { finalUrl, title };
+
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      status: "succeeded",
+      workerNotes:
+        "MLCC browser dry run completed successfully; no cart mutations or submit actions were performed",
+      errorMessage: undefined,
+    });
+
+    return {
+      success: true,
+      claimed: true,
+      runId: run.id,
+      result,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+
+    try {
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        status: "failed",
+        workerNotes: "MLCC browser dry run failed",
+        errorMessage: msg,
+      });
+    } catch {
+      // ignore secondary finalize errors
+    }
+
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      error: msg,
+    };
+  } finally {
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+  }
+}
+
+const __filename = fileURLToPath(import.meta.url);
+const isMainModule =
+  path.resolve(process.argv[1] ?? "") === path.resolve(__filename);
+
+if (isMainModule) {
+  const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:4000";
+  const workerId = process.env.WORKER_ID ?? "mlcc-browser-worker-1";
+
+  try {
+    const out = await processOneMlccBrowserDryRun({
+      apiBaseUrl,
+      workerId,
+      env: process.env,
+    });
+
+    process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+
+    process.exit(out.success ? 0 : 1);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    process.stderr.write(`${message}\n`);
+    process.exit(1);
+  }
+}
