@@ -2,6 +2,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { buildMlccPreflightReport } from "./mlcc-adapter.js";
+
 function joinApiPath(apiBaseUrl, pathname) {
   const base = apiBaseUrl.replace(/\/$/, "");
   const pathPart = pathname.startsWith("/") ? pathname : `/${pathname}`;
@@ -176,6 +178,60 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
     success: true,
     claimed: true,
     runId: run.id,
+  };
+}
+
+export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
+  const claimBody = await claimNextRun({
+    apiBaseUrl,
+    workerId,
+    workerNotes: "claimed by local execution worker",
+  });
+
+  if (claimBody.data === null) {
+    return {
+      success: true,
+      claimed: false,
+    };
+  }
+
+  const { run, payload } = claimBody.data;
+  const preflight = buildMlccPreflightReport(payload);
+
+  if (!preflight.ready) {
+    const errorMessage = preflight.errors.map((e) => e.message).join("; ");
+
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      status: "failed",
+      workerNotes: "MLCC preflight failed in local execution worker",
+      errorMessage,
+    });
+
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      preflight,
+    };
+  }
+
+  await heartbeatRun({
+    apiBaseUrl,
+    runId: run.id,
+    workerId,
+    progressStage: "mlcc_preflight_ready",
+    progressMessage: "MLCC preflight completed successfully",
+    workerNotes: "MLCC preflight passed in local execution worker",
+  });
+
+  return {
+    success: true,
+    claimed: true,
+    runId: run.id,
+    preflight,
   };
 }
 

@@ -4,7 +4,11 @@ import app from "../src/app.js";
 import supabase from "../src/config/supabase.js";
 import { bottleId, cartId, mlccCode, storeId } from "./helpers/test-data.js";
 import { resetTestCartState } from "./helpers/cart-reset.js";
-import { processOneRun } from "../src/workers/execution-worker.js";
+import { adaptExecutionPayloadToMlccOrder } from "../src/workers/mlcc-adapter.js";
+import {
+  preflightClaimedRunPayload,
+  processOneRun,
+} from "../src/workers/execution-worker.js";
 
 describe("Liquor Kings API smoke tests", () => {
   it("GET /health", async () => {
@@ -905,6 +909,143 @@ describe("execution worker stub smoke tests", () => {
     const result = await processOneRun({
       apiBaseUrl,
       workerId: "worker-smoke-local-1",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.claimed).toBe(false);
+  });
+});
+
+describe("MLCC adapter and worker preflight smoke tests", () => {
+  let server;
+  let apiBaseUrl;
+  let preflightRunId;
+
+  beforeAll(async () => {
+    await new Promise((resolve, reject) => {
+      server = app.listen(0, "127.0.0.1", (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        const addr = server.address();
+
+        apiBaseUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+
+    await resetTestCartState(supabase, cartId);
+
+    await request(app).post(`/cart/${storeId}/validate`).send();
+
+    await request(app)
+      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+      .send({ validationStatus: "validated" });
+
+    await request(app).post(
+      `/execution-runs/from-cart/${storeId}/${cartId}`,
+    );
+  });
+
+  afterAll(async () => {
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+
+    await resetTestCartState(supabase, cartId);
+
+    await new Promise((resolve, reject) => {
+      server.close((err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        resolve();
+      });
+    });
+  });
+
+  it("A) adaptExecutionPayloadToMlccOrder on a valid synthetic payload", () => {
+    const synthetic = {
+      cart: { id: "cart-synth" },
+      store: { id: "store-synth" },
+      items: [
+        {
+          cartItemId: "ci-synth-1",
+          bottleId: "bottle-synth-1",
+          bottle: {
+            mlcc_code: "8000123456",
+            name: "Synthetic bottle",
+          },
+          quantity: 2,
+        },
+      ],
+    };
+
+    const result = adaptExecutionPayloadToMlccOrder(synthetic);
+
+    expect(result.ready).toBe(true);
+    expect(result.items.length).toBe(1);
+    expect(result.errors.length).toBe(0);
+    expect(result.items[0].mlccCode).toBe("8000123456");
+  });
+
+  it("B) adaptExecutionPayloadToMlccOrder on invalid synthetic payload item", () => {
+    const synthetic = {
+      cart: { id: "cart-synth" },
+      store: { id: "store-synth" },
+      items: [
+        {
+          cartItemId: "ci-bad",
+          bottleId: "bottle-bad",
+          bottle: {
+            name: "No MLCC",
+          },
+          quantity: 1,
+        },
+      ],
+    };
+
+    const result = adaptExecutionPayloadToMlccOrder(synthetic);
+
+    expect(result.ready).toBe(false);
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0].message).toBe("Bottle is missing MLCC code");
+  });
+
+  it("C) preflightClaimedRunPayload succeeds on a queued real run", async () => {
+    const result = await preflightClaimedRunPayload({
+      apiBaseUrl,
+      workerId: "worker-preflight-1",
+    });
+
+    expect(result.claimed).toBe(true);
+    expect(result.preflight.ready).toBe(true);
+    expect(result.runId).toBeTruthy();
+
+    preflightRunId = result.runId;
+  });
+
+  it("D) GET /execution-runs/:runId after successful preflight", async () => {
+    const res = await request(app).get(
+      `/execution-runs/${preflightRunId}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.id).toBe(preflightRunId);
+    expect(res.body.data.status).toBe("running");
+    expect(res.body.data.progress_stage).toBe("mlcc_preflight_ready");
+    expect(res.body.data.worker_id).toBe("worker-preflight-1");
+  });
+
+  it("E) preflightClaimedRunPayload again when queue is empty", async () => {
+    const result = await preflightClaimedRunPayload({
+      apiBaseUrl,
+      workerId: "worker-preflight-1",
     });
 
     expect(result.success).toBe(true);
