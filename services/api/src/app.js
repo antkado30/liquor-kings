@@ -1,6 +1,7 @@
 import cartRouter from "./routes/cart.routes.js";
 import cartSummaryRouter from "./routes/cart-summary.routes.js";
 import cartLifecycleRouter from "./routes/cart-lifecycle.routes.js";
+import executionRunsRouter from "./routes/execution-runs.routes.js";
 import express from "express";
 import cors from "cors";
 import supabase from "./config/supabase.js";
@@ -16,6 +17,7 @@ app.use("/inventory", inventoryRouter);
 app.use("/cart", cartRouter);
 app.use("/cart", cartSummaryRouter);
 app.use("/cart", cartLifecycleRouter);
+app.use("/execution-runs", executionRunsRouter);
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", message: "Liquor Kings API running" });

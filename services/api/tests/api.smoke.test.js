@@ -692,3 +692,114 @@ describe("cart lifecycle smoke tests", () => {
     expect(res.body.cart.external_order_ref).toBe("MLCC-ORDER-TEST");
   });
 });
+
+describe("execution run smoke tests", () => {
+  let runId;
+
+  beforeAll(async () => {
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+
+    await resetTestCartState(supabase, cartId);
+
+    await request(app).post(`/cart/${storeId}/validate`).send();
+
+    await request(app)
+      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+      .send({ validationStatus: "validated" });
+  });
+
+  afterAll(async () => {
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+
+    await resetTestCartState(supabase, cartId);
+  });
+
+  it("A) POST /execution-runs/from-cart/:storeId/:cartId", async () => {
+    const res = await request(app).post(
+      `/execution-runs/from-cart/${storeId}/${cartId}`,
+    );
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.cart_id).toBe(cartId);
+    expect(res.body.data.status).toBe("queued");
+
+    runId = res.body.data.id;
+  });
+
+  it("B) duplicate POST /execution-runs/from-cart/:storeId/:cartId", async () => {
+    const res = await request(app).post(
+      `/execution-runs/from-cart/${storeId}/${cartId}`,
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe(
+      "An active execution run already exists for this cart",
+    );
+  });
+
+  it("C) GET /execution-runs/cart/:storeId/:cartId", async () => {
+    const res = await request(app).get(
+      `/execution-runs/cart/${storeId}/${cartId}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.count).toBeGreaterThanOrEqual(1);
+  });
+
+  it("D) GET /execution-runs/:runId", async () => {
+    const res = await request(app).get(`/execution-runs/${runId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.id).toBe(runId);
+  });
+
+  it("E) PATCH /execution-runs/:runId/status (running)", async () => {
+    const res = await request(app)
+      .patch(`/execution-runs/${runId}/status`)
+      .send({
+        status: "running",
+        workerNotes: "started by smoke test",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe("running");
+    expect(res.body.data.started_at).toBeTruthy();
+  });
+
+  it("F) PATCH /execution-runs/:runId/status (failed)", async () => {
+    const res = await request(app)
+      .patch(`/execution-runs/${runId}/status`)
+      .send({
+        status: "failed",
+        workerNotes: "failed in smoke test",
+        errorMessage: "simulated failure",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe("failed");
+    expect(res.body.data.finished_at).toBeTruthy();
+    expect(res.body.data.error_message).toBe("simulated failure");
+  });
+
+  it("G) PATCH /execution-runs/:runId/status after failure (running)", async () => {
+    const res = await request(app)
+      .patch(`/execution-runs/${runId}/status`)
+      .send({ status: "running" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Execution run is already finalized");
+  });
+
+  it("H) GET /execution-runs/not-a-real-id", async () => {
+    const res = await request(app).get("/execution-runs/not-a-real-id");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Execution run not found");
+  });
+});
