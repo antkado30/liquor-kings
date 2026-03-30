@@ -8,8 +8,12 @@ import supabase from "./config/supabase.js";
 import bottlesRouter from "./routes/bottles.routes.js";
 import inventoryRouter from "./routes/inventory.routes.js";
 import { resolveAuthenticatedStore } from "./middleware/resolve-store.middleware.js";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const app = express();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 app.use(cors());
 app.use(express.json());
@@ -27,6 +31,10 @@ app.use("/execution-runs", resolveAuthenticatedStore, executionRunsRouter);
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", message: "Liquor Kings API running" });
+});
+
+app.get("/operator-review", (req, res) => {
+  res.sendFile(path.join(__dirname, "static", "operator-review.html"));
 });
 
 app.get("/test-db", async (req, res) => {

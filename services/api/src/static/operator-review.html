@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Liquor Kings - Operator Review</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        background: #f5f7fb;
+        color: #111827;
+      }
+      header {
+        background: #111827;
+        color: #fff;
+        padding: 12px 16px;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 1.1fr;
+        gap: 12px;
+        padding: 12px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      input,
+      select,
+      button,
+      textarea {
+        padding: 6px 8px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+      }
+      button {
+        cursor: pointer;
+        background: #1f2937;
+        color: #fff;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th,
+      td {
+        text-align: left;
+        border-bottom: 1px solid #e5e7eb;
+        padding: 6px;
+      }
+      pre {
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 8px;
+        overflow: auto;
+        font-size: 12px;
+      }
+      .muted {
+        color: #6b7280;
+        font-size: 12px;
+      }
+      .actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(120px, 1fr));
+        gap: 8px;
+      }
+      @media (max-width: 900px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Liquor Kings Operator Review Console</strong>
+    </header>
+    <div class="layout">
+      <section class="card">
+        <h3>Run Queue</h3>
+        <div class="row">
+          <label>API Base</label>
+          <input id="apiBase" value="" placeholder="http://localhost:4000" />
+          <label>Store ID</label>
+          <input id="storeId" placeholder="store uuid" />
+        </div>
+        <div class="row" style="margin-top: 8px">
+          <label>Bearer Token</label>
+          <input id="token" style="min-width: 420px" placeholder="eyJ..." />
+        </div>
+        <div class="row" style="margin-top: 8px">
+          <label>Status</label>
+          <select id="status">
+            <option value="">(all)</option>
+            <option>queued</option>
+            <option>running</option>
+            <option>failed</option>
+            <option>succeeded</option>
+            <option>canceled</option>
+          </select>
+          <label>Failure Type</label>
+          <select id="failureType">
+            <option value="">(all)</option>
+            <option>CODE_MISMATCH</option>
+            <option>OUT_OF_STOCK</option>
+            <option>QUANTITY_RULE_VIOLATION</option>
+            <option>MLCC_UI_CHANGE</option>
+            <option>NETWORK_ERROR</option>
+            <option>UNKNOWN</option>
+          </select>
+          <label>Pending Manual Review</label>
+          <select id="pendingManualReview">
+            <option value="">(all)</option>
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+          <label>Cart ID</label>
+          <input id="cartId" placeholder="optional cart uuid" />
+          <button id="loadRuns">Load Runs</button>
+        </div>
+        <p class="muted">Newest runs first. Click any run row to open details.</p>
+        <table id="runsTable">
+          <thead>
+            <tr>
+              <th>Run</th>
+              <th>Status</th>
+              <th>Failure</th>
+              <th>Operator</th>
+              <th>Next Step</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h3>Run Detail</h3>
+        <div class="row">
+          <div><strong>Run ID:</strong> <span id="detailRunId">-</span></div>
+        </div>
+        <h4>Summary</h4>
+        <pre id="summaryBox">Select a run...</pre>
+        <h4>Evidence</h4>
+        <pre id="evidenceBox">[]</pre>
+        <h4>Operator Actions (History)</h4>
+        <pre id="historyBox">[]</pre>
+        <h4>Submit Operator Action</h4>
+        <div class="actions">
+          <button data-action="acknowledge">acknowledge</button>
+          <button data-action="mark_for_manual_review">mark_for_manual_review</button>
+          <button data-action="retry_now">retry_now</button>
+          <button data-action="cancel">cancel</button>
+          <button data-action="resolve_without_retry">resolve_without_retry</button>
+        </div>
+        <div class="row" style="margin-top: 8px">
+          <input id="reason" placeholder="reason (optional)" />
+          <textarea id="note" rows="2" cols="38" placeholder="note (optional)"></textarea>
+        </div>
+        <p class="muted" id="actionHint">
+          Action availability follows backend guardrails; disallowed actions return clear errors.
+        </p>
+      </section>
+    </div>
+
+    <script>
+      const state = {
+        selectedRunId: null,
+      };
+
+      const byId = (id) => document.getElementById(id);
+      const actionButtons = Array.from(document.querySelectorAll("[data-action]"));
+
+      byId("apiBase").value = window.location.origin;
+
+      const getHeaders = () => {
+        const token = byId("token").value.trim();
+        const storeId = byId("storeId").value.trim();
+        return {
+          Authorization: `Bearer ${token}`,
+          "X-Store-Id": storeId,
+          "Content-Type": "application/json",
+        };
+      };
+
+      const qs = (obj) => {
+        const p = new URLSearchParams();
+        Object.entries(obj).forEach(([k, v]) => {
+          if (v !== undefined && v !== null && String(v).length > 0) p.set(k, v);
+        });
+        return p.toString();
+      };
+
+      const setRunRows = (rows) => {
+        const tbody = byId("runsTable").querySelector("tbody");
+        tbody.innerHTML = "";
+        rows.forEach((row) => {
+          const tr = document.createElement("tr");
+          tr.style.cursor = "pointer";
+          tr.innerHTML = `
+            <td>${row.run_id}</td>
+            <td>${row.status}</td>
+            <td>${row.failure_type ?? "-"}</td>
+            <td>${row.operator_status}</td>
+            <td>${row.actionable_next_step}</td>
+          `;
+          tr.onclick = () => loadRunDetail(row.run_id);
+          tbody.appendChild(tr);
+        });
+      };
+
+      const loadRuns = async () => {
+        const apiBase = byId("apiBase").value.trim();
+        const storeId = byId("storeId").value.trim();
+        const query = qs({
+          status: byId("status").value,
+          failure_type: byId("failureType").value,
+          pending_manual_review: byId("pendingManualReview").value,
+          cart_id: byId("cartId").value.trim(),
+        });
+        const url = `${apiBase}/execution-runs/review/${storeId}/runs${query ? `?${query}` : ""}`;
+        const res = await fetch(url, { headers: getHeaders() });
+        const body = await res.json();
+        if (!res.ok) {
+          alert(body.error ?? "Failed to load runs");
+          return;
+        }
+        setRunRows(body.data ?? []);
+      };
+
+      const loadRunDetail = async (runId) => {
+        state.selectedRunId = runId;
+        byId("detailRunId").textContent = runId;
+        const apiBase = byId("apiBase").value.trim();
+        const res = await fetch(`${apiBase}/execution-runs/${runId}/review-bundle`, {
+          headers: getHeaders(),
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          alert(body.error ?? "Failed to load run detail");
+          return;
+        }
+        const data = body.data;
+        byId("summaryBox").textContent = JSON.stringify(data.summary, null, 2);
+        byId("evidenceBox").textContent = JSON.stringify(data.evidence.items, null, 2);
+        byId("historyBox").textContent = JSON.stringify(
+          data.operator_actions.items,
+          null,
+          2,
+        );
+        const summary = data.summary;
+        actionButtons.forEach((btn) => {
+          const action = btn.getAttribute("data-action");
+          let disabled = false;
+          if (action === "retry_now" && !summary.retry_allowed) disabled = true;
+          if (action === "resolve_without_retry" && summary.status !== "failed") {
+            disabled = true;
+          }
+          if (action === "cancel" && summary.status === "succeeded") disabled = true;
+          btn.disabled = disabled;
+        });
+      };
+
+      const submitAction = async (action) => {
+        if (!state.selectedRunId) {
+          alert("Select a run first");
+          return;
+        }
+        const apiBase = byId("apiBase").value.trim();
+        const payload = {
+          action,
+          reason: byId("reason").value.trim() || null,
+          note: byId("note").value.trim() || null,
+        };
+        const res = await fetch(
+          `${apiBase}/execution-runs/${state.selectedRunId}/actions`,
+          {
+            method: "POST",
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+          },
+        );
+        const body = await res.json();
+        if (!res.ok) {
+          alert(body.error ?? "Action rejected");
+          return;
+        }
+        byId("reason").value = "";
+        byId("note").value = "";
+        await loadRunDetail(state.selectedRunId);
+        await loadRuns();
+      };
+
+      byId("loadRuns").onclick = loadRuns;
+      actionButtons.forEach((btn) => {
+        btn.onclick = () => submitAction(btn.getAttribute("data-action"));
+      });
+    </script>
+  </body>
+</html>
