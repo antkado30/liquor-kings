@@ -419,7 +419,9 @@ export async function verifyCartItemsBeforeExecution(supabase, {
   let itemsErr = withMlccItem.error;
   items = withMlccItem.data;
 
-  // Backward-compatible path for databases that have not yet added cart_items.mlcc_item_id.
+  // TEMP compatibility logic: some environments may lag behind the formal
+  // cart_items.mlcc_item_id migration. Keep this fallback until all deployed
+  // databases are confirmed migrated, then remove this branch.
   if (itemsErr && String(itemsErr.message ?? "").includes("mlcc_item_id")) {
     const fallback = await supabase
       .from("cart_items")
@@ -440,6 +442,8 @@ export async function verifyCartItemsBeforeExecution(supabase, {
       .eq("cart_id", cartId);
 
     itemsErr = fallback.error;
+    // TEMP compatibility logic: emulate mlcc_item_id field shape for callers
+    // while the migration is still rolling out.
     items = (fallback.data ?? []).map((row) => ({ ...row, mlcc_item_id: null }));
   }
 

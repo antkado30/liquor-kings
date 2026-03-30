@@ -113,14 +113,32 @@ async function probeRpc(supabase, name, args) {
   return { name, status: STATUS.PRESENT_VERIFIED, detail: null, sample: data };
 }
 
-function listEdgeFunctionsCli() {
+function inferProjectRef(supabaseUrl) {
+  const explicit = process.env.SUPABASE_PROJECT_REF?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const host = new URL(supabaseUrl).host;
+  const [ref] = host.split(".");
+  if (!ref) {
+    throw new Error(`Could not infer project ref from SUPABASE_URL host: ${host}`);
+  }
+  return ref;
+}
+
+function listEdgeFunctionsCli(projectRef) {
   try {
-    const out = execSync("npx supabase functions list --linked", {
+    const safeRef = projectRef.replace(/[^a-z0-9_-]/gi, "");
+    const out = execSync(
+      `npx supabase functions list --project-ref ${safeRef}`,
+      {
       cwd: REPO_ROOT,
       encoding: "utf8",
       timeout: 120_000,
       maxBuffer: 10 * 1024 * 1024,
-    });
+      },
+    );
 
     return {
       status: STATUS.PRESENT_VERIFIED,
@@ -132,7 +150,8 @@ function listEdgeFunctionsCli() {
       status: STATUS.UNVERIFIED,
       raw: String(e.stderr ?? e.stdout ?? e.message ?? e),
       source: "supabase_cli",
-      note: "Could not list Edge Functions (CLI not linked, not installed, or no network)",
+      note:
+        "Could not list Edge Functions (invalid project ref, CLI not installed/authenticated, or no network)",
     };
   }
 }
@@ -161,7 +180,8 @@ export async function runSupabaseAudit() {
 
   const indexes_from_migrations = extractIndexesFromMigrations();
 
-  const edge_functions = listEdgeFunctionsCli();
+  const projectRef = inferProjectRef(url);
+  const edge_functions = listEdgeFunctionsCli(projectRef);
 
   return {
     generated_at: new Date().toISOString(),
@@ -185,7 +205,7 @@ export async function runSupabaseAudit() {
     drift: {
       status: STATUS.PRESENT_UNVERIFIED,
       note:
-        "Compare supabase/migrations and deployed migration history via `supabase migration list --linked` (not run automatically here).",
+        "Compare supabase/migrations and deployed migration history via `supabase migration list --project-ref <ref>` (not run automatically here).",
     },
   };
 }
