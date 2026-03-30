@@ -10,6 +10,7 @@ import inventoryRouter from "./routes/inventory.routes.js";
 import { resolveAuthenticatedStore } from "./middleware/resolve-store.middleware.js";
 import path from "path";
 import { fileURLToPath } from "url";
+import operatorReviewRouter from "./routes/operator-review.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -28,6 +29,7 @@ app.use(
 app.use("/inventory", resolveAuthenticatedStore, inventoryRouter);
 app.use("/bottles", resolveAuthenticatedStore, bottlesRouter);
 app.use("/execution-runs", resolveAuthenticatedStore, executionRunsRouter);
+app.use("/operator-review", operatorReviewRouter);
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", message: "Liquor Kings API running" });

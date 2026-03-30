@@ -214,12 +214,19 @@
         <div class="row">
           <label>API Base</label>
           <input id="apiBase" value="" placeholder="http://localhost:4000" />
-          <label>Store ID</label>
-          <input id="storeId" placeholder="store uuid" />
+          <label>Store</label>
+          <select id="storeSelect"></select>
+          <button id="changeStore" class="secondary">Use Store</button>
+          <button id="logout" class="secondary">Logout</button>
         </div>
         <div class="row" style="margin-top: 8px">
-          <label>Bearer Token</label>
-          <input id="token" style="min-width: 420px" placeholder="eyJ..." />
+          <label>Operator</label>
+          <span id="operatorIdentity" class="muted">Not signed in</span>
+        </div>
+        <div id="authPanel" class="row" style="margin-top: 8px">
+          <label>Access Token</label>
+          <input id="token" style="min-width: 420px" placeholder="Paste once to start session" />
+          <button id="connectSession">Connect Session</button>
         </div>
         <div class="row" style="margin-top: 8px">
           <label>Status</label>
@@ -311,6 +318,8 @@
         loadingRuns: false,
         loadingDetail: false,
         actionInFlight: false,
+        authenticated: false,
+        stores: [],
       };
 
       const byId = (id) => document.getElementById(id);
@@ -320,15 +329,7 @@
 
       byId("apiBase").value = window.location.origin;
 
-      const getHeaders = () => {
-        const token = byId("token").value.trim();
-        const storeId = byId("storeId").value.trim();
-        return {
-          Authorization: `Bearer ${token}`,
-          "X-Store-Id": storeId,
-          "Content-Type": "application/json",
-        };
-      };
+      const getHeaders = () => ({ "Content-Type": "application/json" });
 
       const setMessage = (id, type, text) => {
         const el = byId(id);
@@ -355,6 +356,51 @@
           byId("timestampsBox").classList.toggle("loading", loading);
           byId("historyBox").classList.toggle("loading", loading);
           byId("evidenceBox").classList.toggle("loading", loading);
+        }
+      };
+
+      const applySessionUi = () => {
+        const authed = state.authenticated;
+        byId("authPanel").style.display = authed ? "none" : "flex";
+        byId("operatorIdentity").textContent = authed
+          ? `${state.operator?.email ?? state.operator?.id ?? "operator"}`
+          : "Not signed in";
+        byId("storeSelect").disabled = !authed;
+        byId("changeStore").disabled = !authed;
+        byId("logout").disabled = !authed;
+        byId("loadRuns").disabled = !authed || state.loadingRuns || state.actionInFlight;
+        byId("resetFilters").disabled = !authed || state.loadingRuns || state.actionInFlight;
+      };
+
+      const loadSession = async () => {
+        try {
+          const res = await fetch(`${byId("apiBase").value.trim()}/operator-review/session`, {
+            credentials: "same-origin",
+          });
+          const body = await res.json();
+          if (!res.ok || !body.authenticated) {
+            state.authenticated = false;
+            state.operator = null;
+            state.stores = [];
+            byId("storeSelect").innerHTML = "";
+            applySessionUi();
+            return;
+          }
+          state.authenticated = true;
+          state.operator = body.operator;
+          state.stores = body.stores ?? [];
+          byId("storeSelect").innerHTML = state.stores
+            .map(
+              (s) =>
+                `<option value="${esc(s.id)}" ${
+                  s.id === body.current_store_id ? "selected" : ""
+                }>${esc(s.name ?? s.id)}</option>`,
+            )
+            .join("");
+          applySessionUi();
+        } catch {
+          state.authenticated = false;
+          applySessionUi();
         }
       };
 
@@ -493,16 +539,15 @@
         setMessage("listMessage", "", "");
         setLoading("runs", true);
         const apiBase = byId("apiBase").value.trim();
-        const storeId = byId("storeId").value.trim();
         const query = qs({
           status: byId("status").value,
           failure_type: byId("failureType").value,
           pending_manual_review: byId("pendingManualReview").value,
           cart_id: byId("cartId").value.trim(),
         });
-        const url = `${apiBase}/execution-runs/review/${storeId}/runs${query ? `?${query}` : ""}`;
+        const url = `${apiBase}/operator-review/api/runs${query ? `?${query}` : ""}`;
         try {
-          const res = await fetch(url, { headers: getHeaders() });
+          const res = await fetch(url, { headers: getHeaders(), credentials: "same-origin" });
           const body = await res.json();
           if (!res.ok) {
             setMessage("listMessage", "error", body.error ?? "Failed to load runs");
@@ -542,8 +587,9 @@
         updateActionPanel();
         const apiBase = byId("apiBase").value.trim();
         try {
-          const res = await fetch(`${apiBase}/execution-runs/${runId}/review-bundle`, {
+          const res = await fetch(`${apiBase}/operator-review/api/runs/${runId}/review-bundle`, {
             headers: getHeaders(),
+            credentials: "same-origin",
           });
           const body = await res.json();
           if (!res.ok) {
@@ -593,11 +639,12 @@
         };
         try {
           const res = await fetch(
-            `${apiBase}/execution-runs/${state.selectedRunId}/actions`,
+            `${apiBase}/operator-review/api/runs/${state.selectedRunId}/actions`,
             {
               method: "POST",
               headers: getHeaders(),
               body: JSON.stringify(payload),
+              credentials: "same-origin",
             },
           );
           const body = await res.json();
@@ -622,6 +669,68 @@
       };
 
       byId("loadRuns").onclick = loadRuns;
+      byId("connectSession").onclick = async () => {
+        setMessage("listMessage", "", "");
+        const token = byId("token").value.trim();
+        if (!token) {
+          setMessage("listMessage", "error", "Access token is required.");
+          return;
+        }
+        const apiBase = byId("apiBase").value.trim();
+        const selectedStore = byId("storeSelect").value || null;
+        const res = await fetch(`${apiBase}/operator-review/session`, {
+          method: "POST",
+          headers: getHeaders(),
+          body: JSON.stringify({ accessToken: token, storeId: selectedStore }),
+          credentials: "same-origin",
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          setMessage("listMessage", "error", body.error ?? "Failed to create session.");
+          return;
+        }
+        byId("token").value = "";
+        await loadSession();
+        setMessage("listMessage", "success", "Operator session connected.");
+        await loadRuns({ silentSuccess: true });
+      };
+      byId("changeStore").onclick = async () => {
+        const storeId = byId("storeSelect").value;
+        if (!storeId) return;
+        const apiBase = byId("apiBase").value.trim();
+        const res = await fetch(`${apiBase}/operator-review/session/store`, {
+          method: "PATCH",
+          headers: getHeaders(),
+          body: JSON.stringify({ storeId }),
+          credentials: "same-origin",
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          setMessage("listMessage", "error", body.error ?? "Failed to switch store.");
+          return;
+        }
+        state.selectedRunId = null;
+        state.selectedSummary = null;
+        setMessage("listMessage", "success", "Store switched.");
+        await loadSession();
+        await loadRuns({ silentSuccess: true });
+      };
+      byId("logout").onclick = async () => {
+        const apiBase = byId("apiBase").value.trim();
+        await fetch(`${apiBase}/operator-review/session`, {
+          method: "DELETE",
+          credentials: "same-origin",
+        });
+        state.selectedRunId = null;
+        state.selectedSummary = null;
+        await loadSession();
+        setRunRows([]);
+        byId("detailRunId").textContent = "-";
+        byId("summaryBox").textContent = "Select a run...";
+        byId("timestampsBox").textContent = "-";
+        byId("evidenceBox").textContent = "No evidence.";
+        byId("historyBox").textContent = "No actions yet.";
+      };
       byId("resetFilters").onclick = () => {
         byId("status").value = "";
         byId("failureType").value = "";
@@ -633,6 +742,11 @@
         btn.onclick = () => submitAction(btn.getAttribute("data-action"));
       });
       updateActionPanel();
+      loadSession().then(() => {
+        if (state.authenticated) {
+          loadRuns({ silentSuccess: true });
+        }
+      });
     </script>
   </body>
 </html>
