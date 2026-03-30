@@ -96,7 +96,8 @@ router.patch("/:runId/status", async (req, res) => {
   }
 
   const { runId } = req.params;
-  const { status, workerNotes, errorMessage } = req.body ?? {};
+  const { status, workerNotes, errorMessage, failureType, failureDetails } =
+    req.body ?? {};
 
   const { statusCode, body } = await updateExecutionRunStatus(
     supabase,
@@ -105,6 +106,8 @@ router.patch("/:runId/status", async (req, res) => {
     status,
     workerNotes,
     errorMessage,
+    failureType,
+    failureDetails,
   );
 
   return res.status(statusCode).json(body);

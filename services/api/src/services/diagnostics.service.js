@@ -7,6 +7,8 @@ export const DIAGNOSTIC_KIND = {
   MISSING_STORE: "missing_store",
   STORE_MISMATCH: "store_mismatch",
   CODE_MISMATCH: "code_mismatch",
+  IDENTITY_WRITE_MISSING_MLCC_ITEM_ID: "identity_write_missing_mlcc_item_id",
+  IDENTITY_BACKFILL_REPORT: "identity_backfill_report",
 };
 
 export async function logSystemDiagnostic({

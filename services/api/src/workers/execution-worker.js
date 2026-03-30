@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 
 import { buildMlccPreflightReport } from "./mlcc-adapter.js";
 import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
+import {
+  FAILURE_TYPE,
+  classifyFailureType,
+  isRetryableFailureType,
+} from "../services/execution-failure.service.js";
 
 function joinApiPath(apiBaseUrl, pathname) {
   const base = apiBaseUrl.replace(/\/$/, "");
@@ -31,6 +36,113 @@ function httpErrorMessage(status, body) {
   }
 
   return `HTTP ${status}`;
+}
+
+function summarizeFailure(message, explicitType, details = {}) {
+  const failureType = classifyFailureType({
+    errorMessage: message,
+    explicitType,
+  });
+  return {
+    failureType,
+    retryable: isRetryableFailureType(failureType),
+    message,
+    details,
+  };
+}
+
+export function assertDeterministicExecutionPayload(payload) {
+  if (!payload || !Array.isArray(payload.items) || !payload.summary) {
+    return {
+      ok: false,
+      code: FAILURE_TYPE.UNKNOWN,
+      message: "Execution payload missing items or summary for deterministic assertions",
+      details: { reason: "payload_shape_invalid" },
+    };
+  }
+
+  const itemCount = payload.items.length;
+  const expectedItemCount = Number(payload.summary.itemCount ?? -1);
+  if (!Number.isInteger(expectedItemCount) || expectedItemCount !== itemCount) {
+    return {
+      ok: false,
+      code: FAILURE_TYPE.QUANTITY_RULE_VIOLATION,
+      message: "Summary itemCount mismatch",
+      details: { expectedItemCount, actualItemCount: itemCount },
+    };
+  }
+
+  const totalQuantity = payload.items.reduce(
+    (sum, item) => sum + Number(item?.quantity ?? 0),
+    0,
+  );
+  const expectedTotalQuantity = Number(payload.summary.totalQuantity ?? -1);
+  if (expectedTotalQuantity !== totalQuantity) {
+    return {
+      ok: false,
+      code: FAILURE_TYPE.QUANTITY_RULE_VIOLATION,
+      message: "Summary totalQuantity mismatch",
+      details: { expectedTotalQuantity, actualTotalQuantity: totalQuantity },
+    };
+  }
+
+  const seenCartItemIds = new Set();
+  for (const item of payload.items) {
+    if (!item?.cartItemId || !item?.bottleId || !item?.bottle) {
+      return {
+        ok: false,
+        code: FAILURE_TYPE.UNKNOWN,
+        message: "Payload item missing identifiers",
+        details: { item },
+      };
+    }
+
+    if (seenCartItemIds.has(item.cartItemId)) {
+      return {
+        ok: false,
+        code: FAILURE_TYPE.UNKNOWN,
+        message: "Duplicate cartItemId detected",
+        details: { cartItemId: item.cartItemId },
+      };
+    }
+    seenCartItemIds.add(item.cartItemId);
+
+    const quantity = Number(item.quantity);
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return {
+        ok: false,
+        code: FAILURE_TYPE.QUANTITY_RULE_VIOLATION,
+        message: "Item quantity is not a positive integer",
+        details: { cartItemId: item.cartItemId, quantity: item.quantity },
+      };
+    }
+
+    const mlccCode = String(item.bottle.mlcc_code ?? "").trim();
+    if (!mlccCode) {
+      return {
+        ok: false,
+        code: FAILURE_TYPE.CODE_MISMATCH,
+        message: "Item bottle is missing MLCC code",
+        details: { cartItemId: item.cartItemId, bottleId: item.bottleId },
+      };
+    }
+
+    // No substitution: the bottle embedded in payload must represent the same id.
+    if (item.bottle.id && item.bottle.id !== item.bottleId) {
+      return {
+        ok: false,
+        code: FAILURE_TYPE.CODE_MISMATCH,
+        message: "Unexpected bottle substitution detected",
+        details: {
+          cartItemId: item.cartItemId,
+          expectedBottleId: item.bottleId,
+          actualBottleId: item.bottle.id,
+        },
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
 function serviceRoleHeaders(storeId) {
@@ -107,6 +219,8 @@ export async function finalizeRun({
   status,
   workerNotes,
   errorMessage,
+  failureType,
+  failureDetails,
 }) {
   const url = joinApiPath(apiBaseUrl, `/execution-runs/${runId}/status`);
   const res = await fetch(url, {
@@ -116,6 +230,8 @@ export async function finalizeRun({
       status,
       workerNotes,
       errorMessage,
+      failureType,
+      failureDetails,
     }),
   });
 
@@ -151,13 +267,20 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
     !payload.store ||
     !Array.isArray(payload.items)
   ) {
+    const failure = summarizeFailure(
+      "Execution payload missing required fields",
+      FAILURE_TYPE.UNKNOWN,
+      { stage: "payload_loaded" },
+    );
     await finalizeRun({
       apiBaseUrl,
       runId: run.id,
       storeId,
       status: "failed",
       workerNotes: "payload validation failed in local worker",
-      errorMessage: "Execution payload missing required fields",
+      errorMessage: failure.message,
+      failureType: failure.failureType,
+      failureDetails: failure.details,
     });
 
     return {
@@ -172,7 +295,7 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
     runId: run.id,
     storeId,
     workerId,
-    progressStage: "payload_loaded",
+    progressStage: "add_by_code",
     progressMessage: "Execution payload loaded",
   });
 
@@ -181,17 +304,37 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
     runId: run.id,
     storeId,
     workerId,
-    progressStage: "preflight_complete",
-    progressMessage: "Preflight checks complete",
+    progressStage: "validate",
+    progressMessage: "Validating payload and quantity rules",
   });
+
+  const deterministic = assertDeterministicExecutionPayload(payload);
+  if (!deterministic.ok) {
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "deterministic assertion failed in local execution worker",
+      errorMessage: deterministic.message,
+      failureType: deterministic.code,
+      failureDetails: deterministic.details,
+    });
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+    };
+  }
 
   await heartbeatRun({
     apiBaseUrl,
     runId: run.id,
     storeId,
     workerId,
-    progressStage: "ready_for_mlcc",
-    progressMessage: "Stub worker ready for MLCC automation",
+    progressStage: "assertions_passed",
+    progressMessage: "Deterministic assertions passed",
   });
 
   await finalizeRun({
@@ -230,6 +373,14 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
 
   if (!preflight.ready) {
     const errorMessage = preflight.errors.map((e) => e.message).join("; ");
+    const failure = summarizeFailure(
+      errorMessage,
+      FAILURE_TYPE.QUANTITY_RULE_VIOLATION,
+      {
+        stage: "mlcc_preflight",
+        preflightErrors: preflight.errors,
+      },
+    );
 
     await finalizeRun({
       apiBaseUrl,
@@ -237,7 +388,9 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
       storeId,
       status: "failed",
       workerNotes: "MLCC preflight failed in local execution worker",
-      errorMessage,
+      errorMessage: failure.message,
+      failureType: failure.failureType,
+      failureDetails: failure.details,
     });
 
     return {
@@ -287,6 +440,11 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
 
   if (!planResult.ready) {
     const errorMessage = planResult.errors.map((e) => e.message).join("; ");
+    const failure = summarizeFailure(
+      errorMessage,
+      FAILURE_TYPE.QUANTITY_RULE_VIOLATION,
+      { stage: "mlcc_dry_run_plan", planErrors: planResult.errors },
+    );
 
     await finalizeRun({
       apiBaseUrl,
@@ -294,7 +452,9 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
       storeId,
       status: "failed",
       workerNotes: "MLCC dry run failed during plan generation",
-      errorMessage,
+      errorMessage: failure.message,
+      failureType: failure.failureType,
+      failureDetails: failure.details,
     });
 
     return {

@@ -8,6 +8,7 @@ import {
   finalizeRun,
   heartbeatRun,
 } from "./execution-worker.js";
+import { FAILURE_TYPE } from "../services/execution-failure.service.js";
 
 export function buildMlccBrowserConfig({ payload, env }) {
   if (!payload) {
@@ -276,6 +277,8 @@ export async function processOneMlccBrowserDryRun({
       status: "failed",
       workerNotes: "MLCC browser dry run failed during payload preflight",
       errorMessage,
+      failureType: FAILURE_TYPE.QUANTITY_RULE_VIOLATION,
+      failureDetails: { stage: "payload_preflight", errors: planResult.errors },
     });
 
     return {
@@ -298,6 +301,8 @@ export async function processOneMlccBrowserDryRun({
       status: "failed",
       workerNotes: "MLCC browser dry run failed during browser config validation",
       errorMessage,
+      failureType: FAILURE_TYPE.MLCC_UI_CHANGE,
+      failureDetails: { stage: "browser_config", errors: browserConfig.errors },
     });
 
     return {
@@ -402,6 +407,8 @@ export async function processOneMlccBrowserDryRun({
         status: "failed",
         workerNotes: "MLCC browser dry run failed",
         errorMessage: msg,
+        failureType: FAILURE_TYPE.NETWORK_ERROR,
+        failureDetails: { stage: "browser_runtime" },
       });
     } catch {
       // ignore secondary finalize errors

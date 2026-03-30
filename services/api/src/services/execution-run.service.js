@@ -1,5 +1,9 @@
 import { buildExecutionPayloadForSubmittedCart } from "./cart-execution-payload.service.js";
 import { verifyCartItemsBeforeExecution } from "./bottle-identity.service.js";
+import {
+  classifyFailureType,
+  isRetryableFailureType,
+} from "./execution-failure.service.js";
 import { isUuid } from "../utils/validation.js";
 
 const ACTIVE_STATUSES = ["queued", "running"];
@@ -13,11 +17,55 @@ const ALLOWED_STATUSES = [
 ];
 
 const TERMINAL_STATUSES = ["succeeded", "failed", "canceled"];
+const DEFAULT_MAX_RETRIES = 2;
 
 const serverError = (message) => ({
   statusCode: 500,
   body: { error: message },
 });
+
+const isMissingColumnError = (error, columnName) =>
+  String(error?.message ?? "").toLowerCase().includes(
+    String(columnName).toLowerCase(),
+  );
+
+const applyExecutionRunPatch = async (supabase, runId, storeId, patch) => {
+  const runUpdate = async (candidatePatch) =>
+    supabase
+      .from("execution_runs")
+      .update(candidatePatch)
+      .eq("id", runId)
+      .eq("store_id", storeId)
+      .select("*")
+      .single();
+
+  const optionalColumns = [
+    "queued_at",
+    "retry_count",
+    "max_retries",
+    "failure_type",
+    "failure_details",
+  ];
+  let retryPatch = { ...patch };
+  let result = await runUpdate(retryPatch);
+
+  while (result.error) {
+    let removed = false;
+    for (const col of optionalColumns) {
+      if (
+        Object.prototype.hasOwnProperty.call(retryPatch, col) &&
+        isMissingColumnError(result.error, col)
+      ) {
+        delete retryPatch[col];
+        removed = true;
+      }
+    }
+    if (!removed) break;
+    result = await runUpdate(retryPatch);
+  }
+
+  return result;
+};
 
 export const createExecutionRunFromCart = async (
   supabase,
@@ -86,9 +134,14 @@ export const createExecutionRunFromCart = async (
       cart_id: cartId,
       store_id: storeId,
       status: "queued",
+      queued_at: new Date().toISOString(),
       payload_snapshot: snapshot,
       worker_notes: null,
       error_message: null,
+      retry_count: 0,
+      max_retries: DEFAULT_MAX_RETRIES,
+      failure_type: null,
+      failure_details: null,
       started_at: null,
       finished_at: null,
     })
@@ -96,6 +149,38 @@ export const createExecutionRunFromCart = async (
     .single();
 
   if (insertError) {
+    // Compatibility fallback for DBs that haven't applied reliability columns yet.
+    if (
+      isMissingColumnError(insertError, "queued_at") ||
+      isMissingColumnError(insertError, "retry_count") ||
+      isMissingColumnError(insertError, "max_retries") ||
+      isMissingColumnError(insertError, "failure_type") ||
+      isMissingColumnError(insertError, "failure_details")
+    ) {
+      const { data: fallbackRun, error: fallbackErr } = await supabase
+        .from("execution_runs")
+        .insert({
+          cart_id: cartId,
+          store_id: storeId,
+          status: "queued",
+          payload_snapshot: snapshot,
+          worker_notes: null,
+          error_message: null,
+          started_at: null,
+          finished_at: null,
+        })
+        .select("*")
+        .single();
+
+      if (fallbackErr) {
+        return serverError(fallbackErr.message);
+      }
+
+      return {
+        statusCode: 201,
+        body: { success: true, data: fallbackRun },
+      };
+    }
     return serverError(insertError.message);
   }
 
@@ -178,6 +263,8 @@ export const updateExecutionRunStatus = async (
   status,
   workerNotes,
   errorMessage,
+  failureType,
+  failureDetails,
 ) => {
   if (!isUuid(runId)) {
     return {
@@ -249,15 +336,49 @@ export const updateExecutionRunStatus = async (
   if (status === "succeeded") {
     patch.finished_at = nowIso;
     patch.error_message = null;
+    patch.failure_type = null;
+    patch.failure_details = null;
     patch.heartbeat_at = nowIso;
     patch.progress_stage = "completed";
+    patch.progress_message = "Execution completed successfully";
   }
 
   if (status === "failed") {
-    patch.finished_at = nowIso;
+    const classifiedType = classifyFailureType({
+      errorMessage,
+      explicitType: failureType,
+    });
+    const retryable = isRetryableFailureType(classifiedType);
+    const retryCount = Number(run.retry_count ?? 0);
+    const maxRetries = Number(run.max_retries ?? DEFAULT_MAX_RETRIES);
+    const shouldRetry = retryable && retryCount < maxRetries;
+
     patch.error_message = errorMessage ?? null;
+    patch.failure_type = classifiedType;
+    patch.failure_details = {
+      ...(failureDetails && typeof failureDetails === "object" ? failureDetails : {}),
+      classified_type: classifiedType,
+      retryable,
+      retry_count_before: retryCount,
+      max_retries: maxRetries,
+      failed_at: nowIso,
+    };
     patch.heartbeat_at = nowIso;
-    patch.progress_stage = "failed";
+
+    if (shouldRetry) {
+      patch.status = "queued";
+      patch.retry_count = retryCount + 1;
+      patch.queued_at = nowIso;
+      patch.progress_stage = "retry_scheduled";
+      patch.progress_message = `Retry scheduled (${retryCount + 1}/${maxRetries})`;
+      patch.worker_id = null;
+      patch.started_at = null;
+      patch.finished_at = null;
+    } else {
+      patch.finished_at = nowIso;
+      patch.progress_stage = "failed";
+      patch.progress_message = "Execution failed";
+    }
   }
 
   if (status === "canceled") {
@@ -266,13 +387,12 @@ export const updateExecutionRunStatus = async (
     patch.progress_stage = "canceled";
   }
 
-  const { data: updatedRun, error: updateError } = await supabase
-    .from("execution_runs")
-    .update(patch)
-    .eq("id", runId)
-    .eq("store_id", storeId)
-    .select("*")
-    .single();
+  const { data: updatedRun, error: updateError } = await applyExecutionRunPatch(
+    supabase,
+    runId,
+    storeId,
+    patch,
+  );
 
   if (updateError) {
     return serverError(updateError.message);
@@ -419,6 +539,8 @@ export const claimNextQueuedExecutionRun = async (
       updated_at: now,
       started_at: startedAt,
       heartbeat_at: now,
+      progress_stage: "running",
+      progress_message: "Execution run claimed by worker",
     };
 
     if (workerId !== undefined) {

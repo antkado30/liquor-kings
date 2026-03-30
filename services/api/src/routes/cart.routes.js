@@ -3,6 +3,10 @@ import supabase from "../config/supabase.js";
 import { enforceParamStoreMatches } from "../middleware/store-param.middleware.js";
 import { enforceCartItemStoreScope } from "../middleware/cart-item-scope.middleware.js";
 import { resolveAndVerifyBottleIdentity } from "../services/bottle-identity.service.js";
+import {
+  DIAGNOSTIC_KIND,
+  logSystemDiagnostic,
+} from "../services/diagnostics.service.js";
 
 const router = express.Router();
 
@@ -37,10 +41,40 @@ router.patch(
       return res.status(404).json({ error: "Cart item not found" });
     }
 
+    let patchMlccItemId = existingItem.mlcc_item_id ?? null;
+    if (!patchMlccItemId) {
+      const identity = await resolveAndVerifyBottleIdentity(supabase, {
+        bottleId: existingItem.bottle_id,
+        liquorCode: null,
+        requestedName: undefined,
+        requestedSizeMl: undefined,
+        requestedFingerprint: undefined,
+        storeId: req.store_id,
+        userId: req.auth_user_id,
+      });
+
+      if (identity.ok && identity.mlccItem?.id) {
+        patchMlccItemId = identity.mlccItem.id;
+      } else {
+        await logSystemDiagnostic({
+          kind: DIAGNOSTIC_KIND.IDENTITY_WRITE_MISSING_MLCC_ITEM_ID,
+          storeId: req.store_id,
+          userId: req.auth_user_id,
+          payload: {
+            reason: "quantity_update_with_unresolved_identity",
+            cart_item_id: itemId,
+            bottle_id: existingItem.bottle_id,
+            identity_error: identity.ok ? null : identity.details,
+          },
+        });
+      }
+    }
+
     const { data: updatedItem, error: updateError } = await supabase
       .from("cart_items")
       .update({
         quantity: qty,
+        mlcc_item_id: patchMlccItemId,
         updated_at: new Date().toISOString(),
       })
       .eq("id", itemId)
@@ -201,6 +235,20 @@ router.post("/:storeId/items", async (req, res) => {
   }
 
   const { mlccItem } = identity;
+  if (!mlccItem?.id) {
+    await logSystemDiagnostic({
+      kind: DIAGNOSTIC_KIND.IDENTITY_WRITE_MISSING_MLCC_ITEM_ID,
+      storeId,
+      userId: req.auth_user_id,
+      payload: {
+        reason: "cart_add_missing_resolved_mlcc_item_id",
+        bottle_id: bottleId,
+      },
+    });
+    return res
+      .status(500)
+      .json({ error: "Identity resolution failed to produce mlcc_item_id" });
+  }
 
   let { data: cart, error: cartError } = await supabase
     .from("carts")
