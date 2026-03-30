@@ -1,7 +1,9 @@
 import express from "express";
 import supabase from "../config/supabase.js";
 import {
+  applyExecutionRunOperatorAction,
   claimNextQueuedExecutionRun,
+  getExecutionRunOperatorActionsById,
   createExecutionRunFromCart,
   getExecutionRunEvidenceById,
   getExecutionRunById,
@@ -95,6 +97,20 @@ router.get("/:runId/evidence", async (req, res) => {
   return res.status(statusCode).json(body);
 });
 
+router.get("/:runId/actions", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+
+  const { runId } = req.params;
+  const { statusCode, body } = await getExecutionRunOperatorActionsById(
+    supabase,
+    runId,
+    req.store_id,
+  );
+  return res.status(statusCode).json(body);
+});
+
 router.get("/:runId", async (req, res) => {
   if (!req.store_id) {
     return res.status(400).json({ error: "X-Store-Id header required" });
@@ -154,6 +170,27 @@ router.patch("/:runId/status", async (req, res) => {
     evidence,
   );
 
+  return res.status(statusCode).json(body);
+});
+
+router.post("/:runId/actions", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+  const { runId } = req.params;
+  const { action, reason, note } = req.body ?? {};
+
+  const { statusCode, body } = await applyExecutionRunOperatorAction(
+    supabase,
+    runId,
+    req.store_id,
+    action,
+    {
+      reason,
+      note,
+      actorId: req.auth_user_id ?? req.headers["x-operator-id"] ?? null,
+    },
+  );
   return res.status(statusCode).json(body);
 });
 

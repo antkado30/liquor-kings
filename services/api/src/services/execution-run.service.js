@@ -18,6 +18,13 @@ const ALLOWED_STATUSES = [
 
 const TERMINAL_STATUSES = ["succeeded", "failed", "canceled"];
 const DEFAULT_MAX_RETRIES = 2;
+const OPERATOR_ACTION = {
+  ACKNOWLEDGE: "acknowledge",
+  MARK_FOR_MANUAL_REVIEW: "mark_for_manual_review",
+  RETRY_NOW: "retry_now",
+  CANCEL: "cancel",
+  RESOLVE_WITHOUT_RETRY: "resolve_without_retry",
+};
 
 const serverError = (message) => ({
   statusCode: 500,
@@ -73,7 +80,25 @@ const asEvidenceArray = (value) => {
   return [];
 };
 
-const buildRunSummary = (run) => {
+const asOperatorActionsArray = (value) => {
+  if (Array.isArray(value)) return value;
+  return [];
+};
+
+const getLatestOperatorAction = (actions) => {
+  const rows = asOperatorActionsArray(actions);
+  if (!rows.length) return null;
+  const [latest] = rows;
+  return {
+    action: latest.action ?? null,
+    reason: latest.reason ?? null,
+    note: latest.note ?? null,
+    actor_id: latest.actor_id ?? null,
+    created_at: latest.created_at ?? null,
+  };
+};
+
+const buildRunSummary = (run, operatorActions = []) => {
   const evidence = asEvidenceArray(run?.evidence);
   const hasEvidence = evidence.length > 0;
   const status = run?.status ?? null;
@@ -81,12 +106,33 @@ const buildRunSummary = (run) => {
   const maxRetries = Number(run?.max_retries ?? DEFAULT_MAX_RETRIES);
   const failureType = run?.failure_type ?? null;
   const failureMessage = run?.error_message ?? null;
-  const isTerminal = TERMINAL_STATUSES.includes(status);
   const retryAllowed =
     status === "failed" &&
     failureType != null &&
     isRetryableFailureType(failureType) &&
     retryCount < maxRetries;
+  const latestOperatorAction = getLatestOperatorAction(operatorActions);
+  const operatorStatus =
+    latestOperatorAction?.action === OPERATOR_ACTION.MARK_FOR_MANUAL_REVIEW
+      ? "manual_review"
+      : latestOperatorAction?.action === OPERATOR_ACTION.RESOLVE_WITHOUT_RETRY
+        ? "resolved_without_retry"
+        : latestOperatorAction?.action === OPERATOR_ACTION.ACKNOWLEDGE
+          ? "acknowledged"
+          : latestOperatorAction?.action === OPERATOR_ACTION.CANCEL
+            ? "canceled_by_operator"
+            : "none";
+  const pendingManualReview =
+    latestOperatorAction?.action === OPERATOR_ACTION.MARK_FOR_MANUAL_REVIEW;
+  const actionableNextStep = pendingManualReview
+    ? "manual_review"
+    : retryAllowed
+      ? "retry_now_allowed"
+      : status === "failed"
+        ? "resolve_or_acknowledge"
+        : status === "running"
+          ? "monitor"
+          : "none";
 
   const manualReviewRecommended =
     status === "failed" &&
@@ -117,7 +163,22 @@ const buildRunSummary = (run) => {
     has_evidence: hasEvidence,
     manual_review_recommended: manualReviewRecommended,
     retry_allowed: retryAllowed,
+    operator_status: operatorStatus,
+    latest_operator_action: latestOperatorAction,
+    pending_manual_review: pendingManualReview,
+    actionable_next_step: actionableNextStep,
   };
+};
+
+const getRunOperatorActions = async (supabase, runId, storeId) => {
+  const { data, error } = await supabase
+    .from("execution_run_operator_actions")
+    .select("id, run_id, store_id, action, reason, note, actor_id, created_at")
+    .eq("run_id", runId)
+    .eq("store_id", storeId)
+    .order("created_at", { ascending: false });
+  if (error) return { data: null, error };
+  return { data: data ?? [], error: null };
 };
 
 export const createExecutionRunFromCart = async (
@@ -279,12 +340,24 @@ export const listExecutionRunSummariesForCart = async (
   if (result.statusCode !== 200) return result;
 
   const rows = result.body.data ?? [];
+  const withSummaries = [];
+  for (const row of rows) {
+    const { data: actions, error: actionErr } = await getRunOperatorActions(
+      supabase,
+      row.id,
+      row.store_id,
+    );
+    if (actionErr) {
+      return serverError(actionErr.message);
+    }
+    withSummaries.push(buildRunSummary(row, actions));
+  }
   return {
     statusCode: 200,
     body: {
       success: true,
-      count: rows.length,
-      data: rows.map(buildRunSummary),
+      count: withSummaries.length,
+      data: withSummaries,
     },
   };
 };
@@ -331,10 +404,16 @@ export const getExecutionRunById = async (supabase, runId, storeId) => {
 export const getExecutionRunSummaryById = async (supabase, runId, storeId) => {
   const result = await getExecutionRunById(supabase, runId, storeId);
   if (result.statusCode !== 200) return result;
+  const { data: actions, error: actionErr } = await getRunOperatorActions(
+    supabase,
+    runId,
+    storeId,
+  );
+  if (actionErr) return serverError(actionErr.message);
 
   return {
     statusCode: 200,
-    body: { success: true, data: buildRunSummary(result.body.data) },
+    body: { success: true, data: buildRunSummary(result.body.data, actions) },
   };
 };
 
@@ -510,6 +589,116 @@ export const updateExecutionRunStatus = async (
     statusCode: 200,
     body: { success: true, data: updatedRun },
   };
+};
+
+export const getExecutionRunOperatorActionsById = async (
+  supabase,
+  runId,
+  storeId,
+) => {
+  const runResult = await getExecutionRunById(supabase, runId, storeId);
+  if (runResult.statusCode !== 200) return runResult;
+
+  const { data, error } = await getRunOperatorActions(supabase, runId, storeId);
+  if (error) return serverError(error.message);
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      run_id: runId,
+      store_id: storeId,
+      count: data.length,
+      data,
+    },
+  };
+};
+
+export const applyExecutionRunOperatorAction = async (
+  supabase,
+  runId,
+  storeId,
+  action,
+  { reason, note, actorId } = {},
+) => {
+  const runResult = await getExecutionRunById(supabase, runId, storeId);
+  if (runResult.statusCode !== 200) return runResult;
+  const run = runResult.body.data;
+  const summary = buildRunSummary(run);
+
+  const allowed = new Set(Object.values(OPERATOR_ACTION));
+  if (!allowed.has(action)) {
+    return { statusCode: 400, body: { error: "Invalid operator action" } };
+  }
+
+  if (action === OPERATOR_ACTION.RETRY_NOW && !summary.retry_allowed) {
+    return {
+      statusCode: 400,
+      body: { error: "retry_now is not allowed for this run" },
+    };
+  }
+
+  const patch = {};
+  const nowIso = new Date().toISOString();
+  if (action === OPERATOR_ACTION.RETRY_NOW) {
+    patch.status = "queued";
+    patch.queued_at = nowIso;
+    patch.progress_stage = "operator_retry_requested";
+    patch.progress_message = "Operator requested immediate retry";
+    patch.worker_id = null;
+    patch.started_at = null;
+    patch.finished_at = null;
+  } else if (action === OPERATOR_ACTION.CANCEL) {
+    if (run.status === "succeeded") {
+      return { statusCode: 400, body: { error: "Cannot cancel a succeeded run" } };
+    }
+    patch.status = "canceled";
+    patch.finished_at = nowIso;
+    patch.progress_stage = "canceled";
+    patch.progress_message = "Canceled by operator";
+  } else if (action === OPERATOR_ACTION.MARK_FOR_MANUAL_REVIEW) {
+    patch.progress_stage = "manual_review";
+    patch.progress_message = "Marked for manual review by operator";
+  } else if (action === OPERATOR_ACTION.RESOLVE_WITHOUT_RETRY) {
+    if (run.status !== "failed") {
+      return {
+        statusCode: 400,
+        body: { error: "resolve_without_retry requires a failed run" },
+      };
+    }
+    patch.progress_stage = "resolved_without_retry";
+    patch.progress_message = "Operator resolved without retry";
+  } else if (action === OPERATOR_ACTION.ACKNOWLEDGE) {
+    patch.progress_stage = run.progress_stage ?? "acknowledged";
+  }
+
+  if (Object.keys(patch).length > 0) {
+    patch.updated_at = nowIso;
+    const { error: patchErr } = await applyExecutionRunPatch(
+      supabase,
+      runId,
+      storeId,
+      patch,
+    );
+    if (patchErr) return serverError(patchErr.message);
+  }
+
+  const { error: actionErr } = await supabase
+    .from("execution_run_operator_actions")
+    .insert({
+      run_id: runId,
+      store_id: storeId,
+      action,
+      reason: reason ?? null,
+      note: note ?? null,
+      actor_id: actorId ?? null,
+    });
+
+  if (actionErr) {
+    return serverError(actionErr.message);
+  }
+
+  return getExecutionRunSummaryById(supabase, runId, storeId);
 };
 
 export const heartbeatExecutionRun = async (
