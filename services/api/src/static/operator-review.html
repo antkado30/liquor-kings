@@ -28,6 +28,9 @@
         border-radius: 8px;
         padding: 12px;
       }
+      .section-title {
+        margin: 0 0 8px;
+      }
       .row {
         display: flex;
         gap: 8px;
@@ -47,6 +50,13 @@
         background: #1f2937;
         color: #fff;
       }
+      button.secondary {
+        background: #fff;
+        color: #111827;
+      }
+      button.danger {
+        background: #7f1d1d;
+      }
       button:disabled {
         opacity: 0.5;
         cursor: not-allowed;
@@ -61,14 +71,22 @@
         text-align: left;
         border-bottom: 1px solid #e5e7eb;
         padding: 6px;
+        vertical-align: top;
       }
-      pre {
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      pre,
+      .box {
         background: #f9fafb;
         border: 1px solid #e5e7eb;
         border-radius: 6px;
         padding: 8px;
         overflow: auto;
         font-size: 12px;
+      }
+      .box {
+        overflow: visible;
       }
       .muted {
         color: #6b7280;
@@ -79,8 +97,108 @@
         grid-template-columns: repeat(3, minmax(120px, 1fr));
         gap: 8px;
       }
+      .status {
+        display: inline-block;
+        border-radius: 999px;
+        font-size: 11px;
+        padding: 2px 8px;
+        font-weight: 700;
+        border: 1px solid transparent;
+      }
+      .status.queued {
+        background: #e0f2fe;
+        color: #075985;
+      }
+      .status.running {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .status.failed {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+      .status.succeeded {
+        background: #ecfccb;
+        color: #365314;
+      }
+      .status.canceled {
+        background: #f3f4f6;
+        color: #374151;
+      }
+      .badge {
+        display: inline-block;
+        border-radius: 6px;
+        font-size: 11px;
+        padding: 2px 6px;
+        background: #eef2ff;
+        color: #3730a3;
+      }
+      .retry-yes {
+        color: #065f46;
+        font-weight: 700;
+      }
+      .retry-no {
+        color: #9f1239;
+        font-weight: 700;
+      }
+      tr.pending-review {
+        background: #fffbeb;
+      }
+      tr.selected {
+        outline: 2px solid #2563eb;
+        outline-offset: -2px;
+      }
+      .detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(220px, 1fr));
+        gap: 8px 12px;
+      }
+      .kv {
+        font-size: 13px;
+      }
+      .kv strong {
+        display: inline-block;
+        min-width: 120px;
+      }
+      .timeline {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .timeline li {
+        border-left: 2px solid #d1d5db;
+        padding: 0 0 8px 10px;
+        margin-left: 4px;
+      }
+      .timeline li:last-child {
+        padding-bottom: 0;
+      }
+      .msg {
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 12px;
+        margin-top: 8px;
+        display: none;
+      }
+      .msg.error {
+        display: block;
+        background: #fee2e2;
+        color: #7f1d1d;
+      }
+      .msg.success {
+        display: block;
+        background: #dcfce7;
+        color: #14532d;
+      }
+      .loading {
+        opacity: 0.7;
+        pointer-events: none;
+      }
       @media (max-width: 900px) {
         .layout {
+          grid-template-columns: 1fr;
+        }
+        .detail-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -92,7 +210,7 @@
     </header>
     <div class="layout">
       <section class="card">
-        <h3>Run Queue</h3>
+        <h3 class="section-title">Run Queue</h3>
         <div class="row">
           <label>API Base</label>
           <input id="apiBase" value="" placeholder="http://localhost:4000" />
@@ -132,14 +250,19 @@
           <label>Cart ID</label>
           <input id="cartId" placeholder="optional cart uuid" />
           <button id="loadRuns">Load Runs</button>
+          <button id="resetFilters" class="secondary">Reset Filters</button>
         </div>
-        <p class="muted">Newest runs first. Click any run row to open details.</p>
+        <p class="muted">
+          Newest runs first. Pending manual review rows are highlighted. Click row to open details.
+        </p>
+        <div id="listMessage" class="msg"></div>
         <table id="runsTable">
           <thead>
             <tr>
               <th>Run</th>
               <th>Status</th>
               <th>Failure</th>
+              <th>Retry</th>
               <th>Operator</th>
               <th>Next Step</th>
             </tr>
@@ -149,28 +272,31 @@
       </section>
 
       <section class="card">
-        <h3>Run Detail</h3>
+        <h3 class="section-title">Run Detail</h3>
         <div class="row">
           <div><strong>Run ID:</strong> <span id="detailRunId">-</span></div>
         </div>
         <h4>Summary</h4>
-        <pre id="summaryBox">Select a run...</pre>
+        <div id="summaryBox" class="box muted">Select a run...</div>
+        <h4>Timestamps</h4>
+        <div id="timestampsBox" class="box muted">-</div>
         <h4>Evidence</h4>
-        <pre id="evidenceBox">[]</pre>
-        <h4>Operator Actions (History)</h4>
-        <pre id="historyBox">[]</pre>
-        <h4>Submit Operator Action</h4>
+        <div id="evidenceBox" class="box muted">No evidence.</div>
+        <h4>Operator Actions Timeline</h4>
+        <div id="historyBox" class="box muted">No actions yet.</div>
+        <h4>Action Panel</h4>
         <div class="actions">
           <button data-action="acknowledge">acknowledge</button>
           <button data-action="mark_for_manual_review">mark_for_manual_review</button>
           <button data-action="retry_now">retry_now</button>
-          <button data-action="cancel">cancel</button>
+          <button data-action="cancel" class="danger">cancel</button>
           <button data-action="resolve_without_retry">resolve_without_retry</button>
         </div>
         <div class="row" style="margin-top: 8px">
           <input id="reason" placeholder="reason (optional)" />
           <textarea id="note" rows="2" cols="38" placeholder="note (optional)"></textarea>
         </div>
+        <div id="detailMessage" class="msg"></div>
         <p class="muted" id="actionHint">
           Action availability follows backend guardrails; disallowed actions return clear errors.
         </p>
@@ -180,10 +306,17 @@
     <script>
       const state = {
         selectedRunId: null,
+        runs: [],
+        selectedSummary: null,
+        loadingRuns: false,
+        loadingDetail: false,
+        actionInFlight: false,
       };
 
       const byId = (id) => document.getElementById(id);
       const actionButtons = Array.from(document.querySelectorAll("[data-action]"));
+      const CONFIRM_ACTIONS = new Set(["retry_now", "cancel", "resolve_without_retry"]);
+      const actionHintEl = byId("actionHint");
 
       byId("apiBase").value = window.location.origin;
 
@@ -197,6 +330,34 @@
         };
       };
 
+      const setMessage = (id, type, text) => {
+        const el = byId(id);
+        if (!text) {
+          el.className = "msg";
+          el.textContent = "";
+          return;
+        }
+        el.className = `msg ${type}`;
+        el.textContent = text;
+      };
+
+      const setLoading = (scope, loading) => {
+        if (scope === "runs") {
+          state.loadingRuns = loading;
+          byId("loadRuns").disabled = loading || state.actionInFlight;
+          byId("resetFilters").disabled = loading || state.actionInFlight;
+          byId("runsTable").classList.toggle("loading", loading);
+          return;
+        }
+        if (scope === "detail") {
+          state.loadingDetail = loading;
+          byId("summaryBox").classList.toggle("loading", loading);
+          byId("timestampsBox").classList.toggle("loading", loading);
+          byId("historyBox").classList.toggle("loading", loading);
+          byId("evidenceBox").classList.toggle("loading", loading);
+        }
+      };
+
       const qs = (obj) => {
         const p = new URLSearchParams();
         Object.entries(obj).forEach(([k, v]) => {
@@ -205,25 +366,132 @@
         return p.toString();
       };
 
+      const esc = (value) =>
+        String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+
+      const statusBadge = (status) => `<span class="status ${esc(status)}">${esc(status)}</span>`;
+      const failureBadge = (failureType) =>
+        failureType ? `<span class="badge">${esc(failureType)}</span>` : `<span class="muted">-</span>`;
+
+      const renderSummary = (summary) => {
+        byId("summaryBox").innerHTML = `
+          <div class="detail-grid">
+            <div class="kv"><strong>Status:</strong> ${statusBadge(summary.status)}</div>
+            <div class="kv"><strong>Failure:</strong> ${failureBadge(summary.failure_type)}</div>
+            <div class="kv"><strong>Retry Count:</strong> ${esc(summary.retry_count)} / ${esc(summary.max_retries)}</div>
+            <div class="kv"><strong>Retry Allowed:</strong> <span class="${summary.retry_allowed ? "retry-yes" : "retry-no"}">${summary.retry_allowed ? "yes" : "no"}</span></div>
+            <div class="kv"><strong>Operator Status:</strong> ${esc(summary.operator_status)}</div>
+            <div class="kv"><strong>Pending Manual:</strong> ${summary.pending_manual_review ? "yes" : "no"}</div>
+            <div class="kv"><strong>Next Step:</strong> ${esc(summary.actionable_next_step)}</div>
+            <div class="kv"><strong>Progress Stage:</strong> ${esc(summary.progress_stage ?? "-")}</div>
+            <div class="kv"><strong>Progress Message:</strong> ${esc(summary.progress_message ?? "-")}</div>
+            <div class="kv"><strong>Failure Message:</strong> ${esc(summary.failure_message ?? "-")}</div>
+          </div>
+        `;
+      };
+
+      const renderTimestamps = (timestamps) => {
+        byId("timestampsBox").innerHTML = `
+          <div class="detail-grid">
+            <div class="kv"><strong>Queued:</strong> ${esc(timestamps.queued_at ?? "-")}</div>
+            <div class="kv"><strong>Started:</strong> ${esc(timestamps.started_at ?? "-")}</div>
+            <div class="kv"><strong>Heartbeat:</strong> ${esc(timestamps.heartbeat_at ?? "-")}</div>
+            <div class="kv"><strong>Finished:</strong> ${esc(timestamps.finished_at ?? "-")}</div>
+            <div class="kv"><strong>Created:</strong> ${esc(timestamps.created_at ?? "-")}</div>
+            <div class="kv"><strong>Updated:</strong> ${esc(timestamps.updated_at ?? "-")}</div>
+          </div>
+        `;
+      };
+
+      const renderEvidence = (items) => {
+        if (!items?.length) {
+          byId("evidenceBox").innerHTML = '<span class="muted">No evidence.</span>';
+          return;
+        }
+        byId("evidenceBox").innerHTML = items
+          .map(
+            (item, idx) => `
+            <div class="box" style="margin-bottom:8px">
+              <div><strong>Evidence ${idx + 1}</strong></div>
+              <pre class="mono">${esc(JSON.stringify(item, null, 2))}</pre>
+            </div>
+          `,
+          )
+          .join("");
+      };
+
+      const renderTimeline = (items) => {
+        if (!items?.length) {
+          byId("historyBox").innerHTML = '<span class="muted">No actions yet.</span>';
+          return;
+        }
+        byId("historyBox").innerHTML = `
+          <ul class="timeline">
+            ${items
+              .map(
+                (item) => `
+              <li>
+                <div><strong>${esc(item.action)}</strong> <span class="muted">${esc(item.created_at ?? "-")}</span></div>
+                <div class="muted">actor: ${esc(item.actor_id ?? "unknown")}</div>
+                <div class="muted">reason: ${esc(item.reason ?? "-")}</div>
+                <div class="muted">note: ${esc(item.note ?? "-")}</div>
+              </li>
+            `,
+              )
+              .join("")}
+          </ul>
+        `;
+      };
+
       const setRunRows = (rows) => {
+        state.runs = rows;
         const tbody = byId("runsTable").querySelector("tbody");
         tbody.innerHTML = "";
         rows.forEach((row) => {
           const tr = document.createElement("tr");
           tr.style.cursor = "pointer";
+          if (row.pending_manual_review) tr.classList.add("pending-review");
+          if (row.run_id === state.selectedRunId) tr.classList.add("selected");
           tr.innerHTML = `
-            <td>${row.run_id}</td>
-            <td>${row.status}</td>
-            <td>${row.failure_type ?? "-"}</td>
-            <td>${row.operator_status}</td>
-            <td>${row.actionable_next_step}</td>
+            <td>
+              <div class="mono">${esc(row.run_id)}</div>
+              <div class="muted mono">${esc(row.cart_id ?? "-")}</div>
+            </td>
+            <td>${statusBadge(row.status)}</td>
+            <td>${failureBadge(row.failure_type)}</td>
+            <td><span class="${row.retry_allowed ? "retry-yes" : "retry-no"}">${row.retry_allowed ? "allowed" : "blocked"}</span></td>
+            <td>${esc(row.operator_status)}</td>
+            <td>${esc(row.actionable_next_step)}</td>
           `;
           tr.onclick = () => loadRunDetail(row.run_id);
           tbody.appendChild(tr);
         });
       };
 
-      const loadRuns = async () => {
+      const updateActionPanel = () => {
+        const summary = state.selectedSummary;
+        const hasRun = Boolean(state.selectedRunId && summary);
+        actionButtons.forEach((btn) => {
+          const action = btn.getAttribute("data-action");
+          let disabled = !hasRun || state.actionInFlight || state.loadingDetail;
+          if (hasRun) {
+            if (action === "retry_now" && !summary.retry_allowed) disabled = true;
+            if (action === "resolve_without_retry" && summary.status !== "failed") {
+              disabled = true;
+            }
+            if (action === "cancel" && summary.status === "succeeded") disabled = true;
+          }
+          btn.disabled = disabled;
+        });
+      };
+
+      const loadRuns = async (options = {}) => {
+        setMessage("listMessage", "", "");
+        setLoading("runs", true);
         const apiBase = byId("apiBase").value.trim();
         const storeId = byId("storeId").value.trim();
         const query = qs({
@@ -233,82 +501,138 @@
           cart_id: byId("cartId").value.trim(),
         });
         const url = `${apiBase}/execution-runs/review/${storeId}/runs${query ? `?${query}` : ""}`;
-        const res = await fetch(url, { headers: getHeaders() });
-        const body = await res.json();
-        if (!res.ok) {
-          alert(body.error ?? "Failed to load runs");
-          return;
+        try {
+          const res = await fetch(url, { headers: getHeaders() });
+          const body = await res.json();
+          if (!res.ok) {
+            setMessage("listMessage", "error", body.error ?? "Failed to load runs");
+            return;
+          }
+          setRunRows(body.data ?? []);
+          if (!options.silentSuccess) {
+            setMessage("listMessage", "success", `Loaded ${body.count ?? 0} run(s).`);
+          }
+          if (state.selectedRunId) {
+            const stillExists = (body.data ?? []).some((r) => r.run_id === state.selectedRunId);
+            if (stillExists) {
+              await loadRunDetail(state.selectedRunId, { silent: true });
+            } else {
+              state.selectedRunId = null;
+              state.selectedSummary = null;
+              byId("detailRunId").textContent = "-";
+              byId("summaryBox").textContent = "Select a run...";
+              byId("timestampsBox").textContent = "-";
+              byId("evidenceBox").textContent = "No evidence.";
+              byId("historyBox").textContent = "No actions yet.";
+            }
+          }
+        } catch {
+          setMessage("listMessage", "error", "Network error while loading runs.");
+        } finally {
+          setLoading("runs", false);
+          updateActionPanel();
         }
-        setRunRows(body.data ?? []);
       };
 
-      const loadRunDetail = async (runId) => {
+      const loadRunDetail = async (runId, options = {}) => {
+        setMessage("detailMessage", "", "");
         state.selectedRunId = runId;
         byId("detailRunId").textContent = runId;
+        setLoading("detail", true);
+        updateActionPanel();
         const apiBase = byId("apiBase").value.trim();
-        const res = await fetch(`${apiBase}/execution-runs/${runId}/review-bundle`, {
-          headers: getHeaders(),
-        });
-        const body = await res.json();
-        if (!res.ok) {
-          alert(body.error ?? "Failed to load run detail");
-          return;
-        }
-        const data = body.data;
-        byId("summaryBox").textContent = JSON.stringify(data.summary, null, 2);
-        byId("evidenceBox").textContent = JSON.stringify(data.evidence.items, null, 2);
-        byId("historyBox").textContent = JSON.stringify(
-          data.operator_actions.items,
-          null,
-          2,
-        );
-        const summary = data.summary;
-        actionButtons.forEach((btn) => {
-          const action = btn.getAttribute("data-action");
-          let disabled = false;
-          if (action === "retry_now" && !summary.retry_allowed) disabled = true;
-          if (action === "resolve_without_retry" && summary.status !== "failed") {
-            disabled = true;
+        try {
+          const res = await fetch(`${apiBase}/execution-runs/${runId}/review-bundle`, {
+            headers: getHeaders(),
+          });
+          const body = await res.json();
+          if (!res.ok) {
+            setMessage("detailMessage", "error", body.error ?? "Failed to load run detail");
+            return;
           }
-          if (action === "cancel" && summary.status === "succeeded") disabled = true;
-          btn.disabled = disabled;
-        });
+          const data = body.data;
+          state.selectedSummary = data.summary;
+          renderSummary(data.summary);
+          renderTimestamps(data.summary.timestamps ?? {});
+          renderEvidence(data.evidence.items ?? []);
+          renderTimeline(data.operator_actions.items ?? []);
+          updateActionPanel();
+          setRunRows(state.runs);
+          if (!options.silent) {
+            setMessage("detailMessage", "success", "Run detail loaded.");
+          }
+        } catch {
+          setMessage("detailMessage", "error", "Network error while loading run detail.");
+        } finally {
+          setLoading("detail", false);
+          updateActionPanel();
+        }
       };
 
       const submitAction = async (action) => {
         if (!state.selectedRunId) {
-          alert("Select a run first");
+          setMessage("detailMessage", "error", "Select a run first.");
           return;
         }
+        if (state.actionInFlight) return;
+        if (CONFIRM_ACTIONS.has(action)) {
+          const ok = window.confirm(
+            `Confirm action "${action}" for run ${state.selectedRunId}?`,
+          );
+          if (!ok) return;
+        }
+
+        state.actionInFlight = true;
+        updateActionPanel();
+        setMessage("detailMessage", "", "");
         const apiBase = byId("apiBase").value.trim();
         const payload = {
           action,
           reason: byId("reason").value.trim() || null,
           note: byId("note").value.trim() || null,
         };
-        const res = await fetch(
-          `${apiBase}/execution-runs/${state.selectedRunId}/actions`,
-          {
-            method: "POST",
-            headers: getHeaders(),
-            body: JSON.stringify(payload),
-          },
-        );
-        const body = await res.json();
-        if (!res.ok) {
-          alert(body.error ?? "Action rejected");
-          return;
+        try {
+          const res = await fetch(
+            `${apiBase}/execution-runs/${state.selectedRunId}/actions`,
+            {
+              method: "POST",
+              headers: getHeaders(),
+              body: JSON.stringify(payload),
+            },
+          );
+          const body = await res.json();
+          if (!res.ok) {
+            setMessage("detailMessage", "error", body.error ?? "Action rejected");
+            return;
+          }
+          byId("reason").value = "";
+          byId("note").value = "";
+          setMessage("detailMessage", "success", `Action "${action}" submitted.`);
+          await loadRuns({ silentSuccess: true });
+          if (state.selectedRunId) {
+            await loadRunDetail(state.selectedRunId, { silent: true });
+          }
+          setMessage("listMessage", "success", "Run queue refreshed.");
+        } catch {
+          setMessage("detailMessage", "error", "Network error while submitting action.");
+        } finally {
+          state.actionInFlight = false;
+          updateActionPanel();
         }
-        byId("reason").value = "";
-        byId("note").value = "";
-        await loadRunDetail(state.selectedRunId);
-        await loadRuns();
       };
 
       byId("loadRuns").onclick = loadRuns;
+      byId("resetFilters").onclick = () => {
+        byId("status").value = "";
+        byId("failureType").value = "";
+        byId("pendingManualReview").value = "";
+        byId("cartId").value = "";
+        loadRuns();
+      };
       actionButtons.forEach((btn) => {
         btn.onclick = () => submitAction(btn.getAttribute("data-action"));
       });
+      updateActionPanel();
     </script>
   </body>
 </html>
