@@ -33,11 +33,31 @@ function httpErrorMessage(status, body) {
   return `HTTP ${status}`;
 }
 
+function serviceRoleHeaders(storeId) {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is required for authenticated API worker calls",
+    );
+  }
+
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${key}`,
+  };
+
+  if (storeId) {
+    headers["X-Store-Id"] = storeId;
+  }
+
+  return headers;
+}
+
 export async function claimNextRun({ apiBaseUrl, workerId, workerNotes }) {
   const url = joinApiPath(apiBaseUrl, "/execution-runs/claim-next");
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: serviceRoleHeaders(),
     body: JSON.stringify({ workerId, workerNotes }),
   });
 
@@ -53,6 +73,7 @@ export async function claimNextRun({ apiBaseUrl, workerId, workerNotes }) {
 export async function heartbeatRun({
   apiBaseUrl,
   runId,
+  storeId,
   workerId,
   progressStage,
   progressMessage,
@@ -61,7 +82,7 @@ export async function heartbeatRun({
   const url = joinApiPath(apiBaseUrl, `/execution-runs/${runId}/heartbeat`);
   const res = await fetch(url, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: serviceRoleHeaders(storeId),
     body: JSON.stringify({
       workerId,
       progressStage,
@@ -82,6 +103,7 @@ export async function heartbeatRun({
 export async function finalizeRun({
   apiBaseUrl,
   runId,
+  storeId,
   status,
   workerNotes,
   errorMessage,
@@ -89,7 +111,7 @@ export async function finalizeRun({
   const url = joinApiPath(apiBaseUrl, `/execution-runs/${runId}/status`);
   const res = await fetch(url, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: serviceRoleHeaders(storeId),
     body: JSON.stringify({
       status,
       workerNotes,
@@ -121,6 +143,7 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
   }
 
   const { run, payload } = claimBody.data;
+  const storeId = run.store_id;
 
   if (
     !payload ||
@@ -131,6 +154,7 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
     await finalizeRun({
       apiBaseUrl,
       runId: run.id,
+      storeId,
       status: "failed",
       workerNotes: "payload validation failed in local worker",
       errorMessage: "Execution payload missing required fields",
@@ -146,6 +170,7 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
   await heartbeatRun({
     apiBaseUrl,
     runId: run.id,
+    storeId,
     workerId,
     progressStage: "payload_loaded",
     progressMessage: "Execution payload loaded",
@@ -154,6 +179,7 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
   await heartbeatRun({
     apiBaseUrl,
     runId: run.id,
+    storeId,
     workerId,
     progressStage: "preflight_complete",
     progressMessage: "Preflight checks complete",
@@ -162,6 +188,7 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
   await heartbeatRun({
     apiBaseUrl,
     runId: run.id,
+    storeId,
     workerId,
     progressStage: "ready_for_mlcc",
     progressMessage: "Stub worker ready for MLCC automation",
@@ -170,6 +197,7 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
   await finalizeRun({
     apiBaseUrl,
     runId: run.id,
+    storeId,
     status: "succeeded",
     workerNotes: "completed by local execution worker",
     errorMessage: undefined,
@@ -197,6 +225,7 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
   }
 
   const { run, payload } = claimBody.data;
+  const storeId = run.store_id;
   const preflight = buildMlccPreflightReport(payload);
 
   if (!preflight.ready) {
@@ -205,6 +234,7 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
     await finalizeRun({
       apiBaseUrl,
       runId: run.id,
+      storeId,
       status: "failed",
       workerNotes: "MLCC preflight failed in local execution worker",
       errorMessage,
@@ -222,6 +252,7 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
   await heartbeatRun({
     apiBaseUrl,
     runId: run.id,
+    storeId,
     workerId,
     progressStage: "mlcc_preflight_ready",
     progressMessage: "MLCC preflight completed successfully",
@@ -251,6 +282,7 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
   }
 
   const { run, payload } = claimBody.data;
+  const storeId = run.store_id;
   const planResult = buildMlccDryRunPlan(payload);
 
   if (!planResult.ready) {
@@ -259,6 +291,7 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
     await finalizeRun({
       apiBaseUrl,
       runId: run.id,
+      storeId,
       status: "failed",
       workerNotes: "MLCC dry run failed during plan generation",
       errorMessage,
@@ -277,6 +310,7 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
   await heartbeatRun({
     apiBaseUrl,
     runId: run.id,
+    storeId,
     workerId,
     progressStage: "mlcc_dry_run_plan_ready",
     progressMessage: "MLCC dry-run plan generated successfully",
@@ -286,6 +320,7 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
   await finalizeRun({
     apiBaseUrl,
     runId: run.id,
+    storeId,
     status: "succeeded",
     workerNotes:
       "MLCC dry run completed successfully; no live MLCC actions were performed",

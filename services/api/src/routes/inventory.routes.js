@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../config/supabase.js";
+import { enforceParamStoreMatches } from "../middleware/store-param.middleware.js";
 import { isUuid } from "../utils/validation.js";
 import {
   getInventoryByBottleId,
@@ -19,6 +20,8 @@ import {
 } from "../services/inventory-state.service.js";
 
 const router = express.Router();
+
+router.param("storeId", enforceParamStoreMatches);
 
 router.get("/:storeId/summary", async (req, res) => {
   const { storeId } = req.params;

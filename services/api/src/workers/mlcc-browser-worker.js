@@ -262,6 +262,7 @@ export async function processOneMlccBrowserDryRun({
   }
 
   const { run, payload } = claimBody.data;
+  const storeId = run.store_id;
 
   const planResult = buildMlccDryRunPlan(payload);
 
@@ -271,6 +272,7 @@ export async function processOneMlccBrowserDryRun({
     await finalizeRun({
       apiBaseUrl,
       runId: run.id,
+      storeId,
       status: "failed",
       workerNotes: "MLCC browser dry run failed during payload preflight",
       errorMessage,
@@ -292,6 +294,7 @@ export async function processOneMlccBrowserDryRun({
     await finalizeRun({
       apiBaseUrl,
       runId: run.id,
+      storeId,
       status: "failed",
       workerNotes: "MLCC browser dry run failed during browser config validation",
       errorMessage,
@@ -318,6 +321,7 @@ export async function processOneMlccBrowserDryRun({
     await heartbeatRun({
       apiBaseUrl,
       runId: run.id,
+      storeId,
       workerId,
       progressStage: "mlcc_browser_launching",
       progressMessage: "Launching MLCC browser dry-run session",
@@ -328,6 +332,7 @@ export async function processOneMlccBrowserDryRun({
     await heartbeatRun({
       apiBaseUrl,
       runId: run.id,
+      storeId,
       workerId,
       progressStage: "mlcc_authenticated",
       progressMessage: "MLCC login succeeded",
@@ -341,6 +346,7 @@ export async function processOneMlccBrowserDryRun({
       await heartbeatRun({
         apiBaseUrl,
         runId: run.id,
+        storeId,
         workerId,
         progressStage: "mlcc_safe_navigation_complete",
         progressMessage: "MLCC safe target navigation completed",
@@ -349,6 +355,7 @@ export async function processOneMlccBrowserDryRun({
       await heartbeatRun({
         apiBaseUrl,
         runId: run.id,
+        storeId,
         workerId,
         progressStage: "mlcc_safe_navigation_complete",
         progressMessage: "MLCC authenticated landing verified",
@@ -371,6 +378,7 @@ export async function processOneMlccBrowserDryRun({
     await finalizeRun({
       apiBaseUrl,
       runId: run.id,
+      storeId,
       status: "succeeded",
       workerNotes:
         "MLCC browser dry run completed successfully; no cart mutations or submit actions were performed",
@@ -390,6 +398,7 @@ export async function processOneMlccBrowserDryRun({
       await finalizeRun({
         apiBaseUrl,
         runId: run.id,
+        storeId,
         status: "failed",
         workerNotes: "MLCC browser dry run failed",
         errorMessage: msg,

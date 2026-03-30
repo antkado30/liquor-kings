@@ -11,6 +11,15 @@ import {
   processOneMlccDryRun,
   processOneRun,
 } from "../src/workers/execution-worker.js";
+import {
+  storeScopedAuthHeaders,
+} from "./helpers/service-auth.js";
+
+const authReq = {
+  get: (path) => request(app).get(path).set(storeScopedAuthHeaders(storeId)),
+  post: (path) => request(app).post(path).set(storeScopedAuthHeaders(storeId)),
+  patch: (path) => request(app).patch(path).set(storeScopedAuthHeaders(storeId)),
+};
 
 describe("Liquor Kings API smoke tests", () => {
   it("GET /health", async () => {
@@ -21,7 +30,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /bottles/search?q=test", async () => {
-    const res = await request(app).get("/bottles/search").query({ q: "test" });
+    const res = await authReq.get("/bottles/search").query({ q: "test" });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -29,8 +38,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /bottles/search/compact?q=test", async () => {
-    const res = await request(app)
-      .get("/bottles/search/compact")
+    const res = await authReq.get("/bottles/search/compact")
       .query({ q: "test" });
 
     expect(res.status).toBe(200);
@@ -39,7 +47,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /bottles/:id", async () => {
-    const res = await request(app).get(`/bottles/${bottleId}`);
+    const res = await authReq.get(`/bottles/${bottleId}`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -47,7 +55,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /bottles/code/:mlccCode", async () => {
-    const res = await request(app).get(`/bottles/code/${mlccCode}`);
+    const res = await authReq.get(`/bottles/code/${mlccCode}`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -55,14 +63,14 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /bottles/upc/123456789012 (not found)", async () => {
-    const res = await request(app).get("/bottles/upc/123456789012");
+    const res = await authReq.get("/bottles/upc/123456789012");
 
     expect(res.status).toBe(404);
     expect(res.body.error).toBe("Bottle not found");
   });
 
   it("GET /bottles/related/:id", async () => {
-    const res = await request(app).get(`/bottles/related/${bottleId}`);
+    const res = await authReq.get(`/bottles/related/${bottleId}`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -70,7 +78,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /cart/:storeId/history", async () => {
-    const res = await request(app).get(`/cart/${storeId}/history`);
+    const res = await authReq.get(`/cart/${storeId}/history`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -78,7 +86,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /cart/:storeId/history/:cartId", async () => {
-    const res = await request(app).get(`/cart/${storeId}/history/${cartId}`);
+    const res = await authReq.get(`/cart/${storeId}/history/${cartId}`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -86,7 +94,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /cart/:storeId/latest-submitted-summary", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/latest-submitted-summary`,
     );
 
@@ -96,7 +104,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /cart/:storeId/history/:cartId/summary", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/history/${cartId}/summary`,
     );
 
@@ -106,7 +114,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("A) GET /cart/:storeId/active-availability", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/active-availability`,
     );
 
@@ -124,7 +132,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("B) GET /cart/:storeId/history/:cartId/availability", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/history/${cartId}/availability`,
     );
 
@@ -135,7 +143,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("C) GET /cart/:storeId/history/not-a-real-cart-id/availability", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/history/not-a-real-cart-id/availability`,
     );
 
@@ -144,7 +152,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("D) submitted availability item shape when items exist", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/history/${cartId}/availability`,
     );
 
@@ -166,7 +174,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("A) GET /cart/:storeId/history/:cartId/execution-payload", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/history/${cartId}/execution-payload`,
     );
 
@@ -183,7 +191,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("B) GET /cart/:storeId/execution-payload/latest", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/execution-payload/latest`,
     );
 
@@ -202,7 +210,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("C) GET /cart/:storeId/history/not-a-real-cart-id/execution-payload", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/history/not-a-real-cart-id/execution-payload`,
     );
 
@@ -211,7 +219,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("D) execution-payload payload shape when 200", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/history/${cartId}/execution-payload`,
     );
 
@@ -228,7 +236,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /cart/:storeId/overview", async () => {
-    const res = await request(app).get(`/cart/${storeId}/overview`);
+    const res = await authReq.get(`/cart/${storeId}/overview`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -236,7 +244,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /cart/:storeId/history/not-a-real-cart-id (invalid id)", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/cart/${storeId}/history/not-a-real-cart-id`,
     );
     expect(res.status).toBe(404);
@@ -244,7 +252,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId", async () => {
-    const res = await request(app).get(`/inventory/${storeId}`);
+    const res = await authReq.get(`/inventory/${storeId}`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -253,8 +261,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId?limit=5", async () => {
-    const res = await request(app)
-      .get(`/inventory/${storeId}`)
+    const res = await authReq.get(`/inventory/${storeId}`)
       .query({ limit: 5 });
 
     expect(res.status).toBe(200);
@@ -264,7 +271,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/summary", async () => {
-    const res = await request(app).get(`/inventory/${storeId}/summary`);
+    const res = await authReq.get(`/inventory/${storeId}/summary`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -273,8 +280,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/lookup?q=test", async () => {
-    const res = await request(app)
-      .get(`/inventory/${storeId}/lookup`)
+    const res = await authReq.get(`/inventory/${storeId}/lookup`)
       .query({ q: "test" });
 
     expect(res.status).toBe(200);
@@ -285,14 +291,14 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/lookup with no q", async () => {
-    const res = await request(app).get(`/inventory/${storeId}/lookup`);
+    const res = await authReq.get(`/inventory/${storeId}/lookup`);
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Lookup query is required");
   });
 
   it("GET /inventory/:storeId/bottle/:bottleId", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/inventory/${storeId}/bottle/${bottleId}`,
     );
 
@@ -304,7 +310,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/bottle/not-a-real-id", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/inventory/${storeId}/bottle/not-a-real-id`,
     );
 
@@ -313,7 +319,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/low-stock", async () => {
-    const res = await request(app).get(`/inventory/${storeId}/low-stock`);
+    const res = await authReq.get(`/inventory/${storeId}/low-stock`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -322,7 +328,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/out-of-stock", async () => {
-    const res = await request(app).get(`/inventory/${storeId}/out-of-stock`);
+    const res = await authReq.get(`/inventory/${storeId}/out-of-stock`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -331,7 +337,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/reorder-candidates", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/inventory/${storeId}/reorder-candidates`,
     );
 
@@ -342,7 +348,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/location/:location", async () => {
-    const list = await request(app).get(`/inventory/${storeId}`);
+    const list = await authReq.get(`/inventory/${storeId}`);
 
     expect(list.status).toBe(200);
     expect(list.body.success).toBe(true);
@@ -366,7 +372,7 @@ describe("Liquor Kings API smoke tests", () => {
       return;
     }
 
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/inventory/${storeId}/location/${encodeURIComponent(usableLocation)}`,
     );
 
@@ -378,7 +384,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/location/  (missing/empty location)", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/inventory/${storeId}/location/%20`,
     );
 
@@ -387,7 +393,7 @@ describe("Liquor Kings API smoke tests", () => {
   });
 
   it("GET /inventory/:storeId/:inventoryId (detail when rows exist)", async () => {
-    const list = await request(app).get(`/inventory/${storeId}`);
+    const list = await authReq.get(`/inventory/${storeId}`);
 
     expect(list.status).toBe(200);
     expect(list.body.success).toBe(true);
@@ -397,14 +403,14 @@ describe("Liquor Kings API smoke tests", () => {
     }
 
     const inventoryId = list.body.data[0].id;
-    const res = await request(app).get(`/inventory/${storeId}/${inventoryId}`);
+    const res = await authReq.get(`/inventory/${storeId}/${inventoryId}`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
 
   it("GET /inventory/:storeId/not-a-real-id (invalid inventory id)", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/inventory/${storeId}/not-a-real-id`,
     );
 
@@ -417,7 +423,7 @@ describe("inventory action smoke tests", () => {
   let baseline = null;
 
   beforeAll(async () => {
-    const list = await request(app).get(`/inventory/${storeId}`);
+    const list = await authReq.get(`/inventory/${storeId}`);
 
     expect(list.status).toBe(200);
     expect(list.body.success).toBe(true);
@@ -459,7 +465,7 @@ describe("inventory action smoke tests", () => {
 
   it("A) PATCH /inventory/:storeId/:inventoryId/quantity", async () => {
     if (!baseline) {
-      const list = await request(app).get(`/inventory/${storeId}`);
+      const list = await authReq.get(`/inventory/${storeId}`);
 
       expect(list.status).toBe(200);
       expect(list.body.success).toBe(true);
@@ -469,8 +475,7 @@ describe("inventory action smoke tests", () => {
 
     const inventoryId = baseline.id;
     const newQty = Number(baseline.quantity ?? 0) + 1;
-    const res = await request(app)
-      .patch(`/inventory/${storeId}/${inventoryId}/quantity`)
+    const res = await authReq.patch(`/inventory/${storeId}/${inventoryId}/quantity`)
       .send({ quantity: newQty });
 
     expect(res.status).toBe(200);
@@ -480,7 +485,7 @@ describe("inventory action smoke tests", () => {
 
   it("B) PATCH /inventory/:storeId/:inventoryId/quantity (invalid negative)", async () => {
     if (!baseline) {
-      const list = await request(app).get(`/inventory/${storeId}`);
+      const list = await authReq.get(`/inventory/${storeId}`);
 
       expect(list.status).toBe(200);
       expect(list.body.success).toBe(true);
@@ -489,8 +494,7 @@ describe("inventory action smoke tests", () => {
     }
 
     const inventoryId = baseline.id;
-    const res = await request(app)
-      .patch(`/inventory/${storeId}/${inventoryId}/quantity`)
+    const res = await authReq.patch(`/inventory/${storeId}/${inventoryId}/quantity`)
       .send({ quantity: -1 });
 
     expect(res.status).toBe(400);
@@ -499,7 +503,7 @@ describe("inventory action smoke tests", () => {
 
   it("C) PATCH /inventory/:storeId/:inventoryId/location", async () => {
     if (!baseline) {
-      const list = await request(app).get(`/inventory/${storeId}`);
+      const list = await authReq.get(`/inventory/${storeId}`);
 
       expect(list.status).toBe(200);
       expect(list.body.success).toBe(true);
@@ -508,8 +512,7 @@ describe("inventory action smoke tests", () => {
     }
 
     const inventoryId = baseline.id;
-    const res = await request(app)
-      .patch(`/inventory/${storeId}/${inventoryId}/location`)
+    const res = await authReq.patch(`/inventory/${storeId}/${inventoryId}/location`)
       .send({
         location: "VITEST-LOCATION",
         locationNote: "temporary test note",
@@ -522,7 +525,7 @@ describe("inventory action smoke tests", () => {
 
   it("D) PATCH /inventory/:storeId/:inventoryId/location (empty location)", async () => {
     if (!baseline) {
-      const list = await request(app).get(`/inventory/${storeId}`);
+      const list = await authReq.get(`/inventory/${storeId}`);
 
       expect(list.status).toBe(200);
       expect(list.body.success).toBe(true);
@@ -531,8 +534,7 @@ describe("inventory action smoke tests", () => {
     }
 
     const inventoryId = baseline.id;
-    const res = await request(app)
-      .patch(`/inventory/${storeId}/${inventoryId}/location`)
+    const res = await authReq.patch(`/inventory/${storeId}/${inventoryId}/location`)
       .send({ location: "   " });
 
     expect(res.status).toBe(400);
@@ -541,7 +543,7 @@ describe("inventory action smoke tests", () => {
 
   it("E) PATCH /inventory/:storeId/:inventoryId/reorder-settings", async () => {
     if (!baseline) {
-      const list = await request(app).get(`/inventory/${storeId}`);
+      const list = await authReq.get(`/inventory/${storeId}`);
 
       expect(list.status).toBe(200);
       expect(list.body.success).toBe(true);
@@ -550,8 +552,7 @@ describe("inventory action smoke tests", () => {
     }
 
     const inventoryId = baseline.id;
-    const res = await request(app)
-      .patch(`/inventory/${storeId}/${inventoryId}/reorder-settings`)
+    const res = await authReq.patch(`/inventory/${storeId}/${inventoryId}/reorder-settings`)
       .send({
         lowStockThreshold: 3,
         reorderPoint: 5,
@@ -565,7 +566,7 @@ describe("inventory action smoke tests", () => {
 
   it("F) PATCH /inventory/:storeId/:inventoryId/reorder-settings (no fields)", async () => {
     if (!baseline) {
-      const list = await request(app).get(`/inventory/${storeId}`);
+      const list = await authReq.get(`/inventory/${storeId}`);
 
       expect(list.status).toBe(200);
       expect(list.body.success).toBe(true);
@@ -574,8 +575,7 @@ describe("inventory action smoke tests", () => {
     }
 
     const inventoryId = baseline.id;
-    const res = await request(app)
-      .patch(`/inventory/${storeId}/${inventoryId}/reorder-settings`)
+    const res = await authReq.patch(`/inventory/${storeId}/${inventoryId}/reorder-settings`)
       .send({});
 
     expect(res.status).toBe(400);
@@ -583,8 +583,7 @@ describe("inventory action smoke tests", () => {
   });
 
   it("G) PATCH /inventory/:storeId/not-a-real-id/quantity", async () => {
-    const res = await request(app)
-      .patch(`/inventory/${storeId}/not-a-real-id/quantity`)
+    const res = await authReq.patch(`/inventory/${storeId}/not-a-real-id/quantity`)
       .send({ quantity: 1 });
 
     expect(res.status).toBe(404);
@@ -602,7 +601,7 @@ describe("cart lifecycle smoke tests", () => {
   });
 
   it("A) POST /cart/:storeId/validate", async () => {
-    const res = await request(app).post(`/cart/${storeId}/validate`).send();
+    const res = await authReq.post(`/cart/${storeId}/validate`).send();
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -610,7 +609,7 @@ describe("cart lifecycle smoke tests", () => {
   });
 
   it("B) duplicate POST /cart/:storeId/validate", async () => {
-    const res = await request(app).post(`/cart/${storeId}/validate`).send();
+    const res = await authReq.post(`/cart/${storeId}/validate`).send();
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe(
@@ -619,8 +618,7 @@ describe("cart lifecycle smoke tests", () => {
   });
 
   it("C) PATCH /cart/:storeId/history/:cartId/validation-result (validated)", async () => {
-    const res = await request(app)
-      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+    const res = await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({ validationStatus: "validated" });
 
     expect(res.status).toBe(200);
@@ -629,8 +627,7 @@ describe("cart lifecycle smoke tests", () => {
   });
 
   it("D) duplicate PATCH validation-result (failed - should be blocked)", async () => {
-    const res = await request(app)
-      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+    const res = await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({
         validationStatus: "failed",
         validationError: "should be blocked",
@@ -643,7 +640,7 @@ describe("cart lifecycle smoke tests", () => {
   });
 
   it("E) POST /cart/:storeId/execute", async () => {
-    const res = await request(app).post(`/cart/${storeId}/execute`).send();
+    const res = await authReq.post(`/cart/${storeId}/execute`).send();
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -651,7 +648,7 @@ describe("cart lifecycle smoke tests", () => {
   });
 
   it("F) duplicate POST /cart/:storeId/execute", async () => {
-    const res = await request(app).post(`/cart/${storeId}/execute`).send();
+    const res = await authReq.post(`/cart/${storeId}/execute`).send();
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe(
@@ -660,8 +657,7 @@ describe("cart lifecycle smoke tests", () => {
   });
 
   it("G) PATCH /cart/:storeId/history/:cartId/execution-result (executed)", async () => {
-    const res = await request(app)
-      .patch(`/cart/${storeId}/history/${cartId}/execution-result`)
+    const res = await authReq.patch(`/cart/${storeId}/history/${cartId}/execution-result`)
       .send({
         executionStatus: "executed",
         externalOrderRef: "MLCC-ORDER-TEST",
@@ -676,8 +672,7 @@ describe("cart lifecycle smoke tests", () => {
   });
 
   it("H) duplicate PATCH execution-result (failed - should be blocked)", async () => {
-    const res = await request(app)
-      .patch(`/cart/${storeId}/history/${cartId}/execution-result`)
+    const res = await authReq.patch(`/cart/${storeId}/history/${cartId}/execution-result`)
       .send({
         executionStatus: "failed",
         executionError: "should be blocked",
@@ -690,7 +685,7 @@ describe("cart lifecycle smoke tests", () => {
   });
 
   it("GET /cart/:storeId/history/:cartId (final verification)", async () => {
-    const res = await request(app).get(`/cart/${storeId}/history/${cartId}`);
+    const res = await authReq.get(`/cart/${storeId}/history/${cartId}`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -708,15 +703,14 @@ describe("execution run smoke tests", () => {
 
     await resetTestCartState(supabase, cartId);
 
-    await request(app).post(`/cart/${storeId}/validate`).send();
+    await authReq.post(`/cart/${storeId}/validate`).send();
 
-    await request(app)
-      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+    await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({ validationStatus: "validated" });
 
-    await request(app).post(
-      `/execution-runs/from-cart/${storeId}/${cartId}`,
-    );
+    await authReq
+      .post(`/execution-runs/from-cart/${storeId}/${cartId}`)
+      .send();
   });
 
   afterAll(async () => {
@@ -726,7 +720,7 @@ describe("execution run smoke tests", () => {
   });
 
   it("A) POST /execution-runs/claim-next", async () => {
-    const res = await request(app).post("/execution-runs/claim-next").send({
+    const res = await authReq.post("/execution-runs/claim-next").send({
       workerId: "worker-smoke-1",
       workerNotes: "claimed by smoke test",
     });
@@ -743,8 +737,7 @@ describe("execution run smoke tests", () => {
   });
 
   it("B) PATCH /execution-runs/:runId/heartbeat", async () => {
-    const res = await request(app)
-      .patch(`/execution-runs/${claimedRunId}/heartbeat`)
+    const res = await authReq.patch(`/execution-runs/${claimedRunId}/heartbeat`)
       .send({
         workerId: "worker-smoke-1",
         progressStage: "mlcc_login",
@@ -763,8 +756,7 @@ describe("execution run smoke tests", () => {
   });
 
   it("C) PATCH /execution-runs/:runId/heartbeat (different workerId)", async () => {
-    const res = await request(app)
-      .patch(`/execution-runs/${claimedRunId}/heartbeat`)
+    const res = await authReq.patch(`/execution-runs/${claimedRunId}/heartbeat`)
       .send({
         workerId: "worker-smoke-2",
         progressStage: "should_fail",
@@ -775,7 +767,7 @@ describe("execution run smoke tests", () => {
   });
 
   it("D) POST /execution-runs/claim-next (queue empty)", async () => {
-    const res = await request(app).post("/execution-runs/claim-next").send();
+    const res = await authReq.post("/execution-runs/claim-next").send();
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -783,7 +775,7 @@ describe("execution run smoke tests", () => {
   });
 
   it("E) GET /execution-runs/:runId", async () => {
-    const res = await request(app).get(`/execution-runs/${claimedRunId}`);
+    const res = await authReq.get(`/execution-runs/${claimedRunId}`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -792,8 +784,7 @@ describe("execution run smoke tests", () => {
   });
 
   it("F) PATCH /execution-runs/:runId/status (succeeded)", async () => {
-    const res = await request(app)
-      .patch(`/execution-runs/${claimedRunId}/status`)
+    const res = await authReq.patch(`/execution-runs/${claimedRunId}/status`)
       .send({
         status: "succeeded",
         workerNotes: "completed by smoke test",
@@ -809,8 +800,7 @@ describe("execution run smoke tests", () => {
   });
 
   it("G) PATCH /execution-runs/:runId/heartbeat after success", async () => {
-    const res = await request(app)
-      .patch(`/execution-runs/${claimedRunId}/heartbeat`)
+    const res = await authReq.patch(`/execution-runs/${claimedRunId}/heartbeat`)
       .send({
         workerId: "worker-smoke-1",
         progressStage: "too_late",
@@ -823,7 +813,7 @@ describe("execution run smoke tests", () => {
   });
 
   it("H) GET /execution-runs/not-a-real-id", async () => {
-    const res = await request(app).get("/execution-runs/not-a-real-id");
+    const res = await authReq.get("/execution-runs/not-a-real-id");
 
     expect(res.status).toBe(404);
     expect(res.body.error).toBe("Execution run not found");
@@ -853,15 +843,14 @@ describe("execution worker stub smoke tests", () => {
 
     await resetTestCartState(supabase, cartId);
 
-    await request(app).post(`/cart/${storeId}/validate`).send();
+    await authReq.post(`/cart/${storeId}/validate`).send();
 
-    await request(app)
-      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+    await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({ validationStatus: "validated" });
 
-    await request(app).post(
-      `/execution-runs/from-cart/${storeId}/${cartId}`,
-    );
+    await authReq
+      .post(`/execution-runs/from-cart/${storeId}/${cartId}`)
+      .send();
   });
 
   afterAll(async () => {
@@ -893,7 +882,7 @@ describe("execution worker stub smoke tests", () => {
   });
 
   it("B) GET /execution-runs/cart/:storeId/:cartId after worker processing", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/execution-runs/cart/${storeId}/${cartId}`,
     );
 
@@ -942,15 +931,14 @@ describe("MLCC adapter and worker preflight smoke tests", () => {
 
     await resetTestCartState(supabase, cartId);
 
-    await request(app).post(`/cart/${storeId}/validate`).send();
+    await authReq.post(`/cart/${storeId}/validate`).send();
 
-    await request(app)
-      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+    await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({ validationStatus: "validated" });
 
-    await request(app).post(
-      `/execution-runs/from-cart/${storeId}/${cartId}`,
-    );
+    await authReq
+      .post(`/execution-runs/from-cart/${storeId}/${cartId}`)
+      .send();
   });
 
   afterAll(async () => {
@@ -1032,7 +1020,7 @@ describe("MLCC adapter and worker preflight smoke tests", () => {
   });
 
   it("D) GET /execution-runs/:runId after successful preflight", async () => {
-    const res = await request(app).get(
+    const res = await authReq.get(
       `/execution-runs/${preflightRunId}`,
     );
 
@@ -1079,15 +1067,14 @@ describe("MLCC dry-run worker smoke tests", () => {
 
     await resetTestCartState(supabase, cartId);
 
-    await request(app).post(`/cart/${storeId}/validate`).send();
+    await authReq.post(`/cart/${storeId}/validate`).send();
 
-    await request(app)
-      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+    await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({ validationStatus: "validated" });
 
-    await request(app).post(
-      `/execution-runs/from-cart/${storeId}/${cartId}`,
-    );
+    await authReq
+      .post(`/execution-runs/from-cart/${storeId}/${cartId}`)
+      .send();
   });
 
   afterAll(async () => {
@@ -1179,7 +1166,7 @@ describe("MLCC dry-run worker smoke tests", () => {
   });
 
   it("D) GET /execution-runs/:runId after successful dry run", async () => {
-    const res = await request(app).get(`/execution-runs/${dryRunRunId}`);
+    const res = await authReq.get(`/execution-runs/${dryRunRunId}`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);

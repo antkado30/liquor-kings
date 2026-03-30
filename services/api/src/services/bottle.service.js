@@ -38,6 +38,7 @@ export const searchBottlesCompact = (supabase, query, limit = 10) =>
   supabase
     .from("bottles")
     .select("id, name, mlcc_code, upc, size_ml, image_url, is_active")
+    .eq("is_active", true)
     .or(`name.ilike.%${query}%,mlcc_code.ilike.%${query}%,upc.ilike.%${query}%`)
     .limit(limit);
 

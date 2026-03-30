@@ -1,4 +1,5 @@
 import { buildExecutionPayloadForSubmittedCart } from "./cart-execution-payload.service.js";
+import { verifyCartItemsBeforeExecution } from "./bottle-identity.service.js";
 import { isUuid } from "../utils/validation.js";
 
 const ACTIVE_STATUSES = ["queued", "running"];
@@ -22,6 +23,7 @@ export const createExecutionRunFromCart = async (
   supabase,
   storeId,
   cartId,
+  { userId } = {},
 ) => {
   if (!isUuid(cartId)) {
     return {
@@ -40,10 +42,27 @@ export const createExecutionRunFromCart = async (
     return payloadResult;
   }
 
+  const identity = await verifyCartItemsBeforeExecution(supabase, {
+    storeId,
+    userId: userId ?? null,
+    cartId,
+  });
+
+  if (!identity.ok) {
+    return {
+      statusCode: 400,
+      body: {
+        error: "CODE_MISMATCH",
+        details: identity.details,
+      },
+    };
+  }
+
   const { data: existing, error: existingError } = await supabase
     .from("execution_runs")
     .select("id")
     .eq("cart_id", cartId)
+    .eq("store_id", storeId)
     .in("status", ACTIVE_STATUSES)
     .limit(1)
     .maybeSingle();
@@ -113,7 +132,7 @@ export const listExecutionRunsForCart = async (supabase, storeId, cartId) => {
   };
 };
 
-export const getExecutionRunById = async (supabase, runId) => {
+export const getExecutionRunById = async (supabase, runId, storeId) => {
   if (!isUuid(runId)) {
     return {
       statusCode: 404,
@@ -121,10 +140,18 @@ export const getExecutionRunById = async (supabase, runId) => {
     };
   }
 
+  if (!storeId || !isUuid(storeId)) {
+    return {
+      statusCode: 400,
+      body: { error: "Store context required" },
+    };
+  }
+
   const { data, error } = await supabase
     .from("execution_runs")
     .select("*")
     .eq("id", runId)
+    .eq("store_id", storeId)
     .maybeSingle();
 
   if (error) {
@@ -147,6 +174,7 @@ export const getExecutionRunById = async (supabase, runId) => {
 export const updateExecutionRunStatus = async (
   supabase,
   runId,
+  storeId,
   status,
   workerNotes,
   errorMessage,
@@ -155,6 +183,13 @@ export const updateExecutionRunStatus = async (
     return {
       statusCode: 404,
       body: { error: "Execution run not found" },
+    };
+  }
+
+  if (!storeId || !isUuid(storeId)) {
+    return {
+      statusCode: 400,
+      body: { error: "Store context required" },
     };
   }
 
@@ -172,6 +207,7 @@ export const updateExecutionRunStatus = async (
     .from("execution_runs")
     .select("*")
     .eq("id", runId)
+    .eq("store_id", storeId)
     .maybeSingle();
 
   if (fetchError) {
@@ -234,6 +270,7 @@ export const updateExecutionRunStatus = async (
     .from("execution_runs")
     .update(patch)
     .eq("id", runId)
+    .eq("store_id", storeId)
     .select("*")
     .single();
 
@@ -250,6 +287,7 @@ export const updateExecutionRunStatus = async (
 export const heartbeatExecutionRun = async (
   supabase,
   runId,
+  storeId,
   workerId,
   progressStage,
   progressMessage,
@@ -262,10 +300,18 @@ export const heartbeatExecutionRun = async (
     };
   }
 
+  if (!storeId || !isUuid(storeId)) {
+    return {
+      statusCode: 400,
+      body: { error: "Store context required" },
+    };
+  }
+
   const { data: run, error: fetchError } = await supabase
     .from("execution_runs")
     .select("*")
     .eq("id", runId)
+    .eq("store_id", storeId)
     .maybeSingle();
 
   if (fetchError) {
@@ -325,6 +371,7 @@ export const heartbeatExecutionRun = async (
     .from("execution_runs")
     .update(patch)
     .eq("id", runId)
+    .eq("store_id", storeId)
     .select("*")
     .single();
 

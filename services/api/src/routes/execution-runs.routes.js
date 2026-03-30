@@ -8,23 +8,14 @@ import {
   listExecutionRunsForCart,
   updateExecutionRunStatus,
 } from "../services/execution-run.service.js";
+import { enforceParamStoreMatches } from "../middleware/store-param.middleware.js";
+import { requireServiceRole } from "../middleware/require-service-role.middleware.js";
 
 const router = express.Router();
 
-router.post("/from-cart/:storeId/:cartId", async (req, res) => {
-  const { storeId, cartId } = req.params;
+router.param("storeId", enforceParamStoreMatches);
 
-  const { statusCode, body } = await createExecutionRunFromCart(
-    supabase,
-    storeId,
-    cartId,
-  );
-
-  return res.status(statusCode).json(body);
-});
-
-
-router.post("/claim-next", async (req, res) => {
+router.post("/claim-next", requireServiceRole, async (req, res) => {
   const { workerId, workerNotes } = req.body ?? {};
 
   const { statusCode, body } = await claimNextQueuedExecutionRun(
@@ -36,6 +27,18 @@ router.post("/claim-next", async (req, res) => {
   return res.status(statusCode).json(body);
 });
 
+router.post("/from-cart/:storeId/:cartId", async (req, res) => {
+  const { storeId, cartId } = req.params;
+
+  const { statusCode, body } = await createExecutionRunFromCart(
+    supabase,
+    storeId,
+    cartId,
+    { userId: req.auth_user_id },
+  );
+
+  return res.status(statusCode).json(body);
+});
 
 router.get("/cart/:storeId/:cartId", async (req, res) => {
   const { storeId, cartId } = req.params;
@@ -49,16 +52,27 @@ router.get("/cart/:storeId/:cartId", async (req, res) => {
   return res.status(statusCode).json(body);
 });
 
-
 router.get("/:runId", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+
   const { runId } = req.params;
 
-  const { statusCode, body } = await getExecutionRunById(supabase, runId);
+  const { statusCode, body } = await getExecutionRunById(
+    supabase,
+    runId,
+    req.store_id,
+  );
 
   return res.status(statusCode).json(body);
 });
 
 router.patch("/:runId/heartbeat", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+
   const { runId } = req.params;
   const { workerId, progressStage, progressMessage, workerNotes } =
     req.body ?? {};
@@ -66,6 +80,7 @@ router.patch("/:runId/heartbeat", async (req, res) => {
   const { statusCode, body } = await heartbeatExecutionRun(
     supabase,
     runId,
+    req.store_id,
     workerId,
     progressStage,
     progressMessage,
@@ -75,14 +90,18 @@ router.patch("/:runId/heartbeat", async (req, res) => {
   return res.status(statusCode).json(body);
 });
 
-
 router.patch("/:runId/status", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+
   const { runId } = req.params;
   const { status, workerNotes, errorMessage } = req.body ?? {};
 
   const { statusCode, body } = await updateExecutionRunStatus(
     supabase,
     runId,
+    req.store_id,
     status,
     workerNotes,
     errorMessage,

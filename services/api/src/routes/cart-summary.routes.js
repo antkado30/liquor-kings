@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../config/supabase.js";
+import { enforceParamStoreMatches } from "../middleware/store-param.middleware.js";
 import {
   buildCartSummary,
   getCartItems,
@@ -17,6 +18,8 @@ import {
 import { isUuid } from "../utils/validation.js";
 
 const router = express.Router();
+
+router.param("storeId", enforceParamStoreMatches);
 
 router.get("/:storeId/active-summary", async (req, res) => {
     const { storeId } = req.params;

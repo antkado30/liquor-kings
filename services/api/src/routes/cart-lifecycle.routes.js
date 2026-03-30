@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../config/supabase.js";
+import { enforceParamStoreMatches } from "../middleware/store-param.middleware.js";
 import {
   getCartItemsDetailed,
   getSubmittedCartById,
@@ -13,6 +14,8 @@ import {
 } from "../services/cart-state.service.js";
 
 const router = express.Router();
+
+router.param("storeId", enforceParamStoreMatches);
 
 router.post("/:storeId/submit", async (req, res) => {
     const { storeId } = req.params;
