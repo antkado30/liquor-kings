@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
 import {
   claimNextRun,
+  assertDeterministicExecutionPayload,
   finalizeRun,
   heartbeatRun,
 } from "./execution-worker.js";
@@ -265,6 +266,23 @@ export async function processOneMlccBrowserDryRun({
   const { run, payload } = claimBody.data;
   const storeId = run.store_id;
 
+  const buildEvidence = ({
+    kind,
+    stage,
+    message,
+    path = null,
+    contentType = null,
+    attributes = {},
+  }) => ({
+    kind,
+    stage,
+    message,
+    artifact_path: path,
+    content_type: contentType,
+    attributes,
+    created_at: new Date().toISOString(),
+  });
+
   const planResult = buildMlccDryRunPlan(payload);
 
   if (!planResult.ready) {
@@ -279,6 +297,14 @@ export async function processOneMlccBrowserDryRun({
       errorMessage,
       failureType: FAILURE_TYPE.QUANTITY_RULE_VIOLATION,
       failureDetails: { stage: "payload_preflight", errors: planResult.errors },
+      evidence: [
+        buildEvidence({
+          kind: "cart_verification_snapshot",
+          stage: "payload_preflight",
+          message: "Payload preflight failed",
+          attributes: { errors: planResult.errors },
+        }),
+      ],
     });
 
     return {
@@ -303,6 +329,14 @@ export async function processOneMlccBrowserDryRun({
       errorMessage,
       failureType: FAILURE_TYPE.MLCC_UI_CHANGE,
       failureDetails: { stage: "browser_config", errors: browserConfig.errors },
+      evidence: [
+        buildEvidence({
+          kind: "mlcc_ui_diagnostics",
+          stage: "browser_config",
+          message: "Browser config validation failed",
+          attributes: { errors: browserConfig.errors },
+        }),
+      ],
     });
 
     return {
@@ -333,6 +367,35 @@ export async function processOneMlccBrowserDryRun({
     });
 
     await loginAndVerifyMlccLanding({ page, config });
+
+    const deterministic = assertDeterministicExecutionPayload(payload);
+    if (!deterministic.ok) {
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "failed",
+        workerNotes: "deterministic assertion failed in MLCC browser worker",
+        errorMessage: deterministic.message,
+        failureType: deterministic.code ?? FAILURE_TYPE.UNKNOWN,
+        failureDetails: deterministic.details,
+        evidence: [
+          buildEvidence({
+            kind: "cart_verification_snapshot",
+            stage: "validate",
+            message: deterministic.message,
+            attributes: deterministic.details ?? {},
+          }),
+        ],
+      });
+
+      return {
+        success: false,
+        claimed: true,
+        failed: true,
+        runId: run.id,
+      };
+    }
 
     await heartbeatRun({
       apiBaseUrl,
@@ -388,6 +451,14 @@ export async function processOneMlccBrowserDryRun({
       workerNotes:
         "MLCC browser dry run completed successfully; no cart mutations or submit actions were performed",
       errorMessage: undefined,
+      evidence: [
+        buildEvidence({
+          kind: "worker_log",
+          stage: "completed",
+          message: "MLCC browser dry-run completed",
+          attributes: { finalUrl, title },
+        }),
+      ],
     });
 
     return {
@@ -409,6 +480,14 @@ export async function processOneMlccBrowserDryRun({
         errorMessage: msg,
         failureType: FAILURE_TYPE.NETWORK_ERROR,
         failureDetails: { stage: "browser_runtime" },
+        evidence: [
+          buildEvidence({
+            kind: "mlcc_ui_diagnostics",
+            stage: "browser_runtime",
+            message: "MLCC browser runtime failure",
+            attributes: { error: msg },
+          }),
+        ],
       });
     } catch {
       // ignore secondary finalize errors

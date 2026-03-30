@@ -45,6 +45,7 @@ const applyExecutionRunPatch = async (supabase, runId, storeId, patch) => {
     "max_retries",
     "failure_type",
     "failure_details",
+    "evidence",
   ];
   let retryPatch = { ...patch };
   let result = await runUpdate(retryPatch);
@@ -65,6 +66,58 @@ const applyExecutionRunPatch = async (supabase, runId, storeId, patch) => {
   }
 
   return result;
+};
+
+const asEvidenceArray = (value) => {
+  if (Array.isArray(value)) return value;
+  return [];
+};
+
+const buildRunSummary = (run) => {
+  const evidence = asEvidenceArray(run?.evidence);
+  const hasEvidence = evidence.length > 0;
+  const status = run?.status ?? null;
+  const retryCount = Number(run?.retry_count ?? 0);
+  const maxRetries = Number(run?.max_retries ?? DEFAULT_MAX_RETRIES);
+  const failureType = run?.failure_type ?? null;
+  const failureMessage = run?.error_message ?? null;
+  const isTerminal = TERMINAL_STATUSES.includes(status);
+  const retryAllowed =
+    status === "failed" &&
+    failureType != null &&
+    isRetryableFailureType(failureType) &&
+    retryCount < maxRetries;
+
+  const manualReviewRecommended =
+    status === "failed" &&
+    (failureType === "UNKNOWN" ||
+      failureType === "CODE_MISMATCH" ||
+      failureType === "OUT_OF_STOCK" ||
+      hasEvidence);
+
+  return {
+    run_id: run?.id ?? null,
+    store_id: run?.store_id ?? null,
+    cart_id: run?.cart_id ?? null,
+    status,
+    retry_count: retryCount,
+    max_retries: maxRetries,
+    failure_type: failureType,
+    failure_message: failureMessage,
+    progress_stage: run?.progress_stage ?? null,
+    progress_message: run?.progress_message ?? null,
+    timestamps: {
+      queued_at: run?.queued_at ?? run?.created_at ?? null,
+      started_at: run?.started_at ?? null,
+      heartbeat_at: run?.heartbeat_at ?? null,
+      finished_at: run?.finished_at ?? null,
+      created_at: run?.created_at ?? null,
+      updated_at: run?.updated_at ?? null,
+    },
+    has_evidence: hasEvidence,
+    manual_review_recommended: manualReviewRecommended,
+    retry_allowed: retryAllowed,
+  };
 };
 
 export const createExecutionRunFromCart = async (
@@ -217,6 +270,25 @@ export const listExecutionRunsForCart = async (supabase, storeId, cartId) => {
   };
 };
 
+export const listExecutionRunSummariesForCart = async (
+  supabase,
+  storeId,
+  cartId,
+) => {
+  const result = await listExecutionRunsForCart(supabase, storeId, cartId);
+  if (result.statusCode !== 200) return result;
+
+  const rows = result.body.data ?? [];
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      count: rows.length,
+      data: rows.map(buildRunSummary),
+    },
+  };
+};
+
 export const getExecutionRunById = async (supabase, runId, storeId) => {
   if (!isUuid(runId)) {
     return {
@@ -256,6 +328,34 @@ export const getExecutionRunById = async (supabase, runId, storeId) => {
   };
 };
 
+export const getExecutionRunSummaryById = async (supabase, runId, storeId) => {
+  const result = await getExecutionRunById(supabase, runId, storeId);
+  if (result.statusCode !== 200) return result;
+
+  return {
+    statusCode: 200,
+    body: { success: true, data: buildRunSummary(result.body.data) },
+  };
+};
+
+export const getExecutionRunEvidenceById = async (supabase, runId, storeId) => {
+  const result = await getExecutionRunById(supabase, runId, storeId);
+  if (result.statusCode !== 200) return result;
+
+  const row = result.body.data;
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      run_id: row.id,
+      store_id: row.store_id,
+      cart_id: row.cart_id,
+      evidence: asEvidenceArray(row.evidence),
+      has_evidence: asEvidenceArray(row.evidence).length > 0,
+    },
+  };
+};
+
 export const updateExecutionRunStatus = async (
   supabase,
   runId,
@@ -265,6 +365,7 @@ export const updateExecutionRunStatus = async (
   errorMessage,
   failureType,
   failureDetails,
+  evidence,
 ) => {
   if (!isUuid(runId)) {
     return {
@@ -323,6 +424,13 @@ export const updateExecutionRunStatus = async (
 
   if (workerNotes !== undefined) {
     patch.worker_notes = workerNotes;
+  }
+  if (evidence !== undefined) {
+    const existingEvidence = asEvidenceArray(run.evidence);
+    patch.evidence = [
+      ...existingEvidence,
+      ...asEvidenceArray(evidence),
+    ];
   }
 
   if (status === "running" && !run.started_at) {

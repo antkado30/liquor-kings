@@ -51,6 +51,25 @@ function summarizeFailure(message, explicitType, details = {}) {
   };
 }
 
+function buildEvidenceEntry({
+  kind,
+  stage,
+  message,
+  path = null,
+  contentType = null,
+  attributes = {},
+}) {
+  return {
+    kind,
+    stage,
+    message,
+    artifact_path: path,
+    content_type: contentType,
+    attributes,
+    created_at: new Date().toISOString(),
+  };
+}
+
 export function assertDeterministicExecutionPayload(payload) {
   if (!payload || !Array.isArray(payload.items) || !payload.summary) {
     return {
@@ -221,6 +240,7 @@ export async function finalizeRun({
   errorMessage,
   failureType,
   failureDetails,
+  evidence,
 }) {
   const url = joinApiPath(apiBaseUrl, `/execution-runs/${runId}/status`);
   const res = await fetch(url, {
@@ -232,6 +252,7 @@ export async function finalizeRun({
       errorMessage,
       failureType,
       failureDetails,
+      evidence,
     }),
   });
 
@@ -281,6 +302,14 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
       errorMessage: failure.message,
       failureType: failure.failureType,
       failureDetails: failure.details,
+      evidence: [
+        buildEvidenceEntry({
+          kind: "cart_verification_snapshot",
+          stage: "payload_loaded",
+          message: "Payload shape was invalid",
+          attributes: { payload_present: !!payload },
+        }),
+      ],
     });
 
     return {
@@ -319,6 +348,14 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
       errorMessage: deterministic.message,
       failureType: deterministic.code,
       failureDetails: deterministic.details,
+      evidence: [
+        buildEvidenceEntry({
+          kind: "cart_verification_snapshot",
+          stage: "validate",
+          message: deterministic.message,
+          attributes: deterministic.details ?? {},
+        }),
+      ],
     });
     return {
       success: false,
@@ -391,6 +428,14 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
       errorMessage: failure.message,
       failureType: failure.failureType,
       failureDetails: failure.details,
+      evidence: [
+        buildEvidenceEntry({
+          kind: "learned_qty_rule_dump",
+          stage: "mlcc_preflight",
+          message: "MLCC preflight validation failed",
+          attributes: { errors: preflight.errors },
+        }),
+      ],
     });
 
     return {
@@ -455,6 +500,14 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
       errorMessage: failure.message,
       failureType: failure.failureType,
       failureDetails: failure.details,
+      evidence: [
+        buildEvidenceEntry({
+          kind: "learned_qty_rule_dump",
+          stage: "mlcc_dry_run_plan",
+          message: "Dry-run plan generation failed",
+          attributes: { errors: planResult.errors },
+        }),
+      ],
     });
 
     return {

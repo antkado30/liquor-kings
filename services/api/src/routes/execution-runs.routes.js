@@ -3,9 +3,12 @@ import supabase from "../config/supabase.js";
 import {
   claimNextQueuedExecutionRun,
   createExecutionRunFromCart,
+  getExecutionRunEvidenceById,
   getExecutionRunById,
+  getExecutionRunSummaryById,
   heartbeatExecutionRun,
   listExecutionRunsForCart,
+  listExecutionRunSummariesForCart,
   updateExecutionRunStatus,
 } from "../services/execution-run.service.js";
 import { enforceParamStoreMatches } from "../middleware/store-param.middleware.js";
@@ -49,6 +52,46 @@ router.get("/cart/:storeId/:cartId", async (req, res) => {
     cartId,
   );
 
+  return res.status(statusCode).json(body);
+});
+
+router.get("/cart/:storeId/:cartId/history", async (req, res) => {
+  const { storeId, cartId } = req.params;
+
+  const { statusCode, body } = await listExecutionRunSummariesForCart(
+    supabase,
+    storeId,
+    cartId,
+  );
+
+  return res.status(statusCode).json(body);
+});
+
+router.get("/:runId/summary", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+
+  const { runId } = req.params;
+  const { statusCode, body } = await getExecutionRunSummaryById(
+    supabase,
+    runId,
+    req.store_id,
+  );
+  return res.status(statusCode).json(body);
+});
+
+router.get("/:runId/evidence", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+
+  const { runId } = req.params;
+  const { statusCode, body } = await getExecutionRunEvidenceById(
+    supabase,
+    runId,
+    req.store_id,
+  );
   return res.status(statusCode).json(body);
 });
 
@@ -96,7 +139,7 @@ router.patch("/:runId/status", async (req, res) => {
   }
 
   const { runId } = req.params;
-  const { status, workerNotes, errorMessage, failureType, failureDetails } =
+  const { status, workerNotes, errorMessage, failureType, failureDetails, evidence } =
     req.body ?? {};
 
   const { statusCode, body } = await updateExecutionRunStatus(
@@ -108,6 +151,7 @@ router.patch("/:runId/status", async (req, res) => {
     errorMessage,
     failureType,
     failureDetails,
+    evidence,
   );
 
   return res.status(statusCode).json(body);
