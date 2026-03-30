@@ -181,6 +181,44 @@ const getRunOperatorActions = async (supabase, runId, storeId) => {
   return { data: data ?? [], error: null };
 };
 
+const buildOperatorReviewListItem = (summary) => ({
+  run_id: summary.run_id,
+  store_id: summary.store_id,
+  cart_id: summary.cart_id,
+  status: summary.status,
+  failure_type: summary.failure_type,
+  failure_message: summary.failure_message,
+  retry_count: summary.retry_count,
+  retry_allowed: summary.retry_allowed,
+  progress_stage: summary.progress_stage,
+  has_evidence: summary.has_evidence,
+  operator_status: summary.operator_status,
+  latest_operator_action: summary.latest_operator_action,
+  pending_manual_review: summary.pending_manual_review,
+  actionable_next_step: summary.actionable_next_step,
+  manual_review_recommended: summary.manual_review_recommended,
+  timestamps: summary.timestamps,
+});
+
+const mapLatestActionsByRunId = (rows) => {
+  const latestByRun = new Map();
+  for (const row of rows ?? []) {
+    const runId = row.run_id ?? null;
+    if (!runId) continue;
+    const existing = latestByRun.get(runId);
+    if (!existing) {
+      latestByRun.set(runId, row);
+      continue;
+    }
+    const existingAt = new Date(existing.created_at ?? 0).getTime();
+    const currentAt = new Date(row.created_at ?? 0).getTime();
+    if (currentAt > existingAt) {
+      latestByRun.set(runId, row);
+    }
+  }
+  return latestByRun;
+};
+
 export const createExecutionRunFromCart = async (
   supabase,
   storeId,
@@ -414,6 +452,123 @@ export const getExecutionRunSummaryById = async (supabase, runId, storeId) => {
   return {
     statusCode: 200,
     body: { success: true, data: buildRunSummary(result.body.data, actions) },
+  };
+};
+
+export const listExecutionRunsForOperatorReview = async (
+  supabase,
+  storeId,
+  {
+    status,
+    failureType,
+    pendingManualReview,
+    cartId,
+    limit = 50,
+    offset = 0,
+  } = {},
+) => {
+  if (!storeId || !isUuid(storeId)) {
+    return { statusCode: 400, body: { error: "Store context required" } };
+  }
+
+  let query = supabase
+    .from("execution_runs")
+    .select("*")
+    .eq("store_id", storeId)
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (status) {
+    query = query.eq("status", status);
+  }
+  if (failureType) {
+    query = query.eq("failure_type", failureType);
+  }
+  if (cartId) {
+    query = query.eq("cart_id", cartId);
+  }
+
+  const { data, error } = await query;
+  if (error) return serverError(error.message);
+
+  const rows = data ?? [];
+  const runIds = rows.map((row) => row.id).filter(Boolean);
+
+  let actionsByRunId = new Map();
+  if (runIds.length > 0) {
+    const { data: actionRows, error: actionErr } = await supabase
+      .from("execution_run_operator_actions")
+      .select("id, run_id, store_id, action, reason, note, actor_id, created_at")
+      .eq("store_id", storeId)
+      .in("run_id", runIds)
+      .order("created_at", { ascending: false });
+    if (actionErr) return serverError(actionErr.message);
+    actionsByRunId = mapLatestActionsByRunId(actionRows);
+  }
+
+  let items = rows.map((row) => {
+    const latest = actionsByRunId.get(row.id);
+    const summary = buildRunSummary(row, latest ? [latest] : []);
+    return buildOperatorReviewListItem(summary);
+  });
+
+  if (pendingManualReview === true) {
+    items = items.filter((item) => item.pending_manual_review === true);
+  }
+  if (pendingManualReview === false) {
+    items = items.filter((item) => item.pending_manual_review === false);
+  }
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      count: items.length,
+      data: items,
+      page: {
+        limit,
+        offset,
+      },
+    },
+  };
+};
+
+export const getExecutionRunOperatorReviewBundleById = async (
+  supabase,
+  runId,
+  storeId,
+) => {
+  const summaryResult = await getExecutionRunSummaryById(supabase, runId, storeId);
+  if (summaryResult.statusCode !== 200) return summaryResult;
+
+  const evidenceResult = await getExecutionRunEvidenceById(supabase, runId, storeId);
+  if (evidenceResult.statusCode !== 200) return evidenceResult;
+
+  const actionsResult = await getExecutionRunOperatorActionsById(
+    supabase,
+    runId,
+    storeId,
+  );
+  if (actionsResult.statusCode !== 200) return actionsResult;
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      data: {
+        run_id: runId,
+        store_id: storeId,
+        summary: summaryResult.body.data,
+        evidence: {
+          has_evidence: evidenceResult.body.has_evidence,
+          items: evidenceResult.body.evidence,
+        },
+        operator_actions: {
+          count: actionsResult.body.count,
+          items: actionsResult.body.data,
+        },
+      },
+    },
   };
 };
 

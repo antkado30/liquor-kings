@@ -3,12 +3,14 @@ import supabase from "../config/supabase.js";
 import {
   applyExecutionRunOperatorAction,
   claimNextQueuedExecutionRun,
+  getExecutionRunOperatorReviewBundleById,
   getExecutionRunOperatorActionsById,
   createExecutionRunFromCart,
   getExecutionRunEvidenceById,
   getExecutionRunById,
   getExecutionRunSummaryById,
   heartbeatExecutionRun,
+  listExecutionRunsForOperatorReview,
   listExecutionRunsForCart,
   listExecutionRunSummariesForCart,
   updateExecutionRunStatus,
@@ -69,6 +71,34 @@ router.get("/cart/:storeId/:cartId/history", async (req, res) => {
   return res.status(statusCode).json(body);
 });
 
+router.get("/review/:storeId/runs", async (req, res) => {
+  const { storeId } = req.params;
+  const { status, failure_type: failureType, cart_id: cartId } = req.query;
+  const pendingManualReviewRaw = req.query.pending_manual_review;
+  const pendingManualReview =
+    pendingManualReviewRaw === undefined
+      ? undefined
+      : String(pendingManualReviewRaw).toLowerCase() === "true";
+  const limitRaw = Number.parseInt(String(req.query.limit ?? "50"), 10);
+  const offsetRaw = Number.parseInt(String(req.query.offset ?? "0"), 10);
+  const limit = Number.isNaN(limitRaw) ? 50 : Math.min(Math.max(limitRaw, 1), 100);
+  const offset = Number.isNaN(offsetRaw) ? 0 : Math.max(offsetRaw, 0);
+
+  const { statusCode, body } = await listExecutionRunsForOperatorReview(
+    supabase,
+    storeId,
+    {
+      status: status ? String(status) : undefined,
+      failureType: failureType ? String(failureType) : undefined,
+      pendingManualReview,
+      cartId: cartId ? String(cartId) : undefined,
+      limit,
+      offset,
+    },
+  );
+  return res.status(statusCode).json(body);
+});
+
 router.get("/:runId/summary", async (req, res) => {
   if (!req.store_id) {
     return res.status(400).json({ error: "X-Store-Id header required" });
@@ -76,6 +106,19 @@ router.get("/:runId/summary", async (req, res) => {
 
   const { runId } = req.params;
   const { statusCode, body } = await getExecutionRunSummaryById(
+    supabase,
+    runId,
+    req.store_id,
+  );
+  return res.status(statusCode).json(body);
+});
+
+router.get("/:runId/review-bundle", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+  const { runId } = req.params;
+  const { statusCode, body } = await getExecutionRunOperatorReviewBundleById(
     supabase,
     runId,
     req.store_id,
