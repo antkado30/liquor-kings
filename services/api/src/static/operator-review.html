@@ -235,6 +235,120 @@
       #workspace.visible {
         display: block;
       }
+      .runs-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 8px;
+        max-height: min(70vh, 640px);
+        overflow-y: auto;
+      }
+      .runs-list.loading {
+        opacity: 0.65;
+        pointer-events: none;
+      }
+      .run-card {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 10px 12px;
+        cursor: pointer;
+        background: #fff;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 6px 12px;
+        align-items: start;
+      }
+      .run-card:hover {
+        border-color: #93c5fd;
+        background: #f8fafc;
+      }
+      .run-card.selected {
+        outline: 2px solid #2563eb;
+        outline-offset: 0;
+        background: #eff6ff;
+      }
+      .run-card.pending-review {
+        border-left: 4px solid #f59e0b;
+        padding-left: 8px;
+      }
+      .run-card .primary-line {
+        font-size: 13px;
+        font-weight: 700;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .run-card .ids {
+        font-size: 11px;
+        color: #6b7280;
+        word-break: break-all;
+      }
+      .run-card .triage-row {
+        font-size: 12px;
+        color: #374151;
+        grid-column: 1 / -1;
+      }
+      .run-card .hint {
+        font-size: 11px;
+        color: #1d4ed8;
+        grid-column: 1 / -1;
+        margin-top: 2px;
+      }
+      .empty-state {
+        border: 1px dashed #d1d5db;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+        color: #6b7280;
+        font-size: 13px;
+        background: #f9fafb;
+      }
+      .empty-state strong {
+        color: #111827;
+        display: block;
+        margin-bottom: 6px;
+      }
+      .failure-guidance {
+        border-left: 3px solid #3b82f6;
+        padding: 8px 10px;
+        margin-top: 8px;
+        background: #eff6ff;
+        font-size: 12px;
+        color: #1e3a5f;
+      }
+      .evidence-group-title {
+        font-size: 12px;
+        font-weight: 700;
+        margin: 10px 0 6px;
+        color: #374151;
+      }
+      .evidence-item {
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 8px;
+        margin-bottom: 8px;
+        background: #fff;
+        font-size: 12px;
+      }
+      .evidence-item .meta-line {
+        margin: 2px 0;
+        color: #4b5563;
+      }
+      .evidence-item .meta-line strong {
+        color: #111827;
+        min-width: 5.5rem;
+        display: inline-block;
+      }
+      .evidence-item pre.raw {
+        margin: 6px 0 0;
+        font-size: 11px;
+        max-height: 160px;
+        overflow: auto;
+        background: #f3f4f6;
+        padding: 6px;
+        border-radius: 4px;
+      }
       @media (max-width: 900px) {
         .layout {
           grid-template-columns: 1fr;
@@ -334,26 +448,35 @@
           </select>
           <label>Cart ID</label>
           <input id="cartId" placeholder="optional cart uuid" />
-          <button id="loadRuns">Load Runs</button>
-          <button id="resetFilters" class="secondary">Reset Filters</button>
+          <button id="loadRuns">Load runs</button>
+          <button id="refreshRuns" class="secondary">Refresh</button>
+          <button id="resetFilters" class="secondary">Reset filters</button>
+        </div>
+        <div class="row" style="margin-top: 8px">
+          <label>Search queue</label>
+          <input
+            id="queueSearch"
+            style="min-width: 220px; flex: 1"
+            placeholder="Filter loaded runs by run ID or cart ID (client-side)"
+          />
+        </div>
+        <div class="row" style="margin-top: 8px; align-items: center">
+          <label class="row" style="gap: 4px; margin: 0">
+            <input type="checkbox" id="autoRefreshEnabled" />
+            Auto-refresh
+          </label>
+          <select id="autoRefreshInterval" title="Interval when auto-refresh is on">
+            <option value="15">every 15s</option>
+            <option value="30" selected>every 30s</option>
+            <option value="60">every 60s</option>
+          </select>
         </div>
         <p class="muted">
-          Newest runs first. Pending manual review rows are highlighted. Click row to open details.
+          Newest first from the server. Cards show triage fields; click a card for detail. Search only filters
+          the list already loaded (use filters + Load for server-side scope).
         </p>
         <div id="listMessage" class="msg"></div>
-        <table id="runsTable">
-          <thead>
-            <tr>
-              <th>Run</th>
-              <th>Status</th>
-              <th>Failure</th>
-              <th>Retry</th>
-              <th>Operator</th>
-              <th>Next Step</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+        <div id="runsList" class="runs-list" aria-live="polite"></div>
       </section>
 
       <section class="card">
@@ -362,11 +485,22 @@
           <div><strong>Run ID:</strong> <span id="detailRunId">-</span></div>
         </div>
         <h4>Summary</h4>
-        <div id="summaryBox" class="box muted">Select a run...</div>
+        <div id="summaryBox" class="box muted">
+          <div class="empty-state">
+            <strong>No run selected</strong>
+            Choose a card from the queue to inspect summary, evidence, and actions.
+          </div>
+        </div>
+        <div id="failureGuidanceBox" class="failure-guidance" style="display: none"></div>
         <h4>Timestamps</h4>
-        <div id="timestampsBox" class="box muted">-</div>
+        <div id="timestampsBox" class="box muted">—</div>
         <h4>Evidence</h4>
-        <div id="evidenceBox" class="box muted">No evidence.</div>
+        <div id="evidenceBox" class="box muted">
+          <div class="empty-state">
+            <strong>No run selected</strong>
+            Evidence appears here after you open a run.
+          </div>
+        </div>
         <h4>Operator Actions Timeline</h4>
         <div id="historyBox" class="box muted">No actions yet.</div>
         <h4>Action Panel</h4>
@@ -407,6 +541,30 @@
       const actionButtons = Array.from(document.querySelectorAll("[data-action]"));
       const CONFIRM_ACTIONS = new Set(["retry_now", "cancel", "resolve_without_retry"]);
 
+      let autoRefreshTimer = null;
+
+      const stopAutoRefresh = () => {
+        if (autoRefreshTimer) {
+          clearInterval(autoRefreshTimer);
+          autoRefreshTimer = null;
+        }
+      };
+
+      const syncAutoRefresh = () => {
+        stopAutoRefresh();
+        if (!state.authenticated) return;
+        const en = byId("autoRefreshEnabled");
+        const iv = byId("autoRefreshInterval");
+        if (!en || !iv || !en.checked) return;
+        const sec = Number(iv.value);
+        if (!Number.isFinite(sec) || sec < 5) return;
+        autoRefreshTimer = setInterval(() => {
+          if (state.authenticated && !state.loadingRuns && !state.actionInFlight) {
+            loadRuns({ silentSuccess: true });
+          }
+        }, sec * 1000);
+      };
+
       const getApiBase = () =>
         (state.apiBase || byId("apiBase").value.trim() || window.location.origin).replace(/\/$/, "");
 
@@ -436,15 +594,24 @@
 
       const resetDetailPlaceholders = () => {
         byId("detailRunId").textContent = "-";
-        byId("summaryBox").innerHTML = '<span class="muted">Select a run...</span>';
-        byId("timestampsBox").innerHTML = '<span class="muted">—</span>';
-        byId("evidenceBox").innerHTML = '<span class="muted">No evidence.</span>';
+        byId("summaryBox").innerHTML =
+          '<div class="empty-state"><strong>No run selected</strong>Choose a card from the queue to inspect summary, evidence, and actions.</div>';
+        byId("timestampsBox").innerHTML =
+          '<div class="empty-state" style="padding:12px"><strong>No run selected</strong>Timestamps load with the run summary.</div>';
+        byId("evidenceBox").innerHTML =
+          '<div class="empty-state"><strong>No run selected</strong>Select a run from the queue to view evidence.</div>';
         byId("historyBox").innerHTML = '<span class="muted">No actions yet.</span>';
         byId("reason").value = "";
         byId("note").value = "";
+        const fg = byId("failureGuidanceBox");
+        if (fg) {
+          fg.style.display = "none";
+          fg.textContent = "";
+        }
       };
 
       const fullResetUi = () => {
+        stopAutoRefresh();
         state.authenticated = false;
         state.operator = null;
         state.stores = [];
@@ -452,8 +619,9 @@
         state.selectedRunId = null;
         state.selectedSummary = null;
         state.runs = [];
-        const tbody = byId("runsTable").querySelector("tbody");
-        if (tbody) tbody.innerHTML = "";
+        if (byId("queueSearch")) byId("queueSearch").value = "";
+        if (byId("runsList")) byId("runsList").innerHTML = "";
+        if (byId("autoRefreshEnabled")) byId("autoRefreshEnabled").checked = false;
         resetDetailPlaceholders();
         setMessage("listMessage", "", "");
         setMessage("detailMessage", "", "");
@@ -503,7 +671,7 @@
             !state.authenticated || loading || state.actionInFlight;
           byId("resetFilters").disabled =
             !state.authenticated || loading || state.actionInFlight;
-          byId("runsTable").classList.toggle("loading", loading);
+          byId("runsList").classList.toggle("loading", loading);
           byId("connectSession").disabled = loading || state.actionInFlight;
           return;
         }
@@ -618,6 +786,24 @@
           .replaceAll(">", "&gt;")
           .replaceAll('"', "&quot;");
 
+      const FAILURE_GUIDANCE = {
+        CODE_MISMATCH:
+          "Do not rely on blind retry. Review bottle / MLCC mapping and cart identity before re-queueing.",
+        OUT_OF_STOCK: "Review inventory and cart lines; adjust stock or remove items as appropriate.",
+        QUANTITY_RULE_VIOLATION:
+          "Fix quantity or rule configuration; retry is unlikely to succeed until data is corrected.",
+        MLCC_UI_CHANGE:
+          "MLCC site or selectors may have changed — expect manual review; check automation evidence.",
+        NETWORK_ERROR:
+          "Often transient — retry may be appropriate when the system shows retry_allowed.",
+        UNKNOWN: "Investigate evidence and logs; treat as manual review until root cause is clear.",
+      };
+
+      const failureGuidanceText = (failureType) => {
+        if (!failureType) return "";
+        return FAILURE_GUIDANCE[failureType] ?? FAILURE_GUIDANCE.UNKNOWN;
+      };
+
       const statusBadge = (status) => `<span class="status ${esc(status)}">${esc(status)}</span>`;
       const failureBadge = (failureType) =>
         failureType ? `<span class="badge">${esc(failureType)}</span>` : `<span class="muted">-</span>`;
@@ -637,6 +823,15 @@
             <div class="kv"><strong>Failure Message:</strong> ${esc(summary.failure_message ?? "-")}</div>
           </div>
         `;
+        const fg = failureGuidanceText(summary.failure_type);
+        const fgEl = byId("failureGuidanceBox");
+        if (fg && fgEl) {
+          fgEl.style.display = "block";
+          fgEl.innerHTML = `<strong>Suggested triage (${esc(summary.failure_type)})</strong> ${esc(fg)}`;
+        } else if (fgEl) {
+          fgEl.style.display = "none";
+          fgEl.textContent = "";
+        }
       };
 
       const renderTimestamps = (timestamps) => {
@@ -654,24 +849,71 @@
 
       const renderEvidence = (items) => {
         if (!items?.length) {
-          byId("evidenceBox").innerHTML = '<span class="muted">No evidence.</span>';
+          byId("evidenceBox").innerHTML = `
+            <div class="empty-state">
+              <strong>No evidence on this run</strong>
+              Nothing was attached for this execution. Check worker configuration or earlier pipeline stages if you expected artifacts.
+            </div>`;
           return;
         }
-        byId("evidenceBox").innerHTML = items
-          .map(
-            (item, idx) => `
-            <div class="box" style="margin-bottom:8px">
-              <div><strong>Evidence ${idx + 1}</strong></div>
-              <pre class="mono">${esc(JSON.stringify(item, null, 2))}</pre>
-            </div>
-          `,
-          )
-          .join("");
+        const pickKind = (item) => item.kind ?? item.type ?? item.source ?? "other";
+        const pickStage = (item) =>
+          item.stage ?? item.progress_stage ?? item.phase ?? "general";
+        const groups = new Map();
+        for (const item of items) {
+          const title = `${pickKind(item)} — ${pickStage(item)}`;
+          if (!groups.has(title)) groups.set(title, []);
+          groups.get(title).push(item);
+        }
+        const parts = [];
+        for (const [title, groupItems] of groups) {
+          parts.push(`<div class="evidence-group-title">${esc(title)}</div>`);
+          for (const item of groupItems) {
+            const path =
+              item.ref ??
+              item.path ??
+              item.file ??
+              item.artifact_ref ??
+              item.file_path ??
+              item.url ??
+              null;
+            const summaryLine =
+              item.message ?? item.title ?? item.summary ?? item.description ?? null;
+            parts.push(`
+            <div class="evidence-item">
+              <div class="meta-line"><strong>Kind</strong> ${esc(pickKind(item))}</div>
+              ${
+                pickStage(item) !== "general"
+                  ? `<div class="meta-line"><strong>Stage</strong> ${esc(String(pickStage(item)))}</div>`
+                  : ""
+              }
+              ${
+                path
+                  ? `<div class="meta-line"><strong>Artifact / ref</strong> <span class="mono">${esc(String(path))}</span></div>`
+                  : ""
+              }
+              ${
+                summaryLine
+                  ? `<div class="meta-line"><strong>Summary</strong> ${esc(String(summaryLine))}</div>`
+                  : ""
+              }
+              <details>
+                <summary class="muted" style="cursor:pointer;margin-top:6px">Raw JSON</summary>
+                <pre class="raw mono">${esc(JSON.stringify(item, null, 2))}</pre>
+              </details>
+            </div>`);
+          }
+        }
+        byId("evidenceBox").innerHTML = parts.join("");
       };
 
       const renderTimeline = (items) => {
         if (!items?.length) {
-          byId("historyBox").innerHTML = '<span class="muted">No actions yet.</span>';
+          byId("historyBox").innerHTML = `
+            <div class="empty-state">
+              <strong>No operator actions yet</strong>
+              Acknowledge, mark for review, or other actions will appear here in order.
+            </div>`;
           return;
         }
         byId("historyBox").innerHTML = `
@@ -692,29 +934,68 @@
         `;
       };
 
+      const renderRunCards = (rows) => {
+        const container = byId("runsList");
+        container.innerHTML = "";
+        if (!state.runs.length) {
+          container.innerHTML = `
+            <div class="empty-state">
+              <strong>No runs loaded</strong>
+              Set filters if needed, then <strong>Load runs</strong>. Use <strong>Refresh</strong> to pull the latest without changing filters.
+            </div>`;
+          return;
+        }
+        if (!rows.length) {
+          container.innerHTML = `
+            <div class="empty-state">
+              <strong>No queue matches</strong>
+              Nothing in the loaded list matches your search. Clear the search box or load a broader set from the server.
+            </div>`;
+          return;
+        }
+        rows.forEach((row) => {
+          const div = document.createElement("div");
+          div.className = "run-card";
+          if (row.pending_manual_review) div.classList.add("pending-review");
+          if (row.run_id === state.selectedRunId) div.classList.add("selected");
+          const hint = failureGuidanceText(row.failure_type);
+          div.innerHTML = `
+            <div>
+              <div class="primary-line">
+                ${statusBadge(row.status)}
+                ${failureBadge(row.failure_type)}
+                <span class="${row.retry_allowed ? "retry-yes" : "retry-no"}">Retry: ${row.retry_allowed ? "allowed" : "blocked"}</span>
+              </div>
+              <div class="triage-row"><strong>Next:</strong> ${esc(row.actionable_next_step)} · <strong>Operator:</strong> ${esc(row.operator_status)}</div>
+              <div class="ids mono">Run <span class="mono">${esc(row.run_id)}</span></div>
+              <div class="ids mono">Cart <span class="mono">${esc(row.cart_id ?? "—")}</span></div>
+              ${hint ? `<div class="hint">${esc(hint)}</div>` : ""}
+            </div>
+            <div style="text-align:right;font-size:11px;color:#6b7280">
+              ${row.pending_manual_review ? "<strong>MANUAL REVIEW</strong><br>" : ""}
+              Open →
+            </div>
+          `;
+          div.onclick = () => loadRunDetail(row.run_id);
+          container.appendChild(div);
+        });
+      };
+
+      const applyQueueFilter = () => {
+        const q = byId("queueSearch").value.trim().toLowerCase();
+        const filtered = !q
+          ? state.runs
+          : state.runs.filter(
+              (r) =>
+                (r.run_id && String(r.run_id).toLowerCase().includes(q)) ||
+                (r.cart_id && String(r.cart_id).toLowerCase().includes(q)),
+            );
+        renderRunCards(filtered);
+      };
+
       const setRunRows = (rows) => {
         state.runs = rows;
-        const tbody = byId("runsTable").querySelector("tbody");
-        tbody.innerHTML = "";
-        rows.forEach((row) => {
-          const tr = document.createElement("tr");
-          tr.style.cursor = "pointer";
-          if (row.pending_manual_review) tr.classList.add("pending-review");
-          if (row.run_id === state.selectedRunId) tr.classList.add("selected");
-          tr.innerHTML = `
-            <td>
-              <div class="mono">${esc(row.run_id)}</div>
-              <div class="muted mono">${esc(row.cart_id ?? "-")}</div>
-            </td>
-            <td>${statusBadge(row.status)}</td>
-            <td>${failureBadge(row.failure_type)}</td>
-            <td><span class="${row.retry_allowed ? "retry-yes" : "retry-no"}">${row.retry_allowed ? "allowed" : "blocked"}</span></td>
-            <td>${esc(row.operator_status)}</td>
-            <td>${esc(row.actionable_next_step)}</td>
-          `;
-          tr.onclick = () => loadRunDetail(row.run_id);
-          tbody.appendChild(tr);
-        });
+        applyQueueFilter();
       };
 
       const updateActionPanel = () => {
@@ -751,31 +1032,47 @@
           const body = await parseBody(res);
           if (!res.ok) {
             if (await handleOperatorSessionFailure(res, body)) return;
-            setMessage("listMessage", "error", body.error ?? "Failed to load runs");
+            setMessage(
+              "listMessage",
+              "error",
+              body.error ?? "Failed to load runs (server rejected the request).",
+            );
             return;
           }
-          setRunRows(body.data ?? []);
-          if (!options.silentSuccess) {
-            setMessage("listMessage", "success", `Loaded ${body.count ?? 0} run(s).`);
+          const list = body.data ?? [];
+          setRunRows(list);
+          if (list.length === 0) {
+            if (!options.silentSuccess) {
+              setMessage(
+                "listMessage",
+                "warn",
+                "No runs returned for these filters. Broaden filters or use Refresh to check again.",
+              );
+            } else {
+              setMessage("listMessage", "", "");
+            }
+          } else if (!options.silentSuccess) {
+            setMessage("listMessage", "success", `Showing ${list.length} run(s) (newest first).`);
           }
           if (state.selectedRunId) {
-            const stillExists = (body.data ?? []).some((r) => r.run_id === state.selectedRunId);
+            const stillExists = list.some((r) => r.run_id === state.selectedRunId);
             if (stillExists) {
               await loadRunDetail(state.selectedRunId, { silent: true });
             } else {
               state.selectedRunId = null;
               state.selectedSummary = null;
-              byId("detailRunId").textContent = "-";
-              byId("summaryBox").textContent = "Select a run...";
-              byId("timestampsBox").textContent = "-";
-              byId("evidenceBox").textContent = "No evidence.";
-              byId("historyBox").textContent = "No actions yet.";
+              resetDetailPlaceholders();
             }
           }
         } catch {
-          setMessage("listMessage", "error", "Network error while loading runs.");
+          setMessage(
+            "listMessage",
+            "error",
+            "Network error — could not reach the API. Check VPN/network and API base, then Retry.",
+          );
         } finally {
           setLoading("runs", false);
+          syncAutoRefresh();
           updateActionPanel();
         }
       };
@@ -798,7 +1095,11 @@
           const body = await parseBody(res);
           if (!res.ok) {
             if (await handleOperatorSessionFailure(res, body)) return;
-            setMessage("detailMessage", "error", body.error ?? "Failed to load run detail");
+            setMessage(
+              "detailMessage",
+              "error",
+              body.error ?? "Failed to load this run (not found, wrong store, or server error).",
+            );
             return;
           }
           const data = body.data;
@@ -813,7 +1114,11 @@
             setMessage("detailMessage", "success", "Run detail loaded.");
           }
         } catch {
-          setMessage("detailMessage", "error", "Network error while loading run detail.");
+          setMessage(
+            "detailMessage",
+            "error",
+            "Network error while loading run detail. Check connection and try again.",
+          );
         } finally {
           setLoading("detail", false);
           updateActionPanel();
@@ -941,8 +1246,13 @@
         byId("failureType").value = "";
         byId("pendingManualReview").value = "";
         byId("cartId").value = "";
+        byId("queueSearch").value = "";
         loadRuns();
       };
+      byId("refreshRuns").onclick = () => loadRuns({ silentSuccess: true });
+      byId("queueSearch").addEventListener("input", () => applyQueueFilter());
+      byId("autoRefreshEnabled").addEventListener("change", () => syncAutoRefresh());
+      byId("autoRefreshInterval").addEventListener("change", () => syncAutoRefresh());
       actionButtons.forEach((btn) => {
         btn.onclick = () => submitAction(btn.getAttribute("data-action"));
       });
