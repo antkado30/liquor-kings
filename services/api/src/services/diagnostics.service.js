@@ -9,6 +9,8 @@ export const DIAGNOSTIC_KIND = {
   CODE_MISMATCH: "code_mismatch",
   IDENTITY_WRITE_MISSING_MLCC_ITEM_ID: "identity_write_missing_mlcc_item_id",
   IDENTITY_BACKFILL_REPORT: "identity_backfill_report",
+  /** Internal operator console session lifecycle (payload.event distinguishes details). */
+  OPERATOR_SESSION: "operator_session",
 };
 
 export async function logSystemDiagnostic({

@@ -194,6 +194,47 @@
         opacity: 0.7;
         pointer-events: none;
       }
+      .session-banner {
+        background: #1e3a5f;
+        color: #e5e7eb;
+        padding: 10px 16px;
+        font-size: 13px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .session-banner.signed-out {
+        background: #374151;
+      }
+      .gate {
+        max-width: 720px;
+        margin: 16px auto;
+        padding: 16px;
+      }
+      .gate h2 {
+        margin-top: 0;
+      }
+      .msg.warn {
+        display: block;
+        background: #fef3c7;
+        color: #92400e;
+      }
+      .store-banner {
+        font-weight: 700;
+        color: #fff;
+      }
+      .store-banner .mono {
+        color: #bfdbfe;
+        font-weight: 400;
+      }
+      #workspace {
+        display: none;
+      }
+      #workspace.visible {
+        display: block;
+      }
       @media (max-width: 900px) {
         .layout {
           grid-template-columns: 1fr;
@@ -208,25 +249,62 @@
     <header>
       <strong>Liquor Kings Operator Review Console</strong>
     </header>
+    <div id="sessionBanner" class="session-banner signed-out">
+      <span id="sessionBannerText">Signed out — connect a session to triage runs.</span>
+    </div>
+    <div id="signedOutPanel" class="card gate">
+      <h2>Sign in</h2>
+      <p class="muted">
+        Paste your Supabase access token once. The server sets a secure session cookie; you will not need
+        the token again until you sign out or the session ends.
+      </p>
+      <div class="row">
+        <label>API Base</label>
+        <input id="apiBase" value="" placeholder="http://localhost:4000" />
+      </div>
+      <div class="row" style="margin-top: 8px">
+        <label>Access Token</label>
+        <input id="token" style="min-width: 420px; flex: 1" placeholder="Paste once to start session" />
+      </div>
+      <div class="row" style="margin-top: 8px">
+        <label>Optional store UUID</label>
+        <input
+          id="preferredStoreId"
+          style="min-width: 280px; flex: 1"
+          placeholder="If you have multiple stores, set initial store here"
+        />
+      </div>
+      <div class="row" style="margin-top: 8px">
+        <button id="connectSession">Connect session</button>
+      </div>
+      <div id="gateMessage" class="msg"></div>
+    </div>
+
+    <div id="workspace">
     <div class="layout">
       <section class="card">
         <h3 class="section-title">Run Queue</h3>
         <div class="row">
           <label>API Base</label>
-          <input id="apiBase" value="" placeholder="http://localhost:4000" />
-          <label>Store</label>
+          <input id="apiBaseSignedIn" readonly class="mono" title="Same origin as this page" />
+        </div>
+        <div class="row" style="margin-top: 8px">
+          <div class="store-banner" id="currentStoreBanner">
+            Current store: <span class="mono" id="currentStoreLabel">—</span>
+          </div>
+        </div>
+        <p id="multiStoreHint" class="muted" style="display: none; margin: 4px 0 0">
+          You have multiple stores. Choose one and click <strong>Apply store</strong> to switch context.
+        </p>
+        <div class="row" style="margin-top: 8px">
+          <label>Switch store</label>
           <select id="storeSelect"></select>
-          <button id="changeStore" class="secondary">Use Store</button>
+          <button id="changeStore" class="secondary">Apply store</button>
           <button id="logout" class="secondary">Logout</button>
         </div>
         <div class="row" style="margin-top: 8px">
-          <label>Operator</label>
-          <span id="operatorIdentity" class="muted">Not signed in</span>
-        </div>
-        <div id="authPanel" class="row" style="margin-top: 8px">
-          <label>Access Token</label>
-          <input id="token" style="min-width: 420px" placeholder="Paste once to start session" />
-          <button id="connectSession">Connect Session</button>
+          <label>Signed in as</label>
+          <span id="operatorIdentity" class="muted">—</span>
         </div>
         <div class="row" style="margin-top: 8px">
           <label>Status</label>
@@ -309,6 +387,7 @@
         </p>
       </section>
     </div>
+    </div>
 
     <script>
       const state = {
@@ -320,14 +399,19 @@
         actionInFlight: false,
         authenticated: false,
         stores: [],
+        apiBase: "",
+        currentStore: null,
       };
 
       const byId = (id) => document.getElementById(id);
       const actionButtons = Array.from(document.querySelectorAll("[data-action]"));
       const CONFIRM_ACTIONS = new Set(["retry_now", "cancel", "resolve_without_retry"]);
-      const actionHintEl = byId("actionHint");
+
+      const getApiBase = () =>
+        (state.apiBase || byId("apiBase").value.trim() || window.location.origin).replace(/\/$/, "");
 
       byId("apiBase").value = window.location.origin;
+      state.apiBase = getApiBase();
 
       const getHeaders = () => ({ "Content-Type": "application/json" });
 
@@ -342,12 +426,85 @@
         el.textContent = text;
       };
 
+      const parseBody = async (res) => {
+        try {
+          return await res.json();
+        } catch {
+          return {};
+        }
+      };
+
+      const resetDetailPlaceholders = () => {
+        byId("detailRunId").textContent = "-";
+        byId("summaryBox").innerHTML = '<span class="muted">Select a run...</span>';
+        byId("timestampsBox").innerHTML = '<span class="muted">—</span>';
+        byId("evidenceBox").innerHTML = '<span class="muted">No evidence.</span>';
+        byId("historyBox").innerHTML = '<span class="muted">No actions yet.</span>';
+        byId("reason").value = "";
+        byId("note").value = "";
+      };
+
+      const fullResetUi = () => {
+        state.authenticated = false;
+        state.operator = null;
+        state.stores = [];
+        state.currentStore = null;
+        state.selectedRunId = null;
+        state.selectedSummary = null;
+        state.runs = [];
+        const tbody = byId("runsTable").querySelector("tbody");
+        if (tbody) tbody.innerHTML = "";
+        resetDetailPlaceholders();
+        setMessage("listMessage", "", "");
+        setMessage("detailMessage", "", "");
+        byId("storeSelect").innerHTML = "";
+        updateSessionChrome();
+        updateActionPanel();
+      };
+
+      const handleOperatorSessionFailure = async (res, body) => {
+        const code = body?.code;
+        if (
+          res.status === 401 &&
+          (code === "operator_session_required" || /session/i.test(String(body?.error ?? "")))
+        ) {
+          await fetch(`${getApiBase()}/operator-review/session`, {
+            method: "DELETE",
+            credentials: "same-origin",
+          });
+          fullResetUi();
+          setMessage(
+            "gateMessage",
+            "warn",
+            body?.error ?? "Your session expired. Sign in again.",
+          );
+          return true;
+        }
+        if (res.status === 403 && code === "operator_session_revoked") {
+          await fetch(`${getApiBase()}/operator-review/session`, {
+            method: "DELETE",
+            credentials: "same-origin",
+          });
+          fullResetUi();
+          setMessage(
+            "gateMessage",
+            "warn",
+            body?.error ?? "Store access was revoked. Sign in again if you still have membership.",
+          );
+          return true;
+        }
+        return false;
+      };
+
       const setLoading = (scope, loading) => {
         if (scope === "runs") {
           state.loadingRuns = loading;
-          byId("loadRuns").disabled = loading || state.actionInFlight;
-          byId("resetFilters").disabled = loading || state.actionInFlight;
+          byId("loadRuns").disabled =
+            !state.authenticated || loading || state.actionInFlight;
+          byId("resetFilters").disabled =
+            !state.authenticated || loading || state.actionInFlight;
           byId("runsTable").classList.toggle("loading", loading);
+          byId("connectSession").disabled = loading || state.actionInFlight;
           return;
         }
         if (scope === "detail") {
@@ -359,36 +516,76 @@
         }
       };
 
-      const applySessionUi = () => {
+      const updateSessionChrome = () => {
         const authed = state.authenticated;
-        byId("authPanel").style.display = authed ? "none" : "flex";
-        byId("operatorIdentity").textContent = authed
-          ? `${state.operator?.email ?? state.operator?.id ?? "operator"}`
-          : "Not signed in";
+        byId("signedOutPanel").style.display = authed ? "none" : "block";
+        byId("workspace").classList.toggle("visible", authed);
+        const banner = byId("sessionBanner");
+        const bannerText = byId("sessionBannerText");
+        if (authed) {
+          banner.classList.remove("signed-out");
+          const op = state.operator?.email ?? state.operator?.id ?? "operator";
+          const cs = state.currentStore;
+          const storeLine = cs
+            ? `${cs.name ?? "Store"} (${cs.id})`
+            : state.stores?.[0]
+              ? `${state.stores[0].name ?? "Store"} (${state.stores[0].id})`
+              : "—";
+          bannerText.innerHTML = `<span>Signed in as <strong>${esc(op)}</strong></span> · <span class="store-banner">Active store: <span class="mono">${esc(storeLine)}</span></span>`;
+          byId("apiBaseSignedIn").value = getApiBase();
+          byId("operatorIdentity").textContent = op;
+          byId("currentStoreLabel").textContent = cs
+            ? `${cs.name ?? "(unnamed)"} · ${cs.id}`
+            : "—";
+          byId("multiStoreHint").style.display =
+            state.stores && state.stores.length > 1 ? "block" : "none";
+        } else {
+          banner.classList.add("signed-out");
+          bannerText.textContent =
+            "Signed out — connect a session to triage runs. Session cookies clear on logout or when access is revoked.";
+          byId("multiStoreHint").style.display = "none";
+        }
         byId("storeSelect").disabled = !authed;
-        byId("changeStore").disabled = !authed;
+        byId("changeStore").disabled = !authed || state.loadingRuns || state.actionInFlight;
         byId("logout").disabled = !authed;
-        byId("loadRuns").disabled = !authed || state.loadingRuns || state.actionInFlight;
-        byId("resetFilters").disabled = !authed || state.loadingRuns || state.actionInFlight;
+        byId("connectSession").disabled = state.loadingRuns || state.actionInFlight;
       };
 
       const loadSession = async () => {
         try {
-          const res = await fetch(`${byId("apiBase").value.trim()}/operator-review/session`, {
+          const res = await fetch(`${getApiBase()}/operator-review/session`, {
             credentials: "same-origin",
           });
-          const body = await res.json();
-          if (!res.ok || !body.authenticated) {
+          const body = await parseBody(res);
+          if (!res.ok) {
+            state.authenticated = false;
+            fullResetUi();
+            setMessage("gateMessage", "error", body.error ?? "Could not read session.");
+            return;
+          }
+          if (!body.authenticated) {
             state.authenticated = false;
             state.operator = null;
             state.stores = [];
+            state.currentStore = null;
             byId("storeSelect").innerHTML = "";
-            applySessionUi();
+            if (body.reason === "invalid_or_expired" || body.reason === "membership_revoked") {
+              setMessage("gateMessage", "warn", body.message ?? "Session is no longer valid.");
+            } else {
+              setMessage("gateMessage", "", "");
+            }
+            updateSessionChrome();
+            updateActionPanel();
             return;
           }
           state.authenticated = true;
           state.operator = body.operator;
           state.stores = body.stores ?? [];
+          state.currentStore = body.current_store ?? {
+            id: body.current_store_id,
+            name: null,
+          };
+          setMessage("gateMessage", "", "");
           byId("storeSelect").innerHTML = state.stores
             .map(
               (s) =>
@@ -397,10 +594,12 @@
                 }>${esc(s.name ?? s.id)}</option>`,
             )
             .join("");
-          applySessionUi();
+          updateSessionChrome();
+          updateActionPanel();
         } catch {
           state.authenticated = false;
-          applySessionUi();
+          fullResetUi();
+          setMessage("gateMessage", "error", "Network error while checking session.");
         }
       };
 
@@ -523,7 +722,8 @@
         const hasRun = Boolean(state.selectedRunId && summary);
         actionButtons.forEach((btn) => {
           const action = btn.getAttribute("data-action");
-          let disabled = !hasRun || state.actionInFlight || state.loadingDetail;
+          let disabled =
+            !state.authenticated || !hasRun || state.actionInFlight || state.loadingDetail;
           if (hasRun) {
             if (action === "retry_now" && !summary.retry_allowed) disabled = true;
             if (action === "resolve_without_retry" && summary.status !== "failed") {
@@ -536,20 +736,21 @@
       };
 
       const loadRuns = async (options = {}) => {
+        if (!state.authenticated) return;
         setMessage("listMessage", "", "");
         setLoading("runs", true);
-        const apiBase = byId("apiBase").value.trim();
         const query = qs({
           status: byId("status").value,
           failure_type: byId("failureType").value,
           pending_manual_review: byId("pendingManualReview").value,
           cart_id: byId("cartId").value.trim(),
         });
-        const url = `${apiBase}/operator-review/api/runs${query ? `?${query}` : ""}`;
+        const url = `${getApiBase()}/operator-review/api/runs${query ? `?${query}` : ""}`;
         try {
           const res = await fetch(url, { headers: getHeaders(), credentials: "same-origin" });
-          const body = await res.json();
+          const body = await parseBody(res);
           if (!res.ok) {
+            if (await handleOperatorSessionFailure(res, body)) return;
             setMessage("listMessage", "error", body.error ?? "Failed to load runs");
             return;
           }
@@ -580,19 +781,23 @@
       };
 
       const loadRunDetail = async (runId, options = {}) => {
+        if (!state.authenticated) return;
         setMessage("detailMessage", "", "");
         state.selectedRunId = runId;
         byId("detailRunId").textContent = runId;
         setLoading("detail", true);
         updateActionPanel();
-        const apiBase = byId("apiBase").value.trim();
         try {
-          const res = await fetch(`${apiBase}/operator-review/api/runs/${runId}/review-bundle`, {
-            headers: getHeaders(),
-            credentials: "same-origin",
-          });
-          const body = await res.json();
+          const res = await fetch(
+            `${getApiBase()}/operator-review/api/runs/${runId}/review-bundle`,
+            {
+              headers: getHeaders(),
+              credentials: "same-origin",
+            },
+          );
+          const body = await parseBody(res);
           if (!res.ok) {
+            if (await handleOperatorSessionFailure(res, body)) return;
             setMessage("detailMessage", "error", body.error ?? "Failed to load run detail");
             return;
           }
@@ -631,7 +836,6 @@
         state.actionInFlight = true;
         updateActionPanel();
         setMessage("detailMessage", "", "");
-        const apiBase = byId("apiBase").value.trim();
         const payload = {
           action,
           reason: byId("reason").value.trim() || null,
@@ -639,7 +843,7 @@
         };
         try {
           const res = await fetch(
-            `${apiBase}/operator-review/api/runs/${state.selectedRunId}/actions`,
+            `${getApiBase()}/operator-review/api/runs/${state.selectedRunId}/actions`,
             {
               method: "POST",
               headers: getHeaders(),
@@ -647,8 +851,9 @@
               credentials: "same-origin",
             },
           );
-          const body = await res.json();
+          const body = await parseBody(res);
           if (!res.ok) {
+            if (await handleOperatorSessionFailure(res, body)) return;
             setMessage("detailMessage", "error", body.error ?? "Action rejected");
             return;
           }
@@ -670,66 +875,66 @@
 
       byId("loadRuns").onclick = loadRuns;
       byId("connectSession").onclick = async () => {
-        setMessage("listMessage", "", "");
+        setMessage("gateMessage", "", "");
         const token = byId("token").value.trim();
         if (!token) {
-          setMessage("listMessage", "error", "Access token is required.");
+          setMessage("gateMessage", "error", "Access token is required.");
           return;
         }
-        const apiBase = byId("apiBase").value.trim();
-        const selectedStore = byId("storeSelect").value || null;
-        const res = await fetch(`${apiBase}/operator-review/session`, {
+        state.apiBase = byId("apiBase").value.trim() || window.location.origin;
+        const preferredStore = byId("preferredStoreId").value.trim() || null;
+        const res = await fetch(`${getApiBase()}/operator-review/session`, {
           method: "POST",
           headers: getHeaders(),
-          body: JSON.stringify({ accessToken: token, storeId: selectedStore }),
+          body: JSON.stringify({ accessToken: token, storeId: preferredStore }),
           credentials: "same-origin",
         });
-        const body = await res.json();
+        const body = await parseBody(res);
         if (!res.ok) {
-          setMessage("listMessage", "error", body.error ?? "Failed to create session.");
+          setMessage("gateMessage", "error", body.error ?? "Failed to create session.");
           return;
         }
         byId("token").value = "";
+        byId("preferredStoreId").value = "";
         await loadSession();
-        setMessage("listMessage", "success", "Operator session connected.");
-        await loadRuns({ silentSuccess: true });
+        if (state.authenticated) {
+          setMessage("gateMessage", "", "");
+          setMessage("listMessage", "success", "Operator session connected.");
+          await loadRuns({ silentSuccess: true });
+        }
       };
       byId("changeStore").onclick = async () => {
         const storeId = byId("storeSelect").value;
         if (!storeId) return;
-        const apiBase = byId("apiBase").value.trim();
-        const res = await fetch(`${apiBase}/operator-review/session/store`, {
+        const res = await fetch(`${getApiBase()}/operator-review/session/store`, {
           method: "PATCH",
           headers: getHeaders(),
           body: JSON.stringify({ storeId }),
           credentials: "same-origin",
         });
-        const body = await res.json();
+        const body = await parseBody(res);
         if (!res.ok) {
+          if (await handleOperatorSessionFailure(res, body)) return;
           setMessage("listMessage", "error", body.error ?? "Failed to switch store.");
           return;
         }
         state.selectedRunId = null;
         state.selectedSummary = null;
+        if (body.current_store) state.currentStore = body.current_store;
+        resetDetailPlaceholders();
         setMessage("listMessage", "success", "Store switched.");
         await loadSession();
+        updateSessionChrome();
         await loadRuns({ silentSuccess: true });
       };
       byId("logout").onclick = async () => {
-        const apiBase = byId("apiBase").value.trim();
-        await fetch(`${apiBase}/operator-review/session`, {
+        await fetch(`${getApiBase()}/operator-review/session`, {
           method: "DELETE",
           credentials: "same-origin",
         });
-        state.selectedRunId = null;
-        state.selectedSummary = null;
+        fullResetUi();
+        setMessage("gateMessage", "success", "Signed out. Session cookie cleared.");
         await loadSession();
-        setRunRows([]);
-        byId("detailRunId").textContent = "-";
-        byId("summaryBox").textContent = "Select a run...";
-        byId("timestampsBox").textContent = "-";
-        byId("evidenceBox").textContent = "No evidence.";
-        byId("historyBox").textContent = "No actions yet.";
       };
       byId("resetFilters").onclick = () => {
         byId("status").value = "";

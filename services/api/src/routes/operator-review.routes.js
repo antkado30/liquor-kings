@@ -6,6 +6,7 @@ import {
   getExecutionRunOperatorReviewBundleById,
   listExecutionRunsForOperatorReview,
 } from "../services/execution-run.service.js";
+import { logSystemDiagnostic, DIAGNOSTIC_KIND } from "../services/diagnostics.service.js";
 
 const router = express.Router();
 const SESSION_COOKIE = "lk_operator_session";
@@ -66,10 +67,22 @@ const getSession = (req) => {
   return { sid, ...record };
 };
 
+const logOperatorSessionEvent = async ({ event, userId = null, storeId = null, payload = {} }) => {
+  await logSystemDiagnostic({
+    kind: DIAGNOSTIC_KIND.OPERATOR_SESSION,
+    userId,
+    storeId,
+    payload: { event, ...payload },
+  });
+};
+
 const requireOperatorSession = async (req, res, next) => {
   const session = getSession(req);
   if (!session) {
-    return res.status(401).json({ error: "Operator session required" });
+    return res.status(401).json({
+      error: "Operator session required or expired",
+      code: "operator_session_required",
+    });
   }
   const { data: stores, error } = await listUserStores(session.userId);
   if (error) return res.status(500).json({ error: error.message });
@@ -77,7 +90,16 @@ const requireOperatorSession = async (req, res, next) => {
   if (!allowed) {
     sessions.delete(session.sid);
     res.setHeader("Set-Cookie", cookieString(SESSION_COOKIE, "", 0));
-    return res.status(403).json({ error: "Store membership is no longer active" });
+    await logOperatorSessionEvent({
+      event: "session_invalidated",
+      userId: session.userId,
+      storeId: session.storeId,
+      payload: { reason: "membership_revoked_or_store_removed" },
+    });
+    return res.status(403).json({
+      error: "Store membership is no longer active",
+      code: "operator_session_revoked",
+    });
   }
   sessions.set(session.sid, {
     ...session,
@@ -124,24 +146,59 @@ router.post("/session", async (req, res) => {
     expiresAt: now() + SESSION_TTL_MS,
   });
   res.setHeader("Set-Cookie", cookieString(SESSION_COOKIE, sid, SESSION_TTL_MS / 1000));
+  await logOperatorSessionEvent({
+    event: "session_created",
+    userId: user.id,
+    storeId: selected.id,
+    payload: { store_count: stores.length },
+  });
   return res.status(200).json({
     success: true,
     operator: { id: user.id, email: user.email ?? null },
     stores,
     current_store_id: selected.id,
+    current_store: { id: selected.id, name: selected.name ?? null },
   });
 });
 
 router.get("/session", async (req, res) => {
+  const cookies = parseCookies(req.headers.cookie ?? "");
+  const cookieSid = cookies[SESSION_COOKIE];
   const session = getSession(req);
-  if (!session) return res.status(200).json({ success: true, authenticated: false });
+  if (!session) {
+    if (cookieSid) {
+      res.setHeader("Set-Cookie", cookieString(SESSION_COOKIE, "", 0));
+      await logOperatorSessionEvent({
+        event: "session_invalidated",
+        payload: { reason: "invalid_or_expired_cookie", had_cookie: true },
+      });
+      return res.status(200).json({
+        success: true,
+        authenticated: false,
+        reason: "invalid_or_expired",
+        message: "Session expired, was cleared, or this server restarted. Sign in again.",
+      });
+    }
+    return res.status(200).json({ success: true, authenticated: false });
+  }
   const { data: stores, error } = await listUserStores(session.userId);
   if (error) return res.status(500).json({ error: error.message });
   const currentStore = (stores ?? []).find((s) => s.id === session.storeId);
   if (!currentStore) {
     sessions.delete(session.sid);
     res.setHeader("Set-Cookie", cookieString(SESSION_COOKIE, "", 0));
-    return res.status(200).json({ success: true, authenticated: false });
+    await logOperatorSessionEvent({
+      event: "session_invalidated",
+      userId: session.userId,
+      storeId: session.storeId,
+      payload: { reason: "membership_revoked_or_store_removed" },
+    });
+    return res.status(200).json({
+      success: true,
+      authenticated: false,
+      reason: "membership_revoked",
+      message: "You no longer have access to the selected store. Sign in again.",
+    });
   }
   return res.status(200).json({
     success: true,
@@ -149,6 +206,7 @@ router.get("/session", async (req, res) => {
     operator: { id: session.userId, email: session.email ?? null },
     stores: stores ?? [],
     current_store_id: currentStore.id,
+    current_store: { id: currentStore.id, name: currentStore.name ?? null },
   });
 });
 
@@ -161,19 +219,47 @@ router.patch("/session/store", requireOperatorSession, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   const selected = (stores ?? []).find((s) => s.id === requestedStoreId);
   if (!selected) return res.status(403).json({ error: "Not a member of requested store" });
+  const previousStoreId = req.operatorSession.storeId;
   sessions.set(req.operatorSession.sid, {
     ...(sessions.get(req.operatorSession.sid) ?? {}),
     storeId: selected.id,
     expiresAt: now() + SESSION_TTL_MS,
   });
-  return res.status(200).json({ success: true, current_store_id: selected.id });
+  await logOperatorSessionEvent({
+    event: "store_switched",
+    userId: req.operatorSession.userId,
+    storeId: selected.id,
+    payload: { from_store_id: previousStoreId, to_store_id: selected.id },
+  });
+  return res.status(200).json({
+    success: true,
+    current_store_id: selected.id,
+    current_store: { id: selected.id, name: selected.name ?? null },
+  });
 });
 
-router.delete("/session", (req, res) => {
+router.delete("/session", async (req, res) => {
   const cookies = parseCookies(req.headers.cookie ?? "");
   const sid = cookies[SESSION_COOKIE];
-  if (sid) sessions.delete(sid);
+  let userId = null;
+  let storeId = null;
+  if (sid) {
+    const rec = sessions.get(sid);
+    if (rec) {
+      userId = rec.userId;
+      storeId = rec.storeId;
+    }
+    sessions.delete(sid);
+  }
   res.setHeader("Set-Cookie", cookieString(SESSION_COOKIE, "", 0));
+  if (userId) {
+    await logOperatorSessionEvent({
+      event: "logout",
+      userId,
+      storeId,
+      payload: {},
+    });
+  }
   return res.status(200).json({ success: true });
 });
 
