@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react";
 import { failureGuidanceText } from "../lib/failureGuidance";
+import {
+  partitionForBulkAcknowledge,
+  partitionForBulkMarkManual,
+} from "./bulkTriageEligibility";
 import { FailureBadge, StatusBadge } from "./components/Badges";
 import { Msg } from "./components/Msg";
 import {
@@ -36,6 +40,12 @@ type Props = {
   onLoadRuns: () => void;
   onRefresh: () => void;
   onResetFilters: () => void;
+  bulkSelectedRunIds: string[];
+  onToggleBulkRunId: (runId: string) => void;
+  onClearBulkSelection: () => void;
+  onAddToBulkSelection: (runIds: string[]) => void;
+  onBulkAcknowledge: () => void;
+  onBulkMarkManual: () => void;
 };
 
 function runCardPriorityClass(row: RunSummaryRow): string {
@@ -75,12 +85,32 @@ export function RunQueuePanel({
   onLoadRuns,
   onRefresh,
   onResetFilters,
+  bulkSelectedRunIds,
+  onToggleBulkRunId,
+  onClearBulkSelection,
+  onAddToBulkSelection,
+  onBulkAcknowledge,
+  onBulkMarkManual,
 }: Props) {
   const [sortMode, setSortMode] = useState<QueueSortMode>("priority");
 
   const displayRuns = useMemo(
     () => sortRunsForQueue(filteredRuns, sortMode),
     [filteredRuns, sortMode],
+  );
+
+  const bulkSet = useMemo(() => new Set(bulkSelectedRunIds), [bulkSelectedRunIds]);
+  const ackBulk = useMemo(
+    () => partitionForBulkAcknowledge(bulkSelectedRunIds, runs),
+    [bulkSelectedRunIds, runs],
+  );
+  const manualBulk = useMemo(
+    () => partitionForBulkMarkManual(bulkSelectedRunIds, runs),
+    [bulkSelectedRunIds, runs],
+  );
+  const visibleBulkCount = useMemo(
+    () => displayRuns.reduce((n, r) => n + (bulkSet.has(r.run_id) ? 1 : 0), 0),
+    [displayRuns, bulkSet],
   );
 
   return (
@@ -191,6 +221,74 @@ export function RunQueuePanel({
           <option value={60}>every 60s</option>
         </select>
       </div>
+      <div className="bulk-triage-bar">
+        <div className="bulk-triage-summary">
+          <strong>Bulk triage</strong>
+          <span className="muted">
+            {bulkSelectedRunIds.length} selected
+            {filteredRuns.length > 0 && bulkSelectedRunIds.length > 0
+              ? ` · ${visibleBulkCount} in current list view`
+              : ""}
+          </span>
+        </div>
+        <div className="bulk-triage-actions row" style={{ flexWrap: "wrap", gap: 8 }}>
+          <button
+            type="button"
+            className="secondary"
+            disabled={loadingRuns || actionInFlight || displayRuns.length === 0}
+            onClick={() => onAddToBulkSelection(displayRuns.map((r) => r.run_id))}
+          >
+            Select visible
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={loadingRuns || actionInFlight || bulkSelectedRunIds.length === 0}
+            onClick={onClearBulkSelection}
+          >
+            Clear selection
+          </button>
+          <button
+            type="button"
+            disabled={
+              loadingRuns || actionInFlight || ackBulk.eligible.length === 0 || bulkSelectedRunIds.length === 0
+            }
+            onClick={() => void onBulkAcknowledge()}
+            title={
+              ackBulk.eligible.length === 0 && bulkSelectedRunIds.length > 0
+                ? "No selected runs are eligible (see hint below)."
+                : undefined
+            }
+          >
+            Acknowledge ({ackBulk.eligible.length} eligible)
+          </button>
+          <button
+            type="button"
+            disabled={
+              loadingRuns ||
+              actionInFlight ||
+              manualBulk.eligible.length === 0 ||
+              bulkSelectedRunIds.length === 0
+            }
+            onClick={() => void onBulkMarkManual()}
+            title={
+              manualBulk.eligible.length === 0 && bulkSelectedRunIds.length > 0
+                ? "No selected runs are eligible (see hint below)."
+                : undefined
+            }
+          >
+            Mark manual ({manualBulk.eligible.length} eligible)
+          </button>
+        </div>
+      </div>
+      <p className="muted bulk-eligibility-hint" style={{ fontSize: 12, marginTop: 4 }}>
+        Eligibility is client-side triage only; each run is still validated when submitted.{" "}
+        <strong>Acknowledge</strong>: queued, running, or failed only.{" "}
+        <strong>Mark manual</strong>: skips succeeded, canceled, and runs already pending manual. Optional{" "}
+        <strong>reason</strong> / <strong>note</strong> in run detail apply to every bulk request.{" "}
+        <strong>Bulk resolve_without_retry</strong> is intentionally unavailable: failures need per-run review
+        before closing without retry.
+      </p>
       <Msg type={listMsg.type} text={listMsg.text} />
       <div className={`runs-list ${loadingRuns ? "loading" : ""}`}>
         {runs.length === 0 ? (
@@ -216,41 +314,58 @@ export function RunQueuePanel({
             return (
               <div
                 key={row.run_id}
-                role="button"
-                tabIndex={0}
-                className={`run-card ${band}${row.pending_manual_review ? " pending-review" : ""}${selectedRunId === row.run_id ? " selected" : ""}`}
-                onClick={() => onSelectRun(row.run_id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") onSelectRun(row.run_id);
-                }}
+                className={`run-card run-card-with-bulk ${band}${row.pending_manual_review ? " pending-review" : ""}${selectedRunId === row.run_id ? " selected" : ""}${bulkSet.has(row.run_id) ? " run-card-bulk-selected" : ""}`}
               >
-                <div>
-                  <div className="queue-priority-row">
-                    <span className="queue-priority-chip">{reason}</span>
+                <label
+                  className="run-card-check"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    checked={bulkSet.has(row.run_id)}
+                    onChange={() => onToggleBulkRunId(row.run_id)}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={`Select run ${row.run_id} for bulk triage`}
+                  />
+                </label>
+                <div
+                  className="run-card-main"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectRun(row.run_id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSelectRun(row.run_id);
+                  }}
+                >
+                  <div>
+                    <div className="queue-priority-row">
+                      <span className="queue-priority-chip">{reason}</span>
+                    </div>
+                    <div className="primary-line">
+                      <StatusBadge status={row.status} />
+                      <FailureBadge ft={row.failure_type} />
+                      <span className={row.retry_allowed ? "retry-yes" : "retry-no"}>
+                        Retry: {row.retry_allowed ? "allowed" : "blocked"}
+                      </span>
+                    </div>
+                    <div className="triage-row">
+                      <strong>Next:</strong> {row.actionable_next_step ?? "—"} ·{" "}
+                      <strong>Operator:</strong> {row.operator_status ?? "—"}
+                    </div>
+                    <div className="ids mono">Run {row.run_id}</div>
+                    <div className="ids mono">Cart {row.cart_id ?? "—"}</div>
+                    {hint ? <div className="hint">{hint}</div> : null}
                   </div>
-                  <div className="primary-line">
-                    <StatusBadge status={row.status} />
-                    <FailureBadge ft={row.failure_type} />
-                    <span className={row.retry_allowed ? "retry-yes" : "retry-no"}>
-                      Retry: {row.retry_allowed ? "allowed" : "blocked"}
-                    </span>
+                  <div style={{ textAlign: "right", fontSize: 11, color: "#6b7280" }}>
+                    {row.pending_manual_review ? (
+                      <>
+                        <strong>MANUAL REVIEW</strong>
+                        <br />
+                      </>
+                    ) : null}
+                    Open →
                   </div>
-                  <div className="triage-row">
-                    <strong>Next:</strong> {row.actionable_next_step ?? "—"} ·{" "}
-                    <strong>Operator:</strong> {row.operator_status ?? "—"}
-                  </div>
-                  <div className="ids mono">Run {row.run_id}</div>
-                  <div className="ids mono">Cart {row.cart_id ?? "—"}</div>
-                  {hint ? <div className="hint">{hint}</div> : null}
-                </div>
-                <div style={{ textAlign: "right", fontSize: 11, color: "#6b7280" }}>
-                  {row.pending_manual_review ? (
-                    <>
-                      <strong>MANUAL REVIEW</strong>
-                      <br />
-                    </>
-                  ) : null}
-                  Open →
                 </div>
               </div>
             );

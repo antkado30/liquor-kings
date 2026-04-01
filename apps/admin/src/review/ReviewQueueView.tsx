@@ -36,6 +36,12 @@ export function ReviewQueueView() {
         onLoadRuns={() => void ctx.loadRuns()}
         onRefresh={() => void ctx.loadRuns({ silentSuccess: true })}
         onResetFilters={ctx.resetFilters}
+        bulkSelectedRunIds={ctx.bulkSelectedRunIds}
+        onToggleBulkRunId={ctx.toggleBulkRunId}
+        onClearBulkSelection={ctx.clearBulkSelection}
+        onAddToBulkSelection={ctx.addToBulkSelection}
+        onBulkAcknowledge={() => void ctx.submitBulkTriage("acknowledge")}
+        onBulkMarkManual={() => void ctx.submitBulkTriage("mark_for_manual_review")}
       />
     </div>
   );

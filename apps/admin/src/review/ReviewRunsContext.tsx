@@ -17,6 +17,11 @@ import {
 } from "../api/operatorReview";
 import { useOperatorSession } from "../session/OperatorSessionContext";
 import type { FlashMsg, OpAction, RunSummaryRow, Summary } from "../operator-review/types";
+import {
+  partitionForBulkAcknowledge,
+  partitionForBulkMarkManual,
+  summarizeSkipped,
+} from "../operator-review/bulkTriageEligibility";
 import { buildQuery, CONFIRM_ACTIONS } from "../operator-review/utils";
 import { runIdFromReviewDetailPath } from "./pathUtils";
 
@@ -66,6 +71,11 @@ type ReviewRunsCtx = {
   canRetry: boolean;
   canResolve: boolean;
   canCancel: boolean;
+  bulkSelectedRunIds: string[];
+  toggleBulkRunId: (runId: string) => void;
+  clearBulkSelection: () => void;
+  addToBulkSelection: (runIds: string[]) => void;
+  submitBulkTriage: (action: "acknowledge" | "mark_for_manual_review") => Promise<void>;
 };
 
 const ReviewRunsContext = createContext<ReviewRunsCtx | null>(null);
@@ -105,6 +115,8 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
 
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
   const [autoRefreshSec, setAutoRefreshSec] = useState(30);
+
+  const [bulkSelectedRunIds, setBulkSelectedRunIds] = useState<string[]>([]);
 
   const resetDetail = useCallback(() => {
     setSelectedRunId(null);
@@ -272,6 +284,129 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     );
   }, [runs, queueSearch]);
 
+  useEffect(() => {
+    setBulkSelectedRunIds((prev) => prev.filter((id) => runs.some((r) => r.run_id === id)));
+  }, [runs]);
+
+  const toggleBulkRunId = useCallback((runId: string) => {
+    setBulkSelectedRunIds((prev) =>
+      prev.includes(runId) ? prev.filter((x) => x !== runId) : [...prev, runId],
+    );
+  }, []);
+
+  const clearBulkSelection = useCallback(() => setBulkSelectedRunIds([]), []);
+
+  const addToBulkSelection = useCallback((runIds: string[]) => {
+    if (runIds.length === 0) return;
+    setBulkSelectedRunIds((prev) => {
+      const s = new Set(prev);
+      for (const id of runIds) s.add(id);
+      return [...s];
+    });
+  }, []);
+
+  const submitBulkTriage = useCallback(
+    async (action: "acknowledge" | "mark_for_manual_review") => {
+      if (!authenticated || actionInFlight) return;
+      const partition =
+        action === "acknowledge"
+          ? partitionForBulkAcknowledge(bulkSelectedRunIds, runs)
+          : partitionForBulkMarkManual(bulkSelectedRunIds, runs);
+      const { eligible, skipped } = partition;
+      if (eligible.length === 0) {
+        setListMsg({
+          type: "warn",
+          text:
+            skipped.length === 0
+              ? "No runs selected for bulk action."
+              : `No eligible runs. ${summarizeSkipped(skipped)}`,
+        });
+        return;
+      }
+      const skipSummary = skipped.length
+        ? ` ${skipped.length} selected run(s) will be skipped (ineligible).`
+        : "";
+      const sharedNote = note.trim() || null;
+      const sharedReason = reason.trim() || null;
+      if (
+        !window.confirm(
+          `Bulk ${action.replace(/_/g, " ")}: the server will validate and audit each of ${eligible.length} run(s) separately. Optional reason/note from the detail panel apply to every request.${skipSummary}\n\nProceed?`,
+        )
+      ) {
+        return;
+      }
+      setActionInFlight(true);
+      setListMsg({ type: "", text: "" });
+      const successes: string[] = [];
+      const failures: { id: string; err: string }[] = [];
+      try {
+        for (const id of eligible) {
+          const res = await postRunAction(id, {
+            action,
+            reason: sharedReason,
+            note: sharedNote,
+          });
+          const body = await parseJson(res);
+          if (!res.ok) {
+            if (await handleSessionFailure(res, body)) {
+              return;
+            }
+            failures.push({
+              id,
+              err: String(body.error ?? `HTTP ${res.status}`),
+            });
+          } else {
+            successes.push(id);
+          }
+        }
+        const parts = [
+          `Bulk ${action}: ${successes.length} ok`,
+          failures.length ? `${failures.length} rejected by server` : null,
+          skipped.length ? `${skipped.length} skipped (ineligible before submit)` : null,
+        ].filter(Boolean);
+        let text = parts.join(", ") + ".";
+        if (skipped.length) {
+          text += ` Skipped: ${summarizeSkipped(skipped)}`;
+        }
+        if (failures.length) {
+          text +=
+            " Server errors: " +
+            failures
+              .slice(0, 5)
+              .map((f) => `${f.id.slice(0, 8)}… ${f.err}`)
+              .join("; ");
+          if (failures.length > 5) text += ` (+${failures.length - 5} more)`;
+        }
+        setListMsg({ type: failures.length ? "warn" : "success", text });
+        setBulkSelectedRunIds((prev) => prev.filter((id) => !successes.includes(id)));
+        await loadRuns({ silentSuccess: true });
+        if (selectedRunId && successes.includes(selectedRunId)) {
+          await loadRunDetail(selectedRunId, true);
+        }
+        if (failures.length === 0) {
+          setReason("");
+          setNote("");
+        }
+      } catch {
+        setListMsg({ type: "error", text: "Network error during bulk action." });
+      } finally {
+        setActionInFlight(false);
+      }
+    },
+    [
+      authenticated,
+      actionInFlight,
+      bulkSelectedRunIds,
+      runs,
+      note,
+      reason,
+      handleSessionFailure,
+      loadRuns,
+      loadRunDetail,
+      selectedRunId,
+    ],
+  );
+
   const submitAction = useCallback(
     async (action: string) => {
       if (!selectedRunId) {
@@ -335,6 +470,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     setPendingManualFilter("");
     setCartIdFilter("");
     setQueueSearch("");
+    setBulkSelectedRunIds([]);
     void loadRunsWithFilters(
       { status: "", failureType: "", pendingManual: "", cartId: "" },
       undefined,
@@ -381,6 +517,11 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
       canRetry,
       canResolve,
       canCancel,
+      bulkSelectedRunIds,
+      toggleBulkRunId,
+      clearBulkSelection,
+      addToBulkSelection,
+      submitBulkTriage,
     }),
     [
       statusFilter,
@@ -411,6 +552,11 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
       canRetry,
       canResolve,
       canCancel,
+      bulkSelectedRunIds,
+      toggleBulkRunId,
+      clearBulkSelection,
+      addToBulkSelection,
+      submitBulkTriage,
     ],
   );
 
