@@ -28,6 +28,7 @@ const requiredFiles = [
   "services/api/src/workers/mlcc-browser-worker.js",
   "services/api/src/workers/mlcc-browser-add-by-code-probe.js",
   "services/api/src/workers/mlcc-phase-2k-policy.js",
+  "services/api/src/workers/mlcc-phase-2m-policy.js",
   "services/api/src/workers/execution-worker.js",
   "apps/admin/src/pages/DiagnosticsPage.tsx",
   "apps/admin/src/pages/OperatorOverviewPage.tsx",

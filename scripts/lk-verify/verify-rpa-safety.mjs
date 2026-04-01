@@ -17,6 +17,7 @@ const workerPath = "services/api/src/workers/mlcc-browser-worker.js";
 const probePath = "services/api/src/workers/mlcc-browser-add-by-code-probe.js";
 const phase2iPolicyPath = "services/api/src/workers/mlcc-phase-2i-policy.js";
 const phase2kPolicyPath = "services/api/src/workers/mlcc-phase-2k-policy.js";
+const phase2mPolicyPath = "services/api/src/workers/mlcc-phase-2m-policy.js";
 const phasesDocPath = "docs/lk/architecture/rpa-rebuild-phases.md";
 
 const checks = [];
@@ -25,7 +26,14 @@ const worker = read(workerPath);
 const probe = read(probePath);
 const phase2iPolicy = read(phase2iPolicyPath);
 const phase2kPolicy = read(phase2kPolicyPath);
+const phase2mPolicy = read(phase2mPolicyPath);
 const phasesDoc = read(phasesDocPath);
+
+if (worker.includes("mlcc-phase-2m-policy") || probe.includes("mlcc-phase-2m-policy")) {
+  checks.push(
+    "Phase 2m policy must not be imported by mlcc-browser-worker.js or mlcc-browser-add-by-code-probe.js until a future execution phase implements add/apply-line interaction",
+  );
+}
 
 if (worker.includes("mlcc-phase-2k-policy")) {
   checks.push(
@@ -245,6 +253,46 @@ if (!phasesDoc.includes("Phase 2l")) {
 
 if (!phasesDoc.includes("mlcc-phase-2k-policy.js")) {
   checks.push("rpa-rebuild-phases.md must reference mlcc-phase-2k-policy.js");
+}
+
+if (!phase2mPolicy.includes("export const PHASE_2M_POLICY_VERSION")) {
+  checks.push("mlcc-phase-2m-policy.js must export PHASE_2M_POLICY_VERSION (Phase 2m)");
+}
+
+if (!phase2mPolicy.includes("export function buildPhase2mAddApplyLineFutureGateManifest")) {
+  checks.push(
+    "mlcc-phase-2m-policy.js must export buildPhase2mAddApplyLineFutureGateManifest",
+  );
+}
+
+if (!phase2mPolicy.includes("export function buildPhase2mPostAddApplyLadder")) {
+  checks.push("mlcc-phase-2m-policy.js must export buildPhase2mPostAddApplyLadder");
+}
+
+if (!phase2mPolicy.includes("out_of_scope_until_separate_approval")) {
+  checks.push(
+    "mlcc-phase-2m-policy.js must tag ladder steps with out_of_scope_until_separate_approval",
+  );
+}
+
+if (!phase2mPolicy.includes("add_apply_line_rehearsal")) {
+  checks.push(
+    "mlcc-phase-2m-policy.js must define add_apply_line_rehearsal ladder step",
+  );
+}
+
+if (!phase2mPolicy.includes("post_add_apply_observation")) {
+  checks.push(
+    "mlcc-phase-2m-policy.js must define post_add_apply_observation ladder step",
+  );
+}
+
+if (!phasesDoc.includes("Phase 2m")) {
+  checks.push("rpa-rebuild-phases.md must document Phase 2m");
+}
+
+if (!phasesDoc.includes("mlcc-phase-2m-policy.js")) {
+  checks.push("rpa-rebuild-phases.md must reference mlcc-phase-2m-policy.js");
 }
 
 // Phase 2b/2c: no product .fill in probe; Phase 2g sentinel; Phase 2h/2j single-field; Phase 2l combined two-field + reverse clear.

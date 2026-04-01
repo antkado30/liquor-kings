@@ -5,6 +5,7 @@
  * Bump version when combined-interaction criteria or ladder semantics change.
  *
  * Complements Phase 2i (quantity-only gates + broader ladder) and Phase 2j (runtime qty-only rehearsal).
+ * Add/apply-line planning detail: see mlcc-phase-2m-policy.js (Phase 2m; not imported here).
  */
 
 export const PHASE_2K_POLICY_VERSION = "lk-rpa-2k-2";

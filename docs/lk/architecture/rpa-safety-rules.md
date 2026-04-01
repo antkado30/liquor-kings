@@ -8,6 +8,7 @@
 - **Add-to-cart** or other **cart/order mutation**
 - **Quantity** field entry except **Phase 2j** when **both** `MLCC_ADD_BY_CODE_PHASE_2J` and `MLCC_ADD_BY_CODE_PHASE_2J_APPROVED` are true and tenant quantity selector + valid test quantity are configured (quantity field **only**; no code interaction in that phase)
 - **Combined** code+quantity interaction — **forbidden** except **Phase 2l** when **both** `MLCC_ADD_BY_CODE_PHASE_2L` and `MLCC_ADD_BY_CODE_PHASE_2L_APPROVED` are true and valid test code, test quantity, `MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER`, and both tenant selectors are configured (**no** add line, **no** validate/checkout/submit).
+- **Add-line / apply-line** (or equivalent pre-cart commit) **clicks** — **forbidden** until a separately documented **execution** phase (e.g. **2n**). **Phase 2m** is **planning-only** and adds **no** runtime path.
 
 Violations are a **product incident**, not a documentation gap.
 
@@ -41,9 +42,16 @@ Phase **2i** is **planning-only** as a standalone phase (no `PHASE_2I` env): it 
 Phase **2k** is the versioned checklist in [`services/api/src/workers/mlcc-phase-2k-policy.js`](../../../services/api/src/workers/mlcc-phase-2k-policy.js) (`buildPhase2kCombinedInteractionFutureGateManifest`, `buildPhase2kPostCombinedInteractionLadder`). It **does not** run standalone in the browser; the **probe** imports it to echo the manifest during **2l**. The **worker** must **not** import **2k** (verify enforces).
 
 - **Criteria (2k / 2l):** both tenant selectors, **tenant-documented field order** via `MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER`, extended mutation-risk on **both** fields before fills and **after the first fill**, Layer 2 deltas zero per fill and clear step, Layer 3 no add-line/apply/cart/validate/checkout/submit clicks, hard-fail parity with **2h**/**2j** on fill aborts, truthful disclaimers (no general combined safety, no add-line readiness, no server cart proof).
-- **Ladder after 2l:** add/apply line → validate → checkout/submit — each **`out_of_scope_until_separate_approval`** until a future phase (e.g. **2m**).
+- **Ladder after 2l:** add/apply line → validate → checkout/submit — each **`out_of_scope_until_separate_approval`** until a future phase; **Phase 2m** codifies the add/apply-line approval model **planning-only** (see below).
+
+## Add/apply-line planning (Phase 2m)
+
+Phase **2m** is **planning-only**: [`services/api/src/workers/mlcc-phase-2m-policy.js`](../../../services/api/src/workers/mlcc-phase-2m-policy.js) exports `buildPhase2mAddApplyLineFutureGateManifest` and `buildPhase2mPostAddApplyLadder`. It **does not** run in the browser; worker and probe **must not** import it until **2n** (or successor) is approved (verify enforces).
+
+- **Criteria:** documented **2l** (or equivalent) evidence; tenant-listed add/apply control selector(s); **at most one** click per rehearsal phase; Layer 2/3 expectations and hard-fail stops as in the manifest; mandatory disclaimers that browser evidence and zero abort counts **do not** prove server cart state or readiness for validate/checkout/submit.
+- **Ladder:** add/apply rehearsal → post-add **read-only** observation → validate → checkout/submit — each **`out_of_scope_until_separate_approval`** until explicitly implemented.
 
 ## Drift enforcement
 
-- Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i** and **2k** policy files, phases-doc markers, Phase **2l** probe/worker markers, probe import of **2k**, and a guard that the **worker** does not import **2k**).
+- Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i**, **2k**, and **2m** policy files, phases-doc markers, Phase **2l** probe/worker markers, probe import of **2k**, guard that the **worker** does not import **2k**, and guard that **neither** worker nor probe imports **2m** until **2n**).
 - See [DEVELOPER_ANTI_DRIFT.md](../DEVELOPER_ANTI_DRIFT.md).
