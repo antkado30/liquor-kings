@@ -23,7 +23,13 @@ import {
   type ReviewUiPersistedV1,
 } from "../operator-review/reviewUiPersistence";
 import { useOperatorSession } from "../session/OperatorSessionContext";
-import type { FlashMsg, OpAction, RunSummaryRow, Summary } from "../operator-review/types";
+import type {
+  ExecutionAttemptRow,
+  FlashMsg,
+  OpAction,
+  RunSummaryRow,
+  Summary,
+} from "../operator-review/types";
 import {
   formatBulkTriageResultMessage,
   groupSkippedCounts,
@@ -57,6 +63,7 @@ type ReviewRunsCtx = {
   setSelectedRunId: (id: string | null) => void;
   detailSummary: Summary | null;
   evidenceItems: unknown[];
+  attemptHistoryItems: ExecutionAttemptRow[];
   opActions: OpAction[];
   loadingRuns: boolean;
   loadingDetail: boolean;
@@ -143,6 +150,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [detailSummary, setDetailSummary] = useState<Summary | null>(null);
   const [evidenceItems, setEvidenceItems] = useState<unknown[]>([]);
+  const [attemptHistoryItems, setAttemptHistoryItems] = useState<ExecutionAttemptRow[]>([]);
   const [opActions, setOpActions] = useState<OpAction[]>([]);
 
   const [loadingRuns, setLoadingRuns] = useState(false);
@@ -202,6 +210,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     setSelectedRunId(null);
     setDetailSummary(null);
     setEvidenceItems([]);
+    setAttemptHistoryItems([]);
     setOpActions([]);
     setReason("");
     setNote("");
@@ -230,9 +239,11 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
         const data = body.data as Record<string, unknown> | undefined;
         const summary = data?.summary as Summary | undefined;
         const evidence = data?.evidence as { items?: unknown[] } | undefined;
+        const ah = data?.attempt_history as { items?: ExecutionAttemptRow[] } | undefined;
         const oa = data?.operator_actions as { items?: OpAction[] } | undefined;
         setDetailSummary(summary ?? null);
         setEvidenceItems(evidence?.items ?? []);
+        setAttemptHistoryItems(ah?.items ?? []);
         setOpActions(oa?.items ?? []);
         setLastOpenedRunId(runId);
         if (!silent) setDetailMsg({ type: "success", text: "Run detail loaded." });
@@ -669,6 +680,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
       setSelectedRunId,
       detailSummary,
       evidenceItems,
+      attemptHistoryItems,
       opActions,
       loadingRuns,
       loadingDetail,
@@ -718,6 +730,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
       selectedRunId,
       detailSummary,
       evidenceItems,
+      attemptHistoryItems,
       opActions,
       loadingRuns,
       loadingDetail,

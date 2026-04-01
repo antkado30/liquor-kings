@@ -40,7 +40,18 @@ const createSupabaseStub = (initialRun) => {
       return this;
     }
 
+    is() {
+      return this;
+    }
+
+    limit() {
+      return this;
+    }
+
     maybeSingle() {
+      if (this.table === "execution_run_attempts") {
+        return Promise.resolve({ data: null, error: null });
+      }
       if (this.table !== "execution_runs") {
         return Promise.resolve({ data: null, error: null });
       }
@@ -64,6 +75,9 @@ const createSupabaseStub = (initialRun) => {
     }
 
     order(key, { ascending }) {
+      if (this.table === "execution_run_attempts") {
+        return this;
+      }
       if (this.table !== "execution_run_operator_actions") {
         return Promise.resolve({ data: [], error: null });
       }

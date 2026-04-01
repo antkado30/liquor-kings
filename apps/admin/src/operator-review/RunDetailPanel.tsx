@@ -2,13 +2,14 @@ import { failureGuidanceText } from "../lib/failureGuidance";
 import { FailureBadge, StatusBadge } from "./components/Badges";
 import { EvidenceBlock } from "./components/EvidenceBlock";
 import { Msg } from "./components/Msg";
+import { AttemptHistorySection } from "./components/AttemptHistorySection";
 import { RunLifecycleTimeline } from "./RunLifecycleTimeline";
 import {
   getOperatorRecommendation,
   retryContextLines,
   type OperatorRecommendation,
 } from "./runDetailRecommendation";
-import type { FlashMsg, OpAction, Summary } from "./types";
+import type { ExecutionAttemptRow, FlashMsg, OpAction, Summary } from "./types";
 
 const TIMESTAMP_ORDER = [
   "queued_at",
@@ -31,6 +32,7 @@ type Props = {
   selectedRunId: string | null;
   summary: Summary | null;
   evidenceItems: unknown[];
+  attemptHistoryItems: ExecutionAttemptRow[];
   opActions: OpAction[];
   loadingDetail: boolean;
   detailMsg: FlashMsg;
@@ -49,6 +51,7 @@ export function RunDetailPanel({
   selectedRunId,
   summary,
   evidenceItems,
+  attemptHistoryItems,
   opActions,
   loadingDetail,
   detailMsg,
@@ -133,6 +136,13 @@ export function RunDetailPanel({
                 ))}
               </ul>
             </div>
+
+            <h4 className="run-detail-h4">Execution attempts (stored)</h4>
+            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+              One row per queue claim: initial run, automatic retries, and operator-triggered retries each
+              create a new attempt when recorded.
+            </p>
+            <AttemptHistorySection attempts={attemptHistoryItems} />
 
             {(summary.status === "failed" || summary.failure_message || summary.failure_type) && (
               <>

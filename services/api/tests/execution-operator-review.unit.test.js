@@ -12,12 +12,19 @@ const RUN_1 = "10101010-1010-4010-8010-101010101010";
 const RUN_2 = "20202020-2020-4020-8020-202020202020";
 const RUN_3 = "30303030-3030-4030-8030-303030303030";
 
-const createSupabaseStub = ({ runs, actions }) => {
+const createSupabaseStub = ({ runs, actions, attempts = [] }) => {
+  const resolveSource = (table) => {
+    if (table === "execution_runs") return runs;
+    if (table === "execution_run_attempts") return attempts;
+    return actions;
+  };
+
   class Query {
     constructor(table) {
       this.table = table;
       this.filters = {};
       this.inFilters = {};
+      this.isFilters = {};
       this.rangeWindow = null;
       this.selectColumns = "*";
       this.sort = null;
@@ -40,6 +47,11 @@ const createSupabaseStub = ({ runs, actions }) => {
       return this;
     }
 
+    is(key, value) {
+      this.isFilters[key] = value;
+      return this;
+    }
+
     order(key, options) {
       this.sort = { key, ascending: options?.ascending ?? true };
       return this;
@@ -51,14 +63,15 @@ const createSupabaseStub = ({ runs, actions }) => {
     }
 
     maybeSingle() {
-      const source = this.table === "execution_runs" ? runs : actions;
-      const rows = this.#filteredRows(source);
+      const source = resolveSource(this.table);
+      let rows = this.#filteredRows(source);
+      rows = this.#sortRows(rows);
       return Promise.resolve({ data: rows[0] ?? null, error: null });
     }
 
     then(resolve, reject) {
       try {
-        const source = this.table === "execution_runs" ? runs : actions;
+        const source = resolveSource(this.table);
         if (this.headCount) {
           const n = this.#filteredRows(source).length;
           resolve({ data: null, error: null, count: n });
@@ -82,6 +95,11 @@ const createSupabaseStub = ({ runs, actions }) => {
         for (const [key, values] of Object.entries(this.inFilters)) {
           if (!values.includes(row[key])) return false;
         }
+        for (const [key, value] of Object.entries(this.isFilters)) {
+          if (value === null) {
+            if (row[key] != null) return false;
+          } else if (row[key] !== value) return false;
+        }
         return true;
       });
     }
@@ -90,9 +108,14 @@ const createSupabaseStub = ({ runs, actions }) => {
       if (!this.sort) return [...source];
       const { key, ascending } = this.sort;
       return [...source].sort((a, b) => {
-        const av = new Date(a[key] ?? 0).getTime();
-        const bv = new Date(b[key] ?? 0).getTime();
-        return ascending ? av - bv : bv - av;
+        const av = a[key];
+        const bv = b[key];
+        if (typeof av === "number" && typeof bv === "number") {
+          return ascending ? av - bv : bv - av;
+        }
+        const aTime = new Date(av ?? 0).getTime();
+        const bTime = new Date(bv ?? 0).getTime();
+        return ascending ? aTime - bTime : bTime - aTime;
       });
     }
   }
@@ -149,6 +172,26 @@ const runsFixture = [
     evidence: [],
     created_at: "2026-03-01T12:00:00.000Z",
     updated_at: "2026-03-01T12:05:00.000Z",
+  },
+];
+
+const attemptsFixture = [
+  {
+    id: "att-1",
+    run_id: RUN_1,
+    store_id: STORE_A,
+    attempt_number: 1,
+    started_at: "2026-03-01T10:00:00.000Z",
+    finished_at: "2026-03-01T10:05:00.000Z",
+    status: "failed",
+    failure_type: "NETWORK_ERROR",
+    failure_message: "timeout",
+    progress_stage: "failed",
+    progress_message: "Execution failed",
+    evidence_metadata: { evidence_count: 1, evidence_kinds: ["screenshot"] },
+    worker_id: "worker-a",
+    created_at: "2026-03-01T10:00:00.000Z",
+    updated_at: "2026-03-01T10:05:00.000Z",
   },
 ];
 
@@ -263,10 +306,11 @@ describe("execution operator review list contract", () => {
 });
 
 describe("execution operator review bundle contract", () => {
-  it("returns summary + evidence + action history in one response", async () => {
+  it("returns summary + evidence + action history + attempt history in one response", async () => {
     const supabase = createSupabaseStub({
       runs: runsFixture,
       actions: actionsFixture,
+      attempts: attemptsFixture,
     });
     const res = await getExecutionRunOperatorReviewBundleById(
       supabase,
@@ -282,5 +326,9 @@ describe("execution operator review bundle contract", () => {
     expect(res.body.data.operator_actions.items[0].action).toBe(
       "mark_for_manual_review",
     );
+    expect(res.body.data.attempt_history.count).toBe(1);
+    expect(res.body.data.attempt_history.items).toHaveLength(1);
+    expect(res.body.data.attempt_history.items[0].attempt_number).toBe(1);
+    expect(res.body.data.attempt_history.items[0].worker_id).toBe("worker-a");
   });
 });

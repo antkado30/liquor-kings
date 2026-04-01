@@ -39,3 +39,23 @@ export type OpAction = {
 export type FlashKind = "error" | "success" | "warn" | "";
 
 export type FlashMsg = { type: FlashKind; text: string };
+
+/** Rows from `attempt_history.items` in the operator review bundle (stored execution attempts). */
+export type ExecutionAttemptRow = {
+  id: string;
+  attempt_number: number;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  failure_type?: string | null;
+  failure_message?: string | null;
+  progress_stage?: string | null;
+  progress_message?: string | null;
+  evidence_metadata?: {
+    evidence_count?: number;
+    evidence_kinds?: string[];
+  } | null;
+  worker_id?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};

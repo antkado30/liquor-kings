@@ -916,6 +916,67 @@ pre,
   padding: 6px;
   border-radius: 4px;
 }
+.attempt-history-block {
+  margin-top: 8px;
+}
+.attempt-repeat-note {
+  font-size: 13px;
+  margin: 0 0 10px;
+}
+.attempt-timeline .attempt-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  margin-bottom: 4px;
+}
+.attempt-worker {
+  font-size: 12px;
+}
+.attempt-times {
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.attempt-open {
+  color: #b45309;
+  font-weight: 600;
+}
+.attempt-progress,
+.attempt-failure,
+.attempt-evidence-meta,
+.attempt-delta {
+  font-size: 12px;
+  margin-top: 4px;
+}
+.attempt-failure-msg {
+  margin-top: 4px;
+}
+.attempt-status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: #374151;
+}
+.attempt-status-running {
+  background: #fef3c7;
+  color: #92400e;
+}
+.attempt-status-succeeded {
+  background: #dcfce7;
+  color: #14532d;
+}
+.attempt-status-failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.attempt-status-canceled {
+  background: #e5e7eb;
+  color: #374151;
+}
+
 @media (max-width: 900px) {
   .layout {
     grid-template-columns: 1fr;

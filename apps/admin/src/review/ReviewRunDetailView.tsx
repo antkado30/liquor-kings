@@ -33,6 +33,7 @@ export function ReviewRunDetailView() {
         selectedRunId={runId}
         summary={ctx.detailSummary}
         evidenceItems={ctx.evidenceItems}
+        attemptHistoryItems={ctx.attemptHistoryItems}
         opActions={ctx.opActions}
         loadingDetail={ctx.loadingDetail}
         detailMsg={ctx.detailMsg}

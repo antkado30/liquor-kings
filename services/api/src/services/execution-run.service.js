@@ -85,6 +85,119 @@ const asOperatorActionsArray = (value) => {
   return [];
 };
 
+const buildEvidenceMetadataSnapshot = (run) => {
+  const ev = asEvidenceArray(run?.evidence);
+  const kinds = [...new Set(ev.map((e) => e?.kind).filter(Boolean))];
+  return {
+    evidence_count: ev.length,
+    evidence_kinds: kinds,
+  };
+};
+
+const getOpenExecutionRunAttempt = async (supabase, runId, storeId) => {
+  const { data, error } = await supabase
+    .from("execution_run_attempts")
+    .select("id")
+    .eq("run_id", runId)
+    .eq("store_id", storeId)
+    .is("finished_at", null)
+    .order("attempt_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return { data: null, error };
+  return { data, error: null };
+};
+
+const insertAttemptForClaimedRun = async (supabase, claimedRun) => {
+  const runId = claimedRun.id;
+  const storeId = claimedRun.store_id;
+
+  const { data: maxRow, error: maxErr } = await supabase
+    .from("execution_run_attempts")
+    .select("attempt_number")
+    .eq("run_id", runId)
+    .order("attempt_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (maxErr) return { error: maxErr };
+
+  const attemptNumber = Number(maxRow?.attempt_number ?? 0) + 1;
+  const nowIso = new Date().toISOString();
+
+  const { error } = await supabase.from("execution_run_attempts").insert({
+    run_id: runId,
+    store_id: storeId,
+    attempt_number: attemptNumber,
+    started_at: claimedRun.started_at ?? nowIso,
+    status: "running",
+    progress_stage: claimedRun.progress_stage ?? "running",
+    progress_message: claimedRun.progress_message ?? null,
+    worker_id: claimedRun.worker_id ?? null,
+    updated_at: nowIso,
+  });
+
+  return { error };
+};
+
+const updateOpenAttemptFromRunningRow = async (supabase, runId, storeId, runRow) => {
+  if (runRow.status !== "running") {
+    return { error: null };
+  }
+  const open = await getOpenExecutionRunAttempt(supabase, runId, storeId);
+  if (!open.data || open.error) return { error: open.error };
+  const nowIso = new Date().toISOString();
+  const { error } = await supabase
+    .from("execution_run_attempts")
+    .update({
+      progress_stage: runRow.progress_stage ?? null,
+      progress_message: runRow.progress_message ?? null,
+      worker_id: runRow.worker_id ?? null,
+      updated_at: nowIso,
+    })
+    .eq("id", open.data.id);
+  return { error };
+};
+
+const finalizeOpenExecutionRunAttempt = async (
+  supabase,
+  runId,
+  storeId,
+  runRow,
+  terminalStatus,
+) => {
+  const open = await getOpenExecutionRunAttempt(supabase, runId, storeId);
+  if (!open.data) return { error: null };
+  if (open.error) return { error: open.error };
+
+  const nowIso = new Date().toISOString();
+  const meta = buildEvidenceMetadataSnapshot(runRow);
+  const patch = {
+    finished_at: nowIso,
+    status: terminalStatus,
+    progress_stage: runRow.progress_stage ?? null,
+    progress_message: runRow.progress_message ?? null,
+    evidence_metadata: meta,
+    worker_id: runRow.worker_id ?? null,
+    updated_at: nowIso,
+  };
+
+  if (terminalStatus === "failed") {
+    patch.failure_type = runRow.failure_type ?? null;
+    patch.failure_message = runRow.error_message ?? null;
+  } else {
+    patch.failure_type = null;
+    patch.failure_message = null;
+  }
+
+  const { error } = await supabase
+    .from("execution_run_attempts")
+    .update(patch)
+    .eq("id", open.data.id);
+
+  return { error };
+};
+
 const getLatestOperatorAction = (actions) => {
   const rows = asOperatorActionsArray(actions);
   if (!rows.length) return null;
@@ -630,6 +743,36 @@ export const listExecutionRunsForOperatorReview = async (
   };
 };
 
+export const getExecutionRunAttemptsById = async (supabase, runId, storeId) => {
+  const runResult = await getExecutionRunById(supabase, runId, storeId);
+  if (runResult.statusCode !== 200) return runResult;
+
+  const { data, error } = await supabase
+    .from("execution_run_attempts")
+    .select(
+      "id, attempt_number, started_at, finished_at, status, failure_type, failure_message, progress_stage, progress_message, evidence_metadata, worker_id, created_at, updated_at",
+    )
+    .eq("run_id", runId)
+    .eq("store_id", storeId)
+    .order("attempt_number", { ascending: true });
+
+  if (error) {
+    return serverError(error.message);
+  }
+
+  const rows = data ?? [];
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      run_id: runId,
+      store_id: storeId,
+      count: rows.length,
+      data: rows,
+    },
+  };
+};
+
 export const getExecutionRunOperatorReviewBundleById = async (
   supabase,
   runId,
@@ -648,6 +791,9 @@ export const getExecutionRunOperatorReviewBundleById = async (
   );
   if (actionsResult.statusCode !== 200) return actionsResult;
 
+  const attemptsResult = await getExecutionRunAttemptsById(supabase, runId, storeId);
+  if (attemptsResult.statusCode !== 200) return attemptsResult;
+
   return {
     statusCode: 200,
     body: {
@@ -663,6 +809,10 @@ export const getExecutionRunOperatorReviewBundleById = async (
         operator_actions: {
           count: actionsResult.body.count,
           items: actionsResult.body.data,
+        },
+        attempt_history: {
+          count: attemptsResult.body.count,
+          items: attemptsResult.body.data,
         },
       },
     },
@@ -837,6 +987,35 @@ export const updateExecutionRunStatus = async (
     return serverError(updateError.message);
   }
 
+  if (status === "succeeded") {
+    const fin = await finalizeOpenExecutionRunAttempt(
+      supabase,
+      runId,
+      storeId,
+      updatedRun,
+      "succeeded",
+    );
+    if (fin.error) return serverError(fin.error.message);
+  } else if (status === "failed") {
+    const fin = await finalizeOpenExecutionRunAttempt(
+      supabase,
+      runId,
+      storeId,
+      updatedRun,
+      "failed",
+    );
+    if (fin.error) return serverError(fin.error.message);
+  } else if (status === "canceled") {
+    const fin = await finalizeOpenExecutionRunAttempt(
+      supabase,
+      runId,
+      storeId,
+      updatedRun,
+      "canceled",
+    );
+    if (fin.error) return serverError(fin.error.message);
+  }
+
   return {
     statusCode: 200,
     body: { success: true, data: updatedRun },
@@ -924,6 +1103,8 @@ export const applyExecutionRunOperatorAction = async (
     patch.progress_stage = run.progress_stage ?? "acknowledged";
   }
 
+  const wasRunning = run.status === "running";
+
   if (Object.keys(patch).length > 0) {
     patch.updated_at = nowIso;
     const { error: patchErr } = await applyExecutionRunPatch(
@@ -933,6 +1114,29 @@ export const applyExecutionRunOperatorAction = async (
       patch,
     );
     if (patchErr) return serverError(patchErr.message);
+
+    const refreshed = await getExecutionRunById(supabase, runId, storeId);
+    if (refreshed.statusCode === 200) {
+      const r = refreshed.body.data;
+      if (action === OPERATOR_ACTION.CANCEL && wasRunning) {
+        const fin = await finalizeOpenExecutionRunAttempt(
+          supabase,
+          runId,
+          storeId,
+          r,
+          "canceled",
+        );
+        if (fin.error) return serverError(fin.error.message);
+      } else if (r.status === "running") {
+        const syncErr = await updateOpenAttemptFromRunningRow(
+          supabase,
+          runId,
+          storeId,
+          r,
+        );
+        if (syncErr.error) return serverError(syncErr.error.message);
+      }
+    }
   }
 
   const { error: actionErr } = await supabase
@@ -1048,6 +1252,16 @@ export const heartbeatExecutionRun = async (
     return serverError(updateError.message);
   }
 
+  const syncErr = await updateOpenAttemptFromRunningRow(
+    supabase,
+    runId,
+    storeId,
+    updatedRun,
+  );
+  if (syncErr.error) {
+    return serverError(syncErr.error.message);
+  }
+
   return {
     statusCode: 200,
     body: { success: true, data: updatedRun },
@@ -1113,6 +1327,10 @@ export const claimNextQueuedExecutionRun = async (
     }
 
     if (claimedRun) {
+      const ins = await insertAttemptForClaimedRun(supabase, claimedRun);
+      if (ins.error) {
+        return serverError(ins.error.message);
+      }
       return {
         statusCode: 200,
         body: {
