@@ -82,15 +82,101 @@ export function isProbeUiTextUnsafe(text) {
   return { unsafe: false };
 }
 
+/** Conservative: informational / navigation labels that are unlikely to mutate cart (heuristic only). */
+export const MUTATION_BOUNDARY_SAFE_LABEL_PATTERNS = [
+  /^(help|faq)(\s|$)/i,
+  /privacy|terms(\s+of\s+service)?/i,
+  /^contact(\s+us)?$/i,
+  /^about(\s+us)?$/i,
+];
+
+/**
+ * Phase 2d: classify a control near the mutation boundary (read-only scan; no clicks).
+ * Returns classification + rationale; does not assert real-world safety.
+ */
+export function classifyMutationBoundaryControl(row) {
+  const text = String(row.text ?? "").trim().slice(0, 300);
+  const href = String(row.href ?? "").toLowerCase();
+  const t = text.toLowerCase();
+  const tag = String(row.tag ?? "").toLowerCase();
+
+  if (
+    href &&
+    /checkout|cart\/add|place-order|order\/submit|validate|finalize|add-to-cart|addtocart/i.test(
+      href,
+    )
+  ) {
+    return {
+      classification: "unsafe_mutation_likely",
+      rationale: "href_matches_mutation_path_heuristic",
+    };
+  }
+
+  const probe = isProbeUiTextUnsafe(text);
+
+  if (probe.unsafe) {
+    return {
+      classification: "unsafe_mutation_likely",
+      rationale: `label_matches_layer3_ui_guard:${probe.matched}`,
+    };
+  }
+
+  if (
+    /\b(add\s+line|save\s+cart|update\s+line|remove\s+line|delete\s+line)\b/i.test(
+      t,
+    )
+  ) {
+    return {
+      classification: "unsafe_mutation_likely",
+      rationale: "label_suggests_cart_line_mutation_heuristic",
+    };
+  }
+
+  for (const re of MUTATION_BOUNDARY_SAFE_LABEL_PATTERNS) {
+    if (re.test(t)) {
+      return {
+        classification: "safe_informational",
+        rationale: "label_matches_informational_heuristic_not_a_safety_guarantee",
+      };
+    }
+  }
+
+  if (
+    tag === "a" &&
+    href &&
+    (href.startsWith("mailto:") || href.startsWith("tel:"))
+  ) {
+    return {
+      classification: "safe_informational",
+      rationale: "mailto_or_tel_link",
+    };
+  }
+
+  return {
+    classification: "uncertain",
+    rationale: "no_definitive_safe_or_unsafe_match_heuristic_ambiguous",
+  };
+}
+
 /**
  * Install route handler on browser context (call after newContext, before newPage).
+ * @param {import('playwright').BrowserContext} context
+ * @param {{ blockedRequestCount?: number } | null} [statsRef] — optional; increments when a request is aborted
  */
-export async function installMlccSafetyNetworkGuards(context) {
+export async function installMlccSafetyNetworkGuards(context, statsRef) {
   await context.route("**/*", (route) => {
     const req = route.request();
     const { block, reason } = shouldBlockHttpRequest(req.url(), req.method());
 
     if (block) {
+      if (
+        statsRef &&
+        typeof statsRef === "object" &&
+        typeof statsRef.blockedRequestCount === "number"
+      ) {
+        statsRef.blockedRequestCount += 1;
+      }
+
       return route.abort("blockedbyclient");
     }
 
@@ -716,5 +802,191 @@ export async function runAddByCodePhase2cFieldHardening({
     code_field: codeInspect,
     quantity_field: qtyInspect,
     tenant_env_selectors_provided: tenantEnv,
+  };
+}
+
+async function collectMutationBoundaryControls(page, maxElements) {
+  return page.evaluate((max) => {
+    const cap = Math.min(Math.max(max, 1), 150);
+    const selectors = [
+      "button",
+      "a[href]",
+      "[role=\"button\"]",
+      "input[type=\"submit\"]",
+      "input[type=\"button\"]",
+      "input[type=\"reset\"]",
+    ];
+    const seen = new Set();
+    const out = [];
+
+    const isVisibleEl = (el) => {
+      if (!(el instanceof HTMLElement)) {
+        return false;
+      }
+
+      const st = window.getComputedStyle(el);
+
+      if (
+        st.display === "none" ||
+        st.visibility === "hidden" ||
+        Number(st.opacity) === 0
+      ) {
+        return false;
+      }
+
+      const r = el.getBoundingClientRect();
+
+      return r.width >= 2 && r.height >= 2;
+    };
+
+    for (const sel of selectors) {
+      document.querySelectorAll(sel).forEach((el) => {
+        if (out.length >= cap) {
+          return;
+        }
+
+        if (!(el instanceof HTMLElement)) {
+          return;
+        }
+
+        if (!isVisibleEl(el)) {
+          return;
+        }
+
+        if (seen.has(el)) {
+          return;
+        }
+
+        seen.add(el);
+
+        const tag = el.tagName.toLowerCase();
+        let type = null;
+
+        if (el instanceof HTMLInputElement) {
+          type = el.type || "text";
+        }
+
+        const text = (
+          el.innerText ||
+          (el instanceof HTMLInputElement ? el.value : "") ||
+          el.getAttribute("aria-label") ||
+          ""
+        )
+          .trim()
+          .slice(0, 200);
+
+        let href = null;
+
+        if (el instanceof HTMLAnchorElement) {
+          href = el.href || null;
+        }
+
+        out.push({
+          tag,
+          type,
+          role: el.getAttribute("role"),
+          text,
+          href,
+          id: el.id || null,
+          name: el.getAttribute("name"),
+          className:
+            typeof el.className === "string"
+              ? el.className.slice(0, 120)
+              : null,
+        });
+      });
+    }
+
+    return out;
+  }, maxElements);
+}
+
+/**
+ * Phase 2d: read-only scan of interactive controls; heuristic safe / unsafe / uncertain buckets.
+ * No clicks, no typing, no cart mutation.
+ */
+export async function runAddByCodePhase2dMutationBoundaryMap({
+  page,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  maxControls = 100,
+}) {
+  await heartbeat({
+    progressStage: "mlcc_mutation_boundary_map_start",
+    progressMessage:
+      "Phase 2d: mapping pre-mutation control boundary (read-only scan; no clicks)",
+  });
+
+  const raw = await collectMutationBoundaryControls(page, maxControls);
+
+  const mutation_boundary_controls = raw.map((row) => {
+    const { classification, rationale } = classifyMutationBoundaryControl(row);
+
+    return {
+      ...row,
+      classification,
+      rationale,
+    };
+  });
+
+  const safe_controls_seen = mutation_boundary_controls.filter(
+    (c) => c.classification === "safe_informational",
+  );
+
+  const blocked_controls_seen = mutation_boundary_controls.filter(
+    (c) => c.classification === "unsafe_mutation_likely",
+  );
+
+  const uncertain_controls_seen = mutation_boundary_controls.filter(
+    (c) => c.classification === "uncertain",
+  );
+
+  const layer3_ui_guard_text_match_count = raw.filter((row) => {
+    const p = isProbeUiTextUnsafe(String(row.text ?? "").trim());
+
+    return p.unsafe === true;
+  }).length;
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_mutation_boundary_map_findings",
+      message:
+        "Phase 2d mutation boundary (heuristic classification; not proof of runtime behavior)",
+      attributes: {
+        scan_scope:
+          "visible_buttons_links_role_button_submit_like_inputs_capped",
+        scan_count: mutation_boundary_controls.length,
+        max_controls: maxControls,
+        mutation_boundary_controls,
+        safe_controls_seen,
+        blocked_controls_seen,
+        uncertain_controls_seen,
+        network_guard_blocked_request_count:
+          guardStats && typeof guardStats.blockedRequestCount === "number"
+            ? guardStats.blockedRequestCount
+            : null,
+        layer3_ui_guard_text_match_count,
+        disclaimer:
+          "classifications_are_heuristic_ambiguity_remains_possible_do_not_infer_cart_safety",
+        typing_policy_phase_2d: "no_product_code_or_quantity_typing",
+        cart_mutation: "none",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_mutation_boundary_map_complete",
+    progressMessage:
+      "Phase 2d boundary map complete (no validate/add-to-cart/checkout/submit)",
+  });
+
+  return {
+    scan_count: mutation_boundary_controls.length,
+    safe_count: safe_controls_seen.length,
+    unsafe_count: blocked_controls_seen.length,
+    uncertain_count: uncertain_controls_seen.length,
   };
 }

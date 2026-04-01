@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   buildPlaywrightSelectorFromHint,
+  classifyMutationBoundaryControl,
   isProbeUiTextUnsafe,
   shouldBlockHttpRequest,
 } from "../src/workers/mlcc-browser-add-by-code-probe.js";
@@ -18,6 +19,36 @@ describe("shouldBlockHttpRequest", () => {
   it("allows GET navigation to generic pages", () => {
     const b = shouldBlockHttpRequest("https://vendor.example/home", "GET");
     expect(b.block).toBe(false);
+  });
+});
+
+describe("classifyMutationBoundaryControl", () => {
+  it("classifies obvious mutation labels as unsafe", () => {
+    const r = classifyMutationBoundaryControl({
+      tag: "button",
+      text: "Add to cart",
+    });
+
+    expect(r.classification).toBe("unsafe_mutation_likely");
+  });
+
+  it("classifies help/privacy style as informational heuristic only", () => {
+    const r = classifyMutationBoundaryControl({
+      tag: "a",
+      text: "Privacy policy",
+      href: "https://example.com/privacy",
+    });
+
+    expect(r.classification).toBe("safe_informational");
+  });
+
+  it("returns uncertain for ambiguous labels", () => {
+    const r = classifyMutationBoundaryControl({
+      tag: "button",
+      text: "Continue",
+    });
+
+    expect(r.classification).toBe("uncertain");
   });
 });
 

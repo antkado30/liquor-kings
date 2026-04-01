@@ -13,7 +13,10 @@
     "audit:lk:repo": "node scripts/lk-audit/audit-repo.mjs",
     "audit:lk:supabase": "node scripts/lk-audit/audit-supabase.mjs",
     "audit:lk:cart-identity": "node scripts/lk-audit/cart-item-identity-backfill.mjs",
-    "audit:lk:cart-identity:apply": "node scripts/lk-audit/cart-item-identity-backfill.mjs --apply"
+    "audit:lk:cart-identity:apply": "node scripts/lk-audit/cart-item-identity-backfill.mjs --apply",
+    "verify:lk:contracts": "node scripts/lk-verify/verify-contracts.mjs",
+    "verify:lk:rpa-safety": "node scripts/lk-verify/verify-rpa-safety.mjs",
+    "verify:lk:architecture": "node scripts/lk-verify/verify-architecture.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

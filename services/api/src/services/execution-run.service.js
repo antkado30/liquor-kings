@@ -34,6 +34,15 @@ const OPERATOR_ACTION = {
   RESOLVE_WITHOUT_RETRY: "resolve_without_retry",
 };
 
+/** Exported for tests and anti-drift — keep aligned with docs/lk/architecture/execution-state-machine.md */
+export const EXECUTION_RUN_MODEL = {
+  ACTIVE_STATUSES,
+  ALLOWED_STATUSES,
+  TERMINAL_STATUSES,
+  DEFAULT_MAX_RETRIES,
+  OPERATOR_ACTION,
+};
+
 const serverError = (message) => ({
   statusCode: 500,
   body: { error: message },

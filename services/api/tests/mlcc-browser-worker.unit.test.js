@@ -47,6 +47,7 @@ describe("buildMlccBrowserConfig", () => {
       addByCodeCodeFieldSelector: null,
       addByCodeQtyFieldSelector: null,
       addByCodeSafeFocusBlur: false,
+      addByCodePhase2d: false,
     });
   });
 
@@ -186,6 +187,20 @@ describe("buildMlccBrowserConfig", () => {
 
     const h2 = inferLicenseStoreHeuristic("https://portal.example.com/home", "Home");
     expect(h2.hint).toBe("no_keyword_match");
+  });
+
+  it("rejects Phase 2d without Phase 2b probe", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PHASE_2D: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors[0].message).toMatch(/MLCC_ADD_BY_CODE_PROBE/);
   });
 
   it("rejects Phase 2c without Phase 2b probe", () => {
