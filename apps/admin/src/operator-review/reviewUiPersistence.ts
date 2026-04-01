@@ -9,13 +9,14 @@
  * - queueSortMode, autoRefreshEnabled, autoRefreshSec
  * - status / failure / pending manual / cart server filters (strings as in the UI)
  * - queueSearch (client-side filter on the loaded batch)
+ * - queuePageLimit — server page size for GET /api/runs (25 / 50 / 100)
  * - lastOpenedRunId — last run successfully opened in detail; used only for an optional
  *   “Continue last opened run” link when that id still appears in the loaded list
  *
  * Not persisted: bulk selection, reason/note, flash messages, diagnostics page.
  *
  * Reset filters (queue UI): clears filters, queue search, and last-opened pointer for that
- * store; does not clear sort mode or auto-refresh prefs.
+ * store; resets to server page offset 0; does not clear sort mode, auto-refresh, or page size.
  *
  * Store switching: Review remounts per store; each store has its own key. Session/store
  * authority stays on the server — we do not persist store choice for auth.
@@ -27,6 +28,7 @@ export const REVIEW_UI_STORAGE_PREFIX = "lk-admin-review-ui:v1:";
 
 const SORT_MODES = new Set<QueueSortMode>(["priority", "newest", "failed_only"]);
 const REFRESH_SECS = new Set([15, 30, 60]);
+const PAGE_LIMITS = new Set([25, 50, 100]);
 
 const MAX_FIELD_LEN = 240;
 
@@ -52,6 +54,7 @@ export type ReviewUiPersistedV1 = {
   pendingManualFilter: string;
   cartIdFilter: string;
   queueSearch: string;
+  queuePageLimit: number;
   lastOpenedRunId: string | null;
 };
 
@@ -65,6 +68,7 @@ export const DEFAULT_REVIEW_UI: ReviewUiPersistedV1 = {
   pendingManualFilter: "",
   cartIdFilter: "",
   queueSearch: "",
+  queuePageLimit: 50,
   lastOpenedRunId: null,
 };
 
@@ -81,6 +85,11 @@ function sanitizeMode(m: unknown): QueueSortMode {
 function sanitizeSec(n: unknown): number {
   const x = Number(n);
   return REFRESH_SECS.has(x) ? x : 30;
+}
+
+function sanitizePageLimit(n: unknown): number {
+  const x = Number(n);
+  return PAGE_LIMITS.has(x) ? x : 50;
 }
 
 function sanitizeBool(b: unknown, fallback: boolean): boolean {
@@ -113,6 +122,7 @@ export function parseReviewUiPersisted(raw: unknown): ReviewUiPersistedV1 {
     pendingManualFilter: sanitizeStr(o.pendingManualFilter),
     cartIdFilter: sanitizeStr(o.cartIdFilter),
     queueSearch: sanitizeStr(o.queueSearch),
+    queuePageLimit: sanitizePageLimit(o.queuePageLimit),
     lastOpenedRunId: sanitizeRunId(o.lastOpenedRunId),
   };
 }

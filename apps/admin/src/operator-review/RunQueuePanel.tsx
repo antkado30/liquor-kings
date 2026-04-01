@@ -46,6 +46,13 @@ type Props = {
   queueSortMode: QueueSortMode;
   setQueueSortMode: (v: QueueSortMode) => void;
   resumeRunId: string | null;
+  queuePageLimit: number;
+  setQueuePageLimit: (n: number) => void;
+  listPageMeta: { limit: number; offset: number; rowCount: number };
+  loadNextPage: () => void;
+  loadPrevPage: () => void;
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
   bulkSelectedRunIds: string[];
   onToggleBulkRunId: (runId: string) => void;
   onClearBulkSelection: () => void;
@@ -94,6 +101,13 @@ export function RunQueuePanel({
   queueSortMode,
   setQueueSortMode,
   resumeRunId,
+  queuePageLimit,
+  setQueuePageLimit,
+  listPageMeta,
+  loadNextPage,
+  loadPrevPage,
+  hasNextPage,
+  hasPrevPage,
   bulkSelectedRunIds,
   onToggleBulkRunId,
   onClearBulkSelection,
@@ -133,11 +147,12 @@ export function RunQueuePanel({
     <section className="card">
       <h3 className="section-title">Run queue</h3>
       <p className="muted review-persist-hint" style={{ fontSize: 12, marginTop: 4 }}>
-        Sort, auto-refresh, server filters, cart filter, and queue search persist in this browser for
-        the current store (localStorage key{" "}
+        Sort, auto-refresh, server filters, cart filter, queue search, and server page size persist in
+        this browser for the current store (localStorage key{" "}
         <code className="mono">lk-admin-review-ui:v1:{"<storeId>"}</code>
-        ). Reset filters clears filters, search, bulk selection, and the resume link — not sort or
-        auto-refresh.
+        ). Current server page offset is not persisted (starts at 0 after reload). Reset filters
+        clears filters, search, bulk selection, resume link, and jumps to server offset 0 — not sort,
+        auto-refresh, or page size.
       </p>
       {resumeRunId ? (
         <div className="review-resume-row">
@@ -198,10 +213,46 @@ export function RunQueuePanel({
           className="secondary"
           onClick={onResetFilters}
           disabled={loadingRuns || actionInFlight}
-          title="Clears server filters, cart filter, queue search, bulk selection, and last-opened resume link. Keeps sort mode and auto-refresh."
+          title="Clears server filters, cart filter, queue search, bulk selection, last-opened resume link, and server page offset. Keeps sort mode, auto-refresh, and page size."
         >
           Reset filters
         </button>
+      </div>
+      <div className="row queue-server-page-row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8 }}>
+        <label>Server page size</label>
+        <select
+          value={queuePageLimit}
+          onChange={(e) => setQueuePageLimit(Number(e.target.value))}
+          disabled={loadingRuns || actionInFlight}
+          title="Rows per request to GET /api/runs (newest first). Changing this reloads offset 0."
+        >
+          <option value={25}>25</option>
+          <option value={50}>50</option>
+          <option value={100}>100</option>
+        </select>
+        <button
+          type="button"
+          className="secondary"
+          disabled={!hasPrevPage || loadingRuns || actionInFlight}
+          onClick={loadPrevPage}
+          title="Older runs (higher offset)"
+        >
+          Previous page
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={!hasNextPage || loadingRuns || actionInFlight}
+          onClick={loadNextPage}
+          title="Next chunk; enabled only when this page returned a full page (there may or may not be more)"
+        >
+          Next page
+        </button>
+        <span className="muted" style={{ fontSize: 12, flex: "1 1 220px" }}>
+          Server: offset {listPageMeta.offset}, limit {listPageMeta.limit}, {listPageMeta.rowCount}{" "}
+          row(s) loaded (newest first). Queue search &amp; sort apply only to these rows — not the
+          whole store.
+        </span>
       </div>
       <div className="row" style={{ marginTop: 8 }}>
         <label>Sort</label>

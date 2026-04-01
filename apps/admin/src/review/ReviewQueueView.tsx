@@ -33,7 +33,7 @@ export function ReviewQueueView() {
           ctx.setSelectedRunId(id);
           navigate(`/review/${encodeURIComponent(id)}`);
         }}
-        onLoadRuns={() => void ctx.loadRuns()}
+        onLoadRuns={() => void ctx.loadRuns({ resetPage: true })}
         onRefresh={() => void ctx.loadRuns({ silentSuccess: true })}
         onResetFilters={ctx.resetFilters}
         queueSortMode={ctx.queueSortMode}
@@ -45,6 +45,13 @@ export function ReviewQueueView() {
         onAddToBulkSelection={ctx.addToBulkSelection}
         onBulkAcknowledge={() => void ctx.submitBulkTriage("acknowledge")}
         onBulkMarkManual={() => void ctx.submitBulkTriage("mark_for_manual_review")}
+        queuePageLimit={ctx.queuePageLimit}
+        setQueuePageLimit={ctx.setQueuePageLimit}
+        listPageMeta={ctx.listPageMeta}
+        loadNextPage={() => void ctx.loadNextPage()}
+        loadPrevPage={() => void ctx.loadPrevPage()}
+        hasNextPage={ctx.hasNextPage}
+        hasPrevPage={ctx.hasPrevPage}
       />
     </div>
   );

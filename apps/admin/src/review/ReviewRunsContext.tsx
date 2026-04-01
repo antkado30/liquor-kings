@@ -76,7 +76,7 @@ type ReviewRunsCtx = {
   /** Present in loaded batch — safe to link; from last successful detail open */
   resumeRunId: string | null;
   loadRunDetail: (runId: string, silent?: boolean) => Promise<void>;
-  loadRuns: (options?: { silentSuccess?: boolean }) => Promise<void>;
+  loadRuns: (options?: { silentSuccess?: boolean; resetPage?: boolean }) => Promise<void>;
   resetFilters: () => void;
   submitAction: (action: string) => Promise<void>;
   actionDisabled: boolean;
@@ -88,6 +88,15 @@ type ReviewRunsCtx = {
   clearBulkSelection: () => void;
   addToBulkSelection: (runIds: string[]) => void;
   submitBulkTriage: (action: "acknowledge" | "mark_for_manual_review") => Promise<void>;
+  /** Server GET /api/runs page size (25/50/100) */
+  queuePageLimit: number;
+  setQueuePageLimit: (n: number) => void;
+  /** Last fetched server page (newest-first from API) */
+  listPageMeta: { limit: number; offset: number; rowCount: number };
+  loadNextPage: () => Promise<void>;
+  loadPrevPage: () => Promise<void>;
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
 };
 
 const ReviewRunsContext = createContext<ReviewRunsCtx | null>(null);
@@ -115,6 +124,13 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
   const [pendingManualFilter, setPendingManualFilter] = useState(persisted.pendingManualFilter);
   const [cartIdFilter, setCartIdFilter] = useState(persisted.cartIdFilter);
   const [queueSearch, setQueueSearch] = useState(persisted.queueSearch);
+  const [queuePageLimit, setQueuePageLimitState] = useState(persisted.queuePageLimit);
+  const [pageOffset, setPageOffset] = useState(0);
+  const [listPageMeta, setListPageMeta] = useState({
+    limit: persisted.queuePageLimit,
+    offset: 0,
+    rowCount: 0,
+  });
 
   const [runs, setRuns] = useState<RunSummaryRow[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -150,6 +166,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
       pendingManualFilter,
       cartIdFilter,
       queueSearch,
+      queuePageLimit,
       lastOpenedRunId,
     };
   }, [
@@ -161,6 +178,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     pendingManualFilter,
     cartIdFilter,
     queueSearch,
+    queuePageLimit,
     lastOpenedRunId,
   ]);
 
@@ -220,8 +238,13 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
   );
 
   const loadRunsWithFilters = useCallback(
-    async (filters: ServerFilters, options?: { silentSuccess?: boolean }) => {
+    async (
+      filters: ServerFilters,
+      options?: { silentSuccess?: boolean; offset?: number; limit?: number },
+    ) => {
       if (!authenticated) return;
+      const lim = options?.limit ?? queuePageLimit;
+      const off = options?.offset !== undefined ? options.offset : pageOffset;
       setListMsg({ type: "", text: "" });
       setLoadingRuns(true);
       const query = buildQuery({
@@ -229,6 +252,8 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
         failure_type: filters.failureType || undefined,
         pending_manual_review: filters.pendingManual || undefined,
         cart_id: filters.cartId.trim() || undefined,
+        limit: String(lim),
+        offset: String(off),
       });
       try {
         const res = await getRuns(query);
@@ -242,7 +267,16 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
           return;
         }
         const list = (body.data as RunSummaryRow[]) ?? [];
+        const page = body.page as { limit?: number; offset?: number } | undefined;
+        const resolvedLimit = Number(page?.limit ?? lim);
+        const resolvedOffset = Number(page?.offset ?? off);
         setRuns(list);
+        setPageOffset(resolvedOffset);
+        setListPageMeta({
+          limit: resolvedLimit,
+          offset: resolvedOffset,
+          rowCount: list.length,
+        });
 
         const sid = selectedRunId;
         const urlRun = runIdFromReviewDetailPath(location.pathname);
@@ -258,15 +292,17 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
           if (!options?.silentSuccess) {
             setListMsg({
               type: "warn",
-              text: "No runs returned for these filters. Broaden filters or use Refresh to check again.",
+              text: `No runs on this server page (offset ${resolvedOffset}, limit ${resolvedLimit}). Try Previous page or broaden server filters.`,
             });
           } else {
             setListMsg({ type: "", text: "" });
           }
         } else if (!options?.silentSuccess) {
+          const rowStart = resolvedOffset + 1;
+          const rowEnd = resolvedOffset + list.length;
           setListMsg({
             type: "success",
-            text: `Showing ${list.length} run(s) (newest first).`,
+            text: `Server page: positions ${rowStart}–${rowEnd} in this result (offset ${resolvedOffset}, limit ${resolvedLimit}; newest first). Queue search/sort apply only to these ${list.length} loaded rows.`,
           });
         }
       } catch {
@@ -280,6 +316,8 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     },
     [
       authenticated,
+      pageOffset,
+      queuePageLimit,
       selectedRunId,
       handleSessionFailure,
       loadRunDetail,
@@ -300,11 +338,55 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
   );
 
   const loadRuns = useCallback(
-    async (options?: { silentSuccess?: boolean }) => {
-      await loadRunsWithFilters(currentServerFilters(), options);
+    async (options?: { silentSuccess?: boolean; resetPage?: boolean }) => {
+      const lim = queuePageLimit;
+      const off = options?.resetPage ? 0 : pageOffset;
+      await loadRunsWithFilters(currentServerFilters(), {
+        silentSuccess: options?.silentSuccess,
+        offset: off,
+        limit: lim,
+      });
+    },
+    [loadRunsWithFilters, currentServerFilters, pageOffset, queuePageLimit],
+  );
+
+  const setQueuePageLimit = useCallback(
+    (n: number) => {
+      const lim = n === 25 || n === 50 || n === 100 ? n : 50;
+      setQueuePageLimitState(lim);
+      void loadRunsWithFilters(currentServerFilters(), {
+        offset: 0,
+        limit: lim,
+        silentSuccess: true,
+      });
     },
     [loadRunsWithFilters, currentServerFilters],
   );
+
+  const loadNextPage = useCallback(async () => {
+    const next = pageOffset + queuePageLimit;
+    await loadRunsWithFilters(currentServerFilters(), {
+      silentSuccess: true,
+      offset: next,
+      limit: queuePageLimit,
+    });
+  }, [pageOffset, queuePageLimit, loadRunsWithFilters, currentServerFilters]);
+
+  const loadPrevPage = useCallback(async () => {
+    const prev = Math.max(0, pageOffset - queuePageLimit);
+    await loadRunsWithFilters(currentServerFilters(), {
+      silentSuccess: true,
+      offset: prev,
+      limit: queuePageLimit,
+    });
+  }, [pageOffset, queuePageLimit, loadRunsWithFilters, currentServerFilters]);
+
+  const hasNextPage = useMemo(
+    () => listPageMeta.rowCount === listPageMeta.limit && listPageMeta.limit > 0,
+    [listPageMeta.rowCount, listPageMeta.limit],
+  );
+
+  const hasPrevPage = useMemo(() => listPageMeta.offset > 0, [listPageMeta.offset]);
 
   const loadRunsRef = useRef(loadRuns);
   loadRunsRef.current = loadRuns;
@@ -528,11 +610,12 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     setQueueSearch("");
     setLastOpenedRunId(null);
     setBulkSelectedRunIds([]);
+    setPageOffset(0);
     void loadRunsWithFilters(
       { status: "", failureType: "", pendingManual: "", cartId: "" },
-      undefined,
+      { offset: 0, limit: queuePageLimit },
     );
-  }, [loadRunsWithFilters]);
+  }, [loadRunsWithFilters, queuePageLimit]);
 
   const value = useMemo(
     () => ({
@@ -582,6 +665,13 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
       clearBulkSelection,
       addToBulkSelection,
       submitBulkTriage,
+      queuePageLimit,
+      setQueuePageLimit,
+      listPageMeta,
+      loadNextPage,
+      loadPrevPage,
+      hasNextPage,
+      hasPrevPage,
     }),
     [
       statusFilter,
@@ -619,6 +709,13 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
       clearBulkSelection,
       addToBulkSelection,
       submitBulkTriage,
+      queuePageLimit,
+      setQueuePageLimit,
+      listPageMeta,
+      loadNextPage,
+      loadPrevPage,
+      hasNextPage,
+      hasPrevPage,
     ],
   );
 
