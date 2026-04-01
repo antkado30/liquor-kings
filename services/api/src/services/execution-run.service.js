@@ -219,6 +219,89 @@ const mapLatestActionsByRunId = (rows) => {
   return latestByRun;
 };
 
+/** Batch size when scanning execution_runs to count pending_manual_review matches. */
+const OPERATOR_REVIEW_PENDING_COUNT_BATCH = 500;
+
+const applyExecutionRunsSqlFilters = (query, { status, failureType, cartId }) => {
+  let q = query;
+  if (status) q = q.eq("status", status);
+  if (failureType) q = q.eq("failure_type", failureType);
+  if (cartId) q = q.eq("cart_id", cartId);
+  return q;
+};
+
+/** Single PostgREST head count; cheap vs scanning rows. */
+const countExecutionRunsSqlMatch = async (supabase, storeId, sqlFilters) => {
+  let q = supabase
+    .from("execution_runs")
+    .select("*", { count: "exact", head: true })
+    .eq("store_id", storeId);
+  q = applyExecutionRunsSqlFilters(q, sqlFilters);
+  const { count, error } = await q;
+  if (error) return { error: error.message, total: null };
+  return { error: null, total: count ?? 0 };
+};
+
+/**
+ * Count runs whose list item matches pending_manual_review (same logic as list payload).
+ * Scans all rows matching SQL filters in batches (needed because this filter uses operator actions).
+ *
+ * Expensive: O(n) batches over the full SQL-filtered set; each batch loads actions. Listed in parallel
+ * with the paged list request in listExecutionRunsForOperatorReview to reduce wall-clock latency only.
+ */
+const countOperatorReviewPendingManualTotal = async (
+  supabase,
+  storeId,
+  sqlFilters,
+  pendingManualReview,
+) => {
+  let matchTotal = 0;
+  let scanOffset = 0;
+  for (;;) {
+    let q = supabase
+      .from("execution_runs")
+      .select("*")
+      .eq("store_id", storeId)
+      .order("created_at", { ascending: false })
+      .range(
+        scanOffset,
+        scanOffset + OPERATOR_REVIEW_PENDING_COUNT_BATCH - 1,
+      );
+    q = applyExecutionRunsSqlFilters(q, sqlFilters);
+    const { data: rows, error } = await q;
+    if (error) return { error: error.message, total: null };
+    if (!rows?.length) break;
+
+    const runIds = rows.map((row) => row.id).filter(Boolean);
+    let actionsByRunId = new Map();
+    if (runIds.length > 0) {
+      const { data: actionRows, error: actionErr } = await supabase
+        .from("execution_run_operator_actions")
+        .select("id, run_id, store_id, action, reason, note, actor_id, created_at")
+        .eq("store_id", storeId)
+        .in("run_id", runIds)
+        .order("created_at", { ascending: false });
+      if (actionErr) return { error: actionErr.message, total: null };
+      actionsByRunId = mapLatestActionsByRunId(actionRows);
+    }
+
+    for (const row of rows) {
+      const latest = actionsByRunId.get(row.id);
+      const summary = buildRunSummary(row, latest ? [latest] : []);
+      const item = buildOperatorReviewListItem(summary);
+      if (pendingManualReview === true && item.pending_manual_review === true) {
+        matchTotal += 1;
+      }
+      if (pendingManualReview === false && item.pending_manual_review === false) {
+        matchTotal += 1;
+      }
+    }
+
+    scanOffset += OPERATOR_REVIEW_PENDING_COUNT_BATCH;
+  }
+  return { error: null, total: matchTotal };
+};
+
 export const createExecutionRunFromCart = async (
   supabase,
   storeId,
@@ -471,24 +554,36 @@ export const listExecutionRunsForOperatorReview = async (
     return { statusCode: 400, body: { error: "Store context required" } };
   }
 
-  let query = supabase
-    .from("execution_runs")
-    .select("*")
-    .eq("store_id", storeId)
-    .order("created_at", { ascending: false })
-    .range(offset, offset + limit - 1);
+  const sqlFilters = { status, failureType, cartId };
 
-  if (status) {
-    query = query.eq("status", status);
-  }
-  if (failureType) {
-    query = query.eq("failure_type", failureType);
-  }
-  if (cartId) {
-    query = query.eq("cart_id", cartId);
-  }
+  const fetchPage = async () => {
+    let query = supabase
+      .from("execution_runs")
+      .select("*")
+      .eq("store_id", storeId)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    query = applyExecutionRunsSqlFilters(query, sqlFilters);
+    return query;
+  };
 
-  const { data, error } = await query;
+  const totalPromise =
+    pendingManualReview === undefined
+      ? countExecutionRunsSqlMatch(supabase, storeId, sqlFilters)
+      : countOperatorReviewPendingManualTotal(
+          supabase,
+          storeId,
+          sqlFilters,
+          pendingManualReview,
+        );
+
+  const [totalCountResult, pageResult] = await Promise.all([totalPromise, fetchPage()]);
+  if (totalCountResult.error) {
+    return serverError(totalCountResult.error);
+  }
+  const totalCount = totalCountResult.total;
+
+  const { data, error } = pageResult;
   if (error) return serverError(error.message);
 
   const rows = data ?? [];
@@ -524,10 +619,12 @@ export const listExecutionRunsForOperatorReview = async (
     body: {
       success: true,
       count: items.length,
+      total_count: totalCount,
       data: items,
       page: {
         limit,
         offset,
+        total_count: totalCount,
       },
     },
   };

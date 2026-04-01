@@ -92,7 +92,13 @@ type ReviewRunsCtx = {
   queuePageLimit: number;
   setQueuePageLimit: (n: number) => void;
   /** Last fetched server page (newest-first from API) */
-  listPageMeta: { limit: number; offset: number; rowCount: number };
+  listPageMeta: {
+    limit: number;
+    offset: number;
+    rowCount: number;
+    /** From API; null if missing (older server). Meaning depends on pending-manual filter — see UI copy. */
+    totalCount: number | null;
+  };
   loadNextPage: () => Promise<void>;
   loadPrevPage: () => Promise<void>;
   hasNextPage: boolean;
@@ -130,6 +136,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     limit: persisted.queuePageLimit,
     offset: 0,
     rowCount: 0,
+    totalCount: null as number | null,
   });
 
   const [runs, setRuns] = useState<RunSummaryRow[]>([]);
@@ -182,9 +189,13 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     lastOpenedRunId,
   ]);
 
+  /** Debounced: avoids a localStorage write on every queue-search keystroke. */
   useEffect(() => {
     if (!storeId) return;
-    writeReviewUiPersisted(storeId, persistSnapshot());
+    const t = window.setTimeout(() => {
+      writeReviewUiPersisted(storeId, persistSnapshot());
+    }, 400);
+    return () => clearTimeout(t);
   }, [storeId, persistSnapshot]);
 
   const resetDetail = useCallback(() => {
@@ -267,15 +278,19 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
           return;
         }
         const list = (body.data as RunSummaryRow[]) ?? [];
-        const page = body.page as { limit?: number; offset?: number } | undefined;
+        const page = body.page as { limit?: number; offset?: number; total_count?: number } | undefined;
         const resolvedLimit = Number(page?.limit ?? lim);
         const resolvedOffset = Number(page?.offset ?? off);
+        const rawTotal = (body as { total_count?: unknown }).total_count ?? page?.total_count;
+        const totalCount =
+          typeof rawTotal === "number" && Number.isFinite(rawTotal) ? rawTotal : null;
         setRuns(list);
         setPageOffset(resolvedOffset);
         setListPageMeta({
           limit: resolvedLimit,
           offset: resolvedOffset,
           rowCount: list.length,
+          totalCount,
         });
 
         const sid = selectedRunId;
@@ -284,7 +299,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
         if (sid && !still) {
           resetDetail();
           if (urlRun === sid) navigate("/review", { replace: true });
-        } else if (sid && still) {
+        } else if (sid && still && !options?.silentSuccess) {
           await loadRunDetail(sid, true);
         }
 
@@ -300,9 +315,13 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
         } else if (!options?.silentSuccess) {
           const rowStart = resolvedOffset + 1;
           const rowEnd = resolvedOffset + list.length;
+          const totalPart =
+            totalCount != null
+              ? ` ${totalCount} total matching server filters.`
+              : "";
           setListMsg({
             type: "success",
-            text: `Server page: positions ${rowStart}–${rowEnd} in this result (offset ${resolvedOffset}, limit ${resolvedLimit}; newest first). Queue search/sort apply only to these ${list.length} loaded rows.`,
+            text: `This page: SQL rows ${rowStart}–${rowEnd} (offset ${resolvedOffset}, limit ${resolvedLimit}; newest first).${totalPart} Queue search/sort apply only to the ${list.length} row(s) on this page.`,
           });
         }
       } catch {
@@ -381,15 +400,30 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     });
   }, [pageOffset, queuePageLimit, loadRunsWithFilters, currentServerFilters]);
 
-  const hasNextPage = useMemo(
-    () => listPageMeta.rowCount === listPageMeta.limit && listPageMeta.limit > 0,
-    [listPageMeta.rowCount, listPageMeta.limit],
-  );
+  const hasNextPage = useMemo(() => {
+    const tc = listPageMeta.totalCount;
+    const lim = listPageMeta.limit;
+    const off = listPageMeta.offset;
+    if (tc != null && pendingManualFilter === "") {
+      return off + lim < tc;
+    }
+    return listPageMeta.rowCount === lim && lim > 0;
+  }, [
+    listPageMeta.totalCount,
+    listPageMeta.limit,
+    listPageMeta.offset,
+    listPageMeta.rowCount,
+    pendingManualFilter,
+  ]);
 
   const hasPrevPage = useMemo(() => listPageMeta.offset > 0, [listPageMeta.offset]);
 
   const loadRunsRef = useRef(loadRuns);
   loadRunsRef.current = loadRuns;
+  const loadingRunsRef = useRef(false);
+  const actionInFlightRef = useRef(false);
+  loadingRunsRef.current = loadingRuns;
+  actionInFlightRef.current = actionInFlight;
 
   useEffect(() => {
     if (!authenticated) return;
@@ -401,12 +435,12 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     const sec = Number(autoRefreshSec);
     if (!Number.isFinite(sec) || sec < 5) return;
     const id = window.setInterval(() => {
-      if (!loadingRuns && !actionInFlight) {
+      if (!loadingRunsRef.current && !actionInFlightRef.current) {
         void loadRunsRef.current?.({ silentSuccess: true });
       }
     }, sec * 1000);
     return () => clearInterval(id);
-  }, [autoRefreshEnabled, autoRefreshSec, authenticated, loadingRuns, actionInFlight]);
+  }, [autoRefreshEnabled, autoRefreshSec, authenticated]);
 
   const filteredRuns = useMemo(() => {
     const q = queueSearch.trim().toLowerCase();

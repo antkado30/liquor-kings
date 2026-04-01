@@ -23,8 +23,10 @@ const createSupabaseStub = ({ runs, actions }) => {
       this.sort = null;
     }
 
-    select(columns) {
+    select(columns, options) {
       this.selectColumns = columns;
+      this.headCount =
+        options?.head === true && String(options?.count ?? "") === "exact";
       return this;
     }
 
@@ -57,6 +59,11 @@ const createSupabaseStub = ({ runs, actions }) => {
     then(resolve, reject) {
       try {
         const source = this.table === "execution_runs" ? runs : actions;
+        if (this.headCount) {
+          const n = this.#filteredRows(source).length;
+          resolve({ data: null, error: null, count: n });
+          return;
+        }
         const rows = this.#sortRows(this.#filteredRows(source));
         const data = this.rangeWindow
           ? rows.slice(this.rangeWindow.from, this.rangeWindow.to + 1)
@@ -183,6 +190,8 @@ describe("execution operator review list contract", () => {
     expect(res.body.data[0]).toHaveProperty("latest_operator_action");
     expect(res.body.data[0]).toHaveProperty("pending_manual_review");
     expect(res.body.data[0]).toHaveProperty("actionable_next_step");
+    expect(res.body.total_count).toBe(2);
+    expect(res.body.page.total_count).toBe(2);
   });
 
   it("filters by status, failure_type, cart_id and manual-review queue", async () => {
@@ -218,6 +227,8 @@ describe("execution operator review list contract", () => {
     expect(manualQueue.body.data).toHaveLength(1);
     expect(manualQueue.body.data[0].run_id).toBe(RUN_1);
     expect(manualQueue.body.data[0].pending_manual_review).toBe(true);
+    expect(manualQueue.body.total_count).toBe(1);
+    expect(manualQueue.body.page.total_count).toBe(1);
   });
 
   it("supports limit/offset pagination", async () => {
@@ -236,7 +247,8 @@ describe("execution operator review list contract", () => {
     expect(page1.body.data).toHaveLength(1);
     expect(page2.body.data).toHaveLength(1);
     expect(page1.body.data[0].run_id).not.toBe(page2.body.data[0].run_id);
-    expect(page1.body.page).toEqual({ limit: 1, offset: 0 });
+    expect(page1.body.page).toEqual({ limit: 1, offset: 0, total_count: 2 });
+    expect(page1.body.total_count).toBe(2);
   });
 
   it("rejects missing/invalid store scope", async () => {

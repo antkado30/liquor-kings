@@ -48,8 +48,8 @@ export function ReviewQueueView() {
         queuePageLimit={ctx.queuePageLimit}
         setQueuePageLimit={ctx.setQueuePageLimit}
         listPageMeta={ctx.listPageMeta}
-        loadNextPage={() => void ctx.loadNextPage()}
-        loadPrevPage={() => void ctx.loadPrevPage()}
+        loadNextPage={ctx.loadNextPage}
+        loadPrevPage={ctx.loadPrevPage}
         hasNextPage={ctx.hasNextPage}
         hasPrevPage={ctx.hasPrevPage}
       />

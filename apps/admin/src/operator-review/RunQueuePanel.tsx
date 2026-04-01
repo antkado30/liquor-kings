@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { failureGuidanceText } from "../lib/failureGuidance";
 import {
@@ -48,7 +48,12 @@ type Props = {
   resumeRunId: string | null;
   queuePageLimit: number;
   setQueuePageLimit: (n: number) => void;
-  listPageMeta: { limit: number; offset: number; rowCount: number };
+  listPageMeta: {
+    limit: number;
+    offset: number;
+    rowCount: number;
+    totalCount: number | null;
+  };
   loadNextPage: () => void;
   loadPrevPage: () => void;
   hasNextPage: boolean;
@@ -73,7 +78,7 @@ function runCardPriorityClass(row: RunSummaryRow): string {
   return "priority-band-default";
 }
 
-export function RunQueuePanel({
+function RunQueuePanelInner({
   statusFilter,
   setStatusFilter,
   failureTypeFilter,
@@ -248,10 +253,24 @@ export function RunQueuePanel({
         >
           Next page
         </button>
-        <span className="muted" style={{ fontSize: 12, flex: "1 1 220px" }}>
-          Server: offset {listPageMeta.offset}, limit {listPageMeta.limit}, {listPageMeta.rowCount}{" "}
-          row(s) loaded (newest first). Queue search &amp; sort apply only to these rows — not the
-          whole store.
+        <span className="muted" style={{ fontSize: 12, flex: "1 1 240px" }}>
+          Server page: offset {listPageMeta.offset}, page size {listPageMeta.limit},{" "}
+          {listPageMeta.rowCount} row(s) in this response (newest first).
+          {listPageMeta.totalCount != null ? (
+            <>
+              {" "}
+              <strong>{listPageMeta.totalCount}</strong> total matching current server filters
+              {pendingManualFilter !== "" ? (
+                <span> (includes pending-manual semantics from API).</span>
+              ) : (
+                <span> (status / failure / cart / store).</span>
+              )}
+            </>
+          ) : (
+            <span> Total count not reported by API.</span>
+          )}{" "}
+          Client: <strong>{filteredRuns.length}</strong> visible after queue search — only narrows this
+          page, not the full result set.
         </span>
       </div>
       <div className="row" style={{ marginTop: 8 }}>
@@ -497,3 +516,6 @@ export function RunQueuePanel({
     </section>
   );
 }
+
+/** Memoized: parent re-renders from router/shell should not re-render the full queue tree unnecessarily. */
+export const RunQueuePanel = memo(RunQueuePanelInner);
