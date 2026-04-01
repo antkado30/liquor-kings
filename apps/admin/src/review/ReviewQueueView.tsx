@@ -36,6 +36,9 @@ export function ReviewQueueView() {
         onLoadRuns={() => void ctx.loadRuns()}
         onRefresh={() => void ctx.loadRuns({ silentSuccess: true })}
         onResetFilters={ctx.resetFilters}
+        queueSortMode={ctx.queueSortMode}
+        setQueueSortMode={ctx.setQueueSortMode}
+        resumeRunId={ctx.resumeRunId}
         bulkSelectedRunIds={ctx.bulkSelectedRunIds}
         onToggleBulkRunId={ctx.toggleBulkRunId}
         onClearBulkSelection={ctx.clearBulkSelection}

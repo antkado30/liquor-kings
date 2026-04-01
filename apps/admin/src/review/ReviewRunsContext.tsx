@@ -15,6 +15,13 @@ import {
   parseJson,
   postRunAction,
 } from "../api/operatorReview";
+import type { QueueSortMode } from "../operator-review/queuePrioritization";
+import {
+  isLikelyUuid,
+  readReviewUiPersisted,
+  writeReviewUiPersisted,
+  type ReviewUiPersistedV1,
+} from "../operator-review/reviewUiPersistence";
 import { useOperatorSession } from "../session/OperatorSessionContext";
 import type { FlashMsg, OpAction, RunSummaryRow, Summary } from "../operator-review/types";
 import {
@@ -64,6 +71,10 @@ type ReviewRunsCtx = {
   setAutoRefreshEnabled: (v: boolean) => void;
   autoRefreshSec: number;
   setAutoRefreshSec: (v: number) => void;
+  queueSortMode: QueueSortMode;
+  setQueueSortMode: (v: QueueSortMode) => void;
+  /** Present in loaded batch — safe to link; from last successful detail open */
+  resumeRunId: string | null;
   loadRunDetail: (runId: string, silent?: boolean) => Promise<void>;
   loadRuns: (options?: { silentSuccess?: boolean }) => Promise<void>;
   resetFilters: () => void;
@@ -88,15 +99,22 @@ export function useReviewRuns(): ReviewRunsCtx {
 }
 
 export function ReviewRunsProvider({ children }: { children: ReactNode }) {
-  const { authenticated, handleSessionFailure } = useOperatorSession();
+  const { authenticated, handleSessionFailure, currentStore } = useOperatorSession();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [statusFilter, setStatusFilter] = useState("");
-  const [failureTypeFilter, setFailureTypeFilter] = useState("");
-  const [pendingManualFilter, setPendingManualFilter] = useState("");
-  const [cartIdFilter, setCartIdFilter] = useState("");
-  const [queueSearch, setQueueSearch] = useState("");
+  const storeId = useMemo(() => {
+    const id = currentStore?.id?.trim() ?? "";
+    return id && isLikelyUuid(id) ? id : "";
+  }, [currentStore?.id]);
+
+  const persisted = useMemo(() => readReviewUiPersisted(storeId || null), [storeId]);
+
+  const [statusFilter, setStatusFilter] = useState(persisted.statusFilter);
+  const [failureTypeFilter, setFailureTypeFilter] = useState(persisted.failureTypeFilter);
+  const [pendingManualFilter, setPendingManualFilter] = useState(persisted.pendingManualFilter);
+  const [cartIdFilter, setCartIdFilter] = useState(persisted.cartIdFilter);
+  const [queueSearch, setQueueSearch] = useState(persisted.queueSearch);
 
   const [runs, setRuns] = useState<RunSummaryRow[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -114,10 +132,42 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
   const [reason, setReason] = useState("");
   const [note, setNote] = useState("");
 
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
-  const [autoRefreshSec, setAutoRefreshSec] = useState(30);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(persisted.autoRefreshEnabled);
+  const [autoRefreshSec, setAutoRefreshSec] = useState(persisted.autoRefreshSec);
+  const [queueSortMode, setQueueSortMode] = useState<QueueSortMode>(persisted.queueSortMode);
+  const [lastOpenedRunId, setLastOpenedRunId] = useState<string | null>(persisted.lastOpenedRunId);
 
   const [bulkSelectedRunIds, setBulkSelectedRunIds] = useState<string[]>([]);
+
+  const persistSnapshot = useCallback((): ReviewUiPersistedV1 => {
+    return {
+      v: 1,
+      queueSortMode,
+      autoRefreshEnabled,
+      autoRefreshSec,
+      statusFilter,
+      failureTypeFilter,
+      pendingManualFilter,
+      cartIdFilter,
+      queueSearch,
+      lastOpenedRunId,
+    };
+  }, [
+    queueSortMode,
+    autoRefreshEnabled,
+    autoRefreshSec,
+    statusFilter,
+    failureTypeFilter,
+    pendingManualFilter,
+    cartIdFilter,
+    queueSearch,
+    lastOpenedRunId,
+  ]);
+
+  useEffect(() => {
+    if (!storeId) return;
+    writeReviewUiPersisted(storeId, persistSnapshot());
+  }, [storeId, persistSnapshot]);
 
   const resetDetail = useCallback(() => {
     setSelectedRunId(null);
@@ -155,6 +205,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
         setDetailSummary(summary ?? null);
         setEvidenceItems(evidence?.items ?? []);
         setOpActions(oa?.items ?? []);
+        setLastOpenedRunId(runId);
         if (!silent) setDetailMsg({ type: "success", text: "Run detail loaded." });
       } catch {
         setDetailMsg({
@@ -284,6 +335,11 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
         (r.cart_id && String(r.cart_id).toLowerCase().includes(q)),
     );
   }, [runs, queueSearch]);
+
+  const resumeRunId = useMemo(() => {
+    if (!lastOpenedRunId) return null;
+    return runs.some((r) => r.run_id === lastOpenedRunId) ? lastOpenedRunId : null;
+  }, [runs, lastOpenedRunId]);
 
   useEffect(() => {
     setBulkSelectedRunIds((prev) => prev.filter((id) => runs.some((r) => r.run_id === id)));
@@ -470,6 +526,7 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
     setPendingManualFilter("");
     setCartIdFilter("");
     setQueueSearch("");
+    setLastOpenedRunId(null);
     setBulkSelectedRunIds([]);
     void loadRunsWithFilters(
       { status: "", failureType: "", pendingManual: "", cartId: "" },
@@ -509,6 +566,9 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
       setAutoRefreshEnabled,
       autoRefreshSec,
       setAutoRefreshSec,
+      queueSortMode,
+      setQueueSortMode,
+      resumeRunId,
       loadRunDetail,
       loadRuns,
       resetFilters,
@@ -544,6 +604,8 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
       note,
       autoRefreshEnabled,
       autoRefreshSec,
+      queueSortMode,
+      resumeRunId,
       loadRunDetail,
       loadRuns,
       resetFilters,

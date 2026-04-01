@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { Link } from "react-router-dom";
 import { failureGuidanceText } from "../lib/failureGuidance";
 import {
   filterRunIdsFailedRetryable,
@@ -42,6 +43,9 @@ type Props = {
   onLoadRuns: () => void;
   onRefresh: () => void;
   onResetFilters: () => void;
+  queueSortMode: QueueSortMode;
+  setQueueSortMode: (v: QueueSortMode) => void;
+  resumeRunId: string | null;
   bulkSelectedRunIds: string[];
   onToggleBulkRunId: (runId: string) => void;
   onClearBulkSelection: () => void;
@@ -87,6 +91,9 @@ export function RunQueuePanel({
   onLoadRuns,
   onRefresh,
   onResetFilters,
+  queueSortMode,
+  setQueueSortMode,
+  resumeRunId,
   bulkSelectedRunIds,
   onToggleBulkRunId,
   onClearBulkSelection,
@@ -94,11 +101,9 @@ export function RunQueuePanel({
   onBulkAcknowledge,
   onBulkMarkManual,
 }: Props) {
-  const [sortMode, setSortMode] = useState<QueueSortMode>("priority");
-
   const displayRuns = useMemo(
-    () => sortRunsForQueue(filteredRuns, sortMode),
-    [filteredRuns, sortMode],
+    () => sortRunsForQueue(filteredRuns, queueSortMode),
+    [filteredRuns, queueSortMode],
   );
 
   const bulkSet = useMemo(() => new Set(bulkSelectedRunIds), [bulkSelectedRunIds]);
@@ -127,6 +132,19 @@ export function RunQueuePanel({
   return (
     <section className="card">
       <h3 className="section-title">Run queue</h3>
+      <p className="muted review-persist-hint" style={{ fontSize: 12, marginTop: 4 }}>
+        Sort, auto-refresh, server filters, cart filter, and queue search persist in this browser for
+        the current store (localStorage key{" "}
+        <code className="mono">lk-admin-review-ui:v1:{"<storeId>"}</code>
+        ). Reset filters clears filters, search, bulk selection, and the resume link — not sort or
+        auto-refresh.
+      </p>
+      {resumeRunId ? (
+        <div className="review-resume-row">
+          <Link to={`/review/${encodeURIComponent(resumeRunId)}`}>Continue last opened run</Link>
+          <span className="muted"> — still in the current loaded batch</span>
+        </div>
+      ) : null}
       <div className="row" style={{ marginTop: 8 }}>
         <label>Status</label>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
@@ -180,6 +198,7 @@ export function RunQueuePanel({
           className="secondary"
           onClick={onResetFilters}
           disabled={loadingRuns || actionInFlight}
+          title="Clears server filters, cart filter, queue search, bulk selection, and last-opened resume link. Keeps sort mode and auto-refresh."
         >
           Reset filters
         </button>
@@ -187,8 +206,8 @@ export function RunQueuePanel({
       <div className="row" style={{ marginTop: 8 }}>
         <label>Sort</label>
         <select
-          value={sortMode}
-          onChange={(e) => setSortMode(e.target.value as QueueSortMode)}
+          value={queueSortMode}
+          onChange={(e) => setQueueSortMode(e.target.value as QueueSortMode)}
           disabled={loadingRuns}
         >
           <option value="priority">Priority (triage)</option>
@@ -197,14 +216,14 @@ export function RunQueuePanel({
         </select>
       </div>
       <p className="muted queue-sort-hint" style={{ fontSize: 12, margin: "4px 0 0" }}>
-        {sortMode === "priority" && (
+        {queueSortMode === "priority" && (
           <>
             Client sort: manual review &amp; failed (retryable first) ahead of running &amp; queued;
             long-wait queued runs bubble up. Tie-break: newest <code>created_at</code> in batch.
           </>
         )}
-        {sortMode === "newest" && <>API order overridden: newest <code>created_at</code> first.</>}
-        {sortMode === "failed_only" && (
+        {queueSortMode === "newest" && <>API order overridden: newest <code>created_at</code> first.</>}
+        {queueSortMode === "failed_only" && (
           <>Only <code>failed</code> rows from the loaded list; then same priority tiers among failures.</>
         )}
       </p>
@@ -353,7 +372,7 @@ export function RunQueuePanel({
             <strong>No queue matches</strong>
             Clear search or load a broader set.
           </div>
-        ) : sortMode === "failed_only" && displayRuns.length === 0 ? (
+        ) : queueSortMode === "failed_only" && displayRuns.length === 0 ? (
           <div className="empty-state">
             <strong>No failed runs</strong>
             In this loaded batch nothing has status failed. Widen filters or use another sort.

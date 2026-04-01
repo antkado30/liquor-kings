@@ -771,6 +771,16 @@ pre,
 .bulk-eligibility-hint {
   line-height: 1.45;
 }
+.review-persist-hint {
+  line-height: 1.45;
+}
+.review-resume-row {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.review-resume-row a {
+  font-weight: 600;
+}
 .run-card.pending-review {
   border-left: 4px solid #f59e0b;
   padding-left: 8px;
