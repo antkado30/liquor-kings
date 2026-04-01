@@ -1749,6 +1749,468 @@ export async function runAddByCodePhase2gTypingPolicyAndRehearsal({
   };
 }
 
+export const PHASE_2H_REAL_CODE_POLICY_VERSION = "lk-rpa-2h-1";
+
+const PHASE_2H_TEST_CODE_MAX_LEN = 64;
+
+/**
+ * Single env-provided test code for Phase 2h (not a quantity; no newlines).
+ */
+export function parsePhase2hTestCode(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return {
+      ok: false,
+      value: null,
+      reason: "empty_or_missing",
+    };
+  }
+
+  const v = String(raw).trim();
+
+  if (v.length > PHASE_2H_TEST_CODE_MAX_LEN) {
+    return {
+      ok: false,
+      value: null,
+      reason: `exceeds_max_length_${PHASE_2H_TEST_CODE_MAX_LEN}`,
+    };
+  }
+
+  if (/[\r\n]/.test(v)) {
+    return {
+      ok: false,
+      value: null,
+      reason: "newlines_not_allowed",
+    };
+  }
+
+  return { ok: true, value: v };
+}
+
+/**
+ * Phase 2h: one tenant code field only; real test value from env; no Enter, no qty, no clicks.
+ * Hard-fails if Layer 2 guard count increases during type. Clears field only when type caused no new aborts.
+ */
+export async function runAddByCodePhase2hRealCodeTypingRehearsal({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  buildStepEvidence,
+}) {
+  await heartbeat({
+    progressStage: "mlcc_phase_2h_real_code_start",
+    progressMessage:
+      "Phase 2h: tightly gated real code-field typing rehearsal (no qty; no submit)",
+  });
+
+  const testCode = config.addByCodePhase2hTestCode;
+  const codeSel = config.addByCodeCodeFieldSelector;
+
+  const mutation_risk_checks_used = [
+    "computePhase2gExtendedMutationRisk_same_as_phase_2g",
+    "layer_2_network_abort_counter_guardStats_blockedRequestCount",
+    "layer_2_shouldBlockHttpRequest_patterns_active_on_context",
+    "no_enter_playwright_fill_only",
+    "quantity_field_explicitly_out_of_scope",
+    "no_explicit_blur_phase_2h_policy",
+  ];
+
+  if (!codeSel || typeof codeSel !== "string" || codeSel.trim() === "") {
+    const err =
+      "Phase 2h requires MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR (tenant code field only; no heuristic target)";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_blocked",
+        message: err,
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          real_code_typing_performed: false,
+          quantity_field_touched: false,
+          block_reason: "missing_tenant_code_field_selector",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const loc = page.locator(codeSel).first();
+  const n = await loc.count().catch(() => 0);
+
+  if (n === 0) {
+    const err = "Phase 2h: code field selector matched no elements";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_blocked",
+        message: err,
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          selector_used: codeSel,
+          real_code_typing_performed: false,
+          quantity_field_touched: false,
+          block_reason: "selector_zero_matches",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const visible = await loc.isVisible().catch(() => false);
+
+  if (!visible) {
+    const err = "Phase 2h: code field not visible";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_blocked",
+        message: err,
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          selector_used: codeSel,
+          real_code_typing_performed: false,
+          quantity_field_touched: false,
+          block_reason: "field_not_visible",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const snapBefore = await readFieldDomSnapshot(loc);
+
+  if (snapBefore.unsupported) {
+    const err = "Phase 2h: code field DOM snapshot unsupported";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_blocked",
+        message: err,
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          selector_used: codeSel,
+          dom_snapshot_before: snapBefore,
+          real_code_typing_performed: false,
+          quantity_field_touched: false,
+          block_reason: "unsupported_element",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const typeLower = String(snapBefore.type || "text").toLowerCase();
+
+  if (typeLower === "number") {
+    const err =
+      "Phase 2h: input type=number rejected (quantity-like); use a text-like code field selector";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_blocked",
+        message: err,
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          selector_used: codeSel,
+          dom_snapshot_before: snapBefore,
+          real_code_typing_performed: false,
+          quantity_field_touched: false,
+          block_reason: "input_type_number_rejected",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (snapBefore.disabled || snapBefore.readOnly) {
+    const err = "Phase 2h: code field disabled or read-only";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_blocked",
+        message: err,
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          selector_used: codeSel,
+          dom_snapshot_before: snapBefore,
+          real_code_typing_performed: false,
+          quantity_field_touched: false,
+          block_reason: "disabled_or_readonly",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const rawPayload = await collectPhase2gRiskPayloadFromLocator(loc);
+  const mutation_risk = computePhase2gExtendedMutationRisk(rawPayload);
+
+  if (mutation_risk.rehearsal_blocked) {
+    const err = `Phase 2h: extended mutation risk blocked: ${mutation_risk.block_reasons.join("|")}`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_blocked",
+        message: err,
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          selector_used: codeSel,
+          dom_snapshot_before: snapBefore,
+          mutation_risk,
+          real_code_typing_performed: false,
+          quantity_field_touched: false,
+          block_reason: "extended_mutation_risk",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2h_pre_type_snapshot",
+        message:
+          "Phase 2h checkpoint immediately before real code fill (no Enter; no qty)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  const blockedBefore =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  try {
+    await loc.fill(testCode, { timeout: 8000 });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_blocked",
+        message: `Phase 2h: fill failed: ${m}`,
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          selector_used: codeSel,
+          dom_snapshot_before: snapBefore,
+          mutation_risk,
+          real_code_typing_performed: false,
+          quantity_field_touched: false,
+          block_reason: `fill_error:${m}`,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(`Phase 2h real code fill failed: ${m}`);
+  }
+
+  await new Promise((r) => setTimeout(r, 250));
+
+  const blockedAfterType =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_during_type =
+    blockedBefore != null && blockedAfterType != null
+      ? blockedAfterType - blockedBefore
+      : null;
+
+  const snapAfterType = await readFieldDomSnapshot(loc);
+
+  let field_cleared_after = false;
+  let network_guard_delta_during_clear = null;
+  let run_remained_fully_non_mutating = true;
+
+  if (
+    network_guard_delta_during_type != null &&
+    network_guard_delta_during_type > 0
+  ) {
+    run_remained_fully_non_mutating = false;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_findings",
+        message:
+          "Phase 2h stopped: network guard saw new blocked requests during real code typing; field not cleared",
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          selector_used: codeSel,
+          test_code_length: testCode.length,
+          test_code_redacted: "[length_only_not_value]",
+          dom_snapshot_before: snapBefore,
+          dom_snapshot_after_type: snapAfterType,
+          mutation_risk,
+          mutation_risk_checks_used,
+          real_code_typing_performed: true,
+          quantity_field_touched: false,
+          network_guard_blocked_before: blockedBefore,
+          network_guard_blocked_after_type: blockedAfterType,
+          network_guard_delta_during_type,
+          field_cleared_after: false,
+          clear_skipped_reason:
+            "network_abort_during_type_clearing_would_be_ambiguous_stop_hard_fail",
+          run_remained_fully_non_mutating: false,
+          disclaimer:
+            "single_run_observation_does_not_generalize_real_code_safety_quantity_still_out_of_scope_no_cart_state_proof",
+        },
+      }),
+    );
+
+    throw new Error(
+      "Phase 2h real code rehearsal: network guard triggered during typing (cart/order mutation URL pattern aborted)",
+    );
+  }
+
+  const blockedBeforeClear = blockedAfterType;
+
+  try {
+    await loc.fill("", { timeout: 8000 });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2h_real_code_findings",
+        message: `Phase 2h: clear fill failed: ${m}`,
+        attributes: {
+          phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+          selector_used: codeSel,
+          test_code_length: testCode.length,
+          dom_snapshot_after_type: snapAfterType,
+          real_code_typing_performed: true,
+          quantity_field_touched: false,
+          field_cleared_after: false,
+          clear_error: m,
+          run_remained_fully_non_mutating: false,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(`Phase 2h clear failed: ${m}`);
+  }
+
+  await new Promise((r) => setTimeout(r, 200));
+
+  const blockedAfterClear =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  network_guard_delta_during_clear =
+    blockedBeforeClear != null && blockedAfterClear != null
+      ? blockedAfterClear - blockedBeforeClear
+      : null;
+
+  field_cleared_after = true;
+
+  if (
+    network_guard_delta_during_clear != null &&
+    network_guard_delta_during_clear > 0
+  ) {
+    run_remained_fully_non_mutating = false;
+  }
+
+  const snapAfterClear = await readFieldDomSnapshot(loc);
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2h_post_clear_snapshot",
+        message: "Phase 2h checkpoint after clear fill (no blur)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2h_real_code_findings",
+      message:
+        "Phase 2h real code typing rehearsal complete (truthful; quantity untouched)",
+      attributes: {
+        phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+        selector_used: codeSel,
+        test_code_length: testCode.length,
+        test_code_redacted: "[length_only_not_value]",
+        dom_snapshot_before: snapBefore,
+        dom_snapshot_after_type: snapAfterType,
+        dom_snapshot_after_clear: snapAfterClear,
+        mutation_risk,
+        mutation_risk_checks_used,
+        real_code_typing_performed: true,
+        quantity_field_touched: false,
+        quantity_field_policy: "never_touched_in_phase_2h",
+        network_guard_blocked_before: blockedBefore,
+        network_guard_blocked_after_type: blockedAfterType,
+        network_guard_delta_during_type,
+        network_guard_blocked_after_clear: blockedAfterClear,
+        network_guard_delta_during_clear,
+        field_cleared_after,
+        run_remained_fully_non_mutating,
+        interaction_method: "playwright_locator_fill_no_enter_no_blur",
+        disclaimer:
+          "observed_no_new_layer2_aborts_during_type_and_clear_on_this_run_does_not_prove_safe_for_all_codes_or_cart_state_quantity_not_evaluated",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2h_real_code_complete",
+    progressMessage:
+      "Phase 2h complete (no qty; no validate/add-to-cart/checkout/submit)",
+  });
+
+  return {
+    phase_2h_policy_version: PHASE_2H_REAL_CODE_POLICY_VERSION,
+    real_code_typing_performed: true,
+    quantity_field_touched: false,
+    field_cleared_after,
+    run_remained_fully_non_mutating,
+    network_guard_delta_during_type,
+    network_guard_delta_during_clear,
+    mutation_risk_checks_used,
+    mutation_risk,
+  };
+}
+
 async function collectMutationBoundaryControls(page, maxElements) {
   return page.evaluate((max) => {
     const cap = Math.min(Math.max(max, 1), 150);

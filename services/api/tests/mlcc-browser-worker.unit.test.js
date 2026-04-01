@@ -59,6 +59,9 @@ describe("buildMlccBrowserConfig", () => {
       addByCodePhase2gFocusBlurRehearsal: false,
       addByCodePhase2gSentinelTyping: false,
       addByCodePhase2gSentinelValue: null,
+      addByCodePhase2h: false,
+      addByCodePhase2hApproved: false,
+      addByCodePhase2hTestCode: null,
     });
   });
 
@@ -268,6 +271,62 @@ describe("buildMlccBrowserConfig", () => {
     expect(out.config.mutationBoundaryUncertainHints).toEqual([
       { contains: "sku", advisory_label: "Likely product lookup (advisory)" },
     ]);
+  });
+
+  it("rejects Phase 2h without approval flag", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#code",
+      MLCC_ADD_BY_CODE_PHASE_2H: "true",
+      MLCC_ADD_BY_CODE_PHASE_2H_TEST_CODE: "TEST1",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors.some((e) => /2H_APPROVED/.test(e.message))).toBe(true);
+  });
+
+  it("accepts Phase 2h when approved with tenant code selector and test code", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#sku",
+      MLCC_ADD_BY_CODE_PHASE_2H: "true",
+      MLCC_ADD_BY_CODE_PHASE_2H_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2H_TEST_CODE: "  ABC123  ",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2h).toBe(true);
+    expect(out.config.addByCodePhase2hApproved).toBe(true);
+    expect(out.config.addByCodePhase2hTestCode).toBe("ABC123");
+  });
+
+  it("rejects Phase 2h without tenant code field selector", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2H: "true",
+      MLCC_ADD_BY_CODE_PHASE_2H_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2H_TEST_CODE: "X",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) => /CODE_FIELD_SELECTOR/.test(e.message)),
+    ).toBe(true);
   });
 
   it("rejects Phase 2g without Phase 2b probe", () => {

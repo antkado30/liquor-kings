@@ -11,6 +11,7 @@ import {
   parseMutationBoundaryUncertainHints,
   parsePhase2fSafeOpenTextAllowSubstrings,
   parsePhase2gSentinelValue,
+  parsePhase2hTestCode,
   parseSafeOpenCandidateSelectors,
   PHASE_2G_TYPING_POLICY_VERSION,
   shouldBlockHttpRequest,
@@ -84,6 +85,20 @@ describe("parseMutationBoundaryUncertainHints", () => {
     expect(() => parseMutationBoundaryUncertainHints('{"x":1}')).toThrow(
       /must be a JSON array/,
     );
+  });
+});
+
+describe("parsePhase2hTestCode", () => {
+  it("accepts trimmed non-empty string within max length", () => {
+    const r = parsePhase2hTestCode("  hi  ");
+    expect(r.ok).toBe(true);
+    expect(r.value).toBe("hi");
+  });
+
+  it("rejects empty and oversize", () => {
+    expect(parsePhase2hTestCode("").ok).toBe(false);
+    expect(parsePhase2hTestCode("a".repeat(65)).ok).toBe(false);
+    expect(parsePhase2hTestCode("a\nb").ok).toBe(false);
   });
 });
 

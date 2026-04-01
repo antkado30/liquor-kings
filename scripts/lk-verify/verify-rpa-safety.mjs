@@ -101,15 +101,33 @@ if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2G")) {
   checks.push("mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2G (Phase 2g)");
 }
 
-// Phase 2b/2c: no product .fill in probe; Phase 2g may use exactly sentinel fill+clear (synthetic only).
+if (!probe.includes("runAddByCodePhase2hRealCodeTypingRehearsal")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must define runAddByCodePhase2hRealCodeTypingRehearsal (Phase 2h)",
+  );
+}
+
+if (!probe.includes("export const PHASE_2H_REAL_CODE_POLICY_VERSION")) {
+  checks.push("mlcc-browser-add-by-code-probe.js must export PHASE_2H_REAL_CODE_POLICY_VERSION");
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2H_APPROVED")) {
+  checks.push("mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2H_APPROVED (Phase 2h)");
+}
+
+// Phase 2b/2c: no product .fill in probe; Phase 2g sentinel; Phase 2h gated real code + clear.
 if (/\b\.fill\s*\(/u.test(probe)) {
   const onlyPhase2gSentinel =
     probe.includes("runAddByCodePhase2gTypingPolicyAndRehearsal") &&
     probe.includes("fill(sentinelVal") &&
     probe.includes('fill("",');
-  if (!onlyPhase2gSentinel) {
+  const phase2hRealCode =
+    probe.includes("runAddByCodePhase2hRealCodeTypingRehearsal") &&
+    probe.includes("fill(testCode") &&
+    probe.includes('fill("",');
+  if (!onlyPhase2gSentinel && !phase2hRealCode) {
     checks.push(
-      "mlcc-browser-add-by-code-probe.js: .fill( allowed only for Phase 2g synthetic sentinel rehearsal (fill sentinel + clear)",
+      "mlcc-browser-add-by-code-probe.js: .fill( allowed only for Phase 2g sentinel or Phase 2h gated real code + clear",
     );
   }
 }
