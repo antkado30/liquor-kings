@@ -3,6 +3,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import {
+  installMlccSafetyNetworkGuards,
+  runAddByCodeProbePhase,
+} from "./mlcc-browser-add-by-code-probe.js";
+import {
   buildPageSnapshotAttributes,
   maybeScreenshotPngBase64,
   mergeSnapshotAndScreenshot,
@@ -36,6 +40,9 @@ export const MLCC_BROWSER_DRY_RUN_SAFE_MODE = true;
  * - MLCC_LICENSE_STORE_CONTINUE_SELECTOR — selector for continue/next (navigation only; not checkout)
  * - MLCC_LICENSE_STORE_URL_PATTERN — optional RegExp source; if set, automation runs only when URL matches
  * - MLCC_LICENSE_STORE_WAIT_MS — wait between clicks (default 2000)
+ * Phase 2b (add-by-code probe, non-mutating):
+ * - MLCC_ADD_BY_CODE_PROBE — "true" to run detection-only probe after ordering-ready (no typing; guards on)
+ * - MLCC_ADD_BY_CODE_ENTRY_SELECTOR — optional CSS for a single safe open action (blocked if label matches submit/cart patterns)
  */
 export function buildMlccBrowserConfig({ payload, env }) {
   if (!payload) {
@@ -178,6 +185,14 @@ export function buildMlccBrowserConfig({ payload, env }) {
     }
   }
 
+  const addByCodeProbe = env?.MLCC_ADD_BY_CODE_PROBE === "true";
+
+  const addByCodeEntryRaw = env?.MLCC_ADD_BY_CODE_ENTRY_SELECTOR;
+  const addByCodeEntrySelector =
+    typeof addByCodeEntryRaw === "string" && addByCodeEntryRaw.trim() !== ""
+      ? addByCodeEntryRaw.trim()
+      : null;
+
   if (errors.length > 0) {
     return {
       ready: false,
@@ -205,6 +220,8 @@ export function buildMlccBrowserConfig({ payload, env }) {
         licenseStoreContinueSelector || null,
       licenseStoreUrlPattern,
       licenseStoreWaitMs,
+      addByCodeProbe,
+      addByCodeEntrySelector,
     },
     errors: [],
   };
@@ -799,6 +816,9 @@ export async function processOneMlccBrowserDryRun({
 
     browser = await chromium.launch({ headless: config.headless });
     const context = await browser.newContext();
+
+    await installMlccSafetyNetworkGuards(context);
+
     page = await context.newPage();
 
     await heartbeat({
@@ -867,9 +887,52 @@ export async function processOneMlccBrowserDryRun({
     evidenceCollected.push(
       await buildStepEvidence({
         page,
+        stage: "mlcc_ordering_ready_before_add_by_code_probe",
+        message:
+          "Ordering-ready checkpoint immediately before Phase 2b add-by-code probe",
+        kind: "mlcc_step_snapshot",
+        buildEvidence,
+        config,
+      }),
+    );
+
+    let phase2bResult = null;
+
+    if (config.addByCodeProbe) {
+      phase2bResult = await runAddByCodeProbePhase({
+        page,
+        config,
+        heartbeat: async (args) => heartbeat(args),
+        buildStepEvidence,
+        buildEvidence,
+        evidenceCollected,
+      });
+    } else {
+      await heartbeat({
+        progressStage: "mlcc_add_by_code_probe_skipped",
+        progressMessage:
+          "Phase 2b add-by-code probe disabled (MLCC_ADD_BY_CODE_PROBE not true)",
+      });
+
+      evidenceCollected.push(
+        buildEvidence({
+          kind: "mlcc_add_by_code_probe",
+          stage: "mlcc_add_by_code_probe_skipped",
+          message: "Phase 2b not run; enable MLCC_ADD_BY_CODE_PROBE=true for live UI mapping",
+          attributes: {
+            skipped: true,
+            reason: "MLCC_ADD_BY_CODE_PROBE_not_enabled",
+          },
+        }),
+      );
+    }
+
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
         stage: "mlcc_ordering_ready_landing",
         message:
-          "Safe ordering-ready checkpoint (dry-run; no cart mutations, no add-by-code)",
+          "Final ordering-ready checkpoint after Phase 2b decision (no validate/checkout/submit)",
         kind: "mlcc_step_snapshot",
         buildEvidence,
         config,
@@ -888,7 +951,12 @@ export async function processOneMlccBrowserDryRun({
     }
 
     const orderingReadyHeuristic = inferLicenseStoreHeuristic(finalUrl, title);
-    const result = { finalUrl, title, ordering_ready_heuristic: orderingReadyHeuristic };
+    const result = {
+      finalUrl,
+      title,
+      ordering_ready_heuristic: orderingReadyHeuristic,
+      phase_2b_add_by_code: phase2bResult,
+    };
 
     await finalizeRun({
       apiBaseUrl,
@@ -898,14 +966,16 @@ export async function processOneMlccBrowserDryRun({
       workerNotes:
         "MLCC browser dry run completed successfully; no cart mutations or submit actions were performed. " +
         `dry_run_safe_mode=${MLCC_BROWSER_DRY_RUN_SAFE_MODE} submission_armed=${config.submissionArmed} ` +
-        `license_store_automation=${config.licenseStoreAutomation}`,
+        `license_store_automation=${config.licenseStoreAutomation} ` +
+        `add_by_code_probe=${config.addByCodeProbe}`,
       errorMessage: undefined,
       evidence: [
         ...evidenceCollected,
         buildEvidence({
           kind: "worker_log",
           stage: "completed",
-          message: "MLCC browser dry-run completed (Phase 2a checkpoints)",
+          message:
+            "MLCC browser dry-run completed (Phase 2a/2b checkpoints; no cart mutation)",
           attributes: {
             finalUrl,
             title,
@@ -916,6 +986,16 @@ export async function processOneMlccBrowserDryRun({
             license_store_automation: config.licenseStoreAutomation,
             ordering_ready_heuristic: orderingReadyHeuristic,
             checkpoint_ordering_ready: "mlcc_ordering_ready_landing",
+            checkpoint_before_add_by_code_probe:
+              "mlcc_ordering_ready_before_add_by_code_probe",
+            phase_2b_probe_enabled: config.addByCodeProbe,
+            phase_2b_add_by_code_ui_reached:
+              phase2bResult?.add_by_code_ui_reached ?? null,
+            phase_2b_code_field_detected:
+              phase2bResult?.code_field_detected ?? null,
+            phase_2b_quantity_field_detected:
+              phase2bResult?.quantity_field_detected ?? null,
+            phase_2b_stop_reason: phase2bResult?.stop_reason ?? null,
           },
         }),
       ],
@@ -932,19 +1012,20 @@ export async function processOneMlccBrowserDryRun({
     const lower = msg.toLowerCase();
     const isLogin = lower.includes("mlcc login failed");
     const isLicenseStore = lower.includes("mlcc license/store step failed");
+    const isAddByCodeProbe = lower.includes("mlcc add-by-code probe failed");
     const classified = classifyFailureType({ errorMessage: msg, explicitType: undefined });
     const looksTransport =
       /timeout|econn|network|fetch failed|502|503|enotfound|etimedout/i.test(msg);
     const failureType = isLogin
       ? FAILURE_TYPE.MLCC_UI_CHANGE
-      : isLicenseStore
+      : isLicenseStore || isAddByCodeProbe
         ? FAILURE_TYPE.MLCC_UI_CHANGE
         : looksTransport
           ? FAILURE_TYPE.NETWORK_ERROR
           : FAILURE_TYPE.MLCC_UI_CHANGE;
     const mlccSignal = isLogin
       ? MLCC_SIGNAL.LOGIN_AUTH
-      : isLicenseStore
+      : isLicenseStore || isAddByCodeProbe
         ? MLCC_SIGNAL.SELECTOR_UI
         : looksTransport
           ? MLCC_SIGNAL.NETWORK_TRANSPORT
@@ -974,7 +1055,11 @@ export async function processOneMlccBrowserDryRun({
         errorMessage: msg,
         failureType,
         failureDetails: {
-          stage: isLicenseStore ? "mlcc_license_store" : "browser_runtime",
+          stage: isLicenseStore
+            ? "mlcc_license_store"
+            : isAddByCodeProbe
+              ? "mlcc_add_by_code_probe"
+              : "browser_runtime",
           mlcc_signal: mlccSignal,
           classified_type: classified,
         },

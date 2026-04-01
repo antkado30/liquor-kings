@@ -41,6 +41,8 @@ describe("buildMlccBrowserConfig", () => {
       licenseStoreContinueSelector: null,
       licenseStoreUrlPattern: null,
       licenseStoreWaitMs: 2000,
+      addByCodeProbe: false,
+      addByCodeEntrySelector: null,
     });
   });
 
