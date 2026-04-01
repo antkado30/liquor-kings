@@ -75,7 +75,7 @@ type QueueHealthData = {
   warnings: HealthWarning[];
 };
 
-type OverviewData = {
+export type OverviewData = {
   meta: {
     store_id: string;
     execution_runs_window_days: number;

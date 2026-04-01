@@ -9,6 +9,13 @@ export function AppNavLayout() {
       <nav className="admin-nav" aria-label="Admin">
         <div className="admin-nav-title">Operator</div>
         <NavLink
+          to="/overview"
+          end
+          className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}
+        >
+          Overview
+        </NavLink>
+        <NavLink
           to="/review"
           end
           className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}
