@@ -5,7 +5,7 @@
 **Dry-run plan:** `services/api/src/workers/mlcc-dry-run.js`  
 **Entry script:** `npm run worker:mlcc-browser-dry-run` in `services/api/package.json`
 
-## Runtime through Phase 2o (2n single add/apply click + optional 2o read-only observation when gated); Phase 2m canonical manifest (probe-only import)
+## Runtime through Phase 2o; planning through Phase 2p for validate (2m probe manifest for add/apply; 2p policy file **planning-only** — no worker/probe import until execution phase)
 
 | Phase | Summary | Allowed | Forbidden |
 |-------|---------|---------|-----------|
@@ -24,6 +24,7 @@
 | **2m** | **Canonical gate manifest** for add/apply-line and post-add/apply ladder — **no** standalone env flag. **Probe** imports [`mlcc-phase-2m-policy.js`](../../../services/api/src/workers/mlcc-phase-2m-policy.js) to echo `buildPhase2mAddApplyLineFutureGateManifest()` and `buildPhase2mPostAddApplyLadder()` during **2n** / **2o** evidence; **worker must not** import **2m** (`verify:lk:rpa-safety`) | Read policy file; run `verify:lk:rpa-safety` | Worker importing **2m**; claiming validate/checkout/submit readiness from **2m** alone |
 | **2n** | **Single bounded add-line / apply-line click** (tenant CSS candidate list only, priority order): **at most one** `click` after **2l** succeeds in the same run (`combined_rehearsal_performed` + `run_remained_fully_non_mutating`); Layer 3 + `evaluatePhase2nAddApplyCandidateEligibility`; **hard-fail** if Layer 2 `blockedRequestCount` increases during the click window; pre/post snapshots; **no** validate, checkout, submit, second apply, heuristic-only target | `MLCC_ADD_BY_CODE_PHASE_2N=true` + `MLCC_ADD_BY_CODE_PHASE_2N_APPROVED=true` + **`MLCC_ADD_BY_CODE_PHASE_2L`** + **`MLCC_ADD_BY_CODE_PHASE_2L_APPROVED`** + probe + `MLCC_ADD_BY_CODE_PHASE_2N_ADD_APPLY_SELECTORS` (non-empty JSON array). Optional `MLCC_ADD_BY_CODE_PHASE_2N_TEXT_ALLOW_SUBSTRINGS` | Second click, validate, checkout, submit, any guess-only selector path |
 | **2o** | **Read-only post-add/apply observation** after a successful **2n** click in the same run: **zero** Playwright clicks; two read-only scrapes separated by configurable settle wait; captures UI open signals, tenant code/qty field snapshots (when selectors configured), **2n** add/apply selector states, `role=alert` / `aria-live` / common toast class samples, body text digest, **inferred** cart/line regex hits on visible text only; **hard-fail** if Layer 2 abort count increases over the observation window | `MLCC_ADD_BY_CODE_PHASE_2O=true` + `MLCC_ADD_BY_CODE_PHASE_2O_APPROVED=true` + **2n** env gates satisfied + probe. Optional `MLCC_ADD_BY_CODE_PHASE_2O_SETTLE_MS` (default 500, max 5000) | Any click, validate, checkout, submit, second add/apply, claiming server cart or inventory truth from DOM alone |
+| **2p** | **Planning-only** — future MLCC **validate** approval model and **post-validate** ladder (`validate` bounded interaction → post-validate read-only observation → checkout → submit/finalize). **No** `MLCC_ADD_BY_CODE_PHASE_2P` env flag; **no** browser execution; **worker and probe must not** import [`mlcc-phase-2p-policy.js`](../../../services/api/src/workers/mlcc-phase-2p-policy.js) until a separately approved **execution** phase (e.g. **2q**) updates verify | Read [`mlcc-phase-2p-policy.js`](../../../services/api/src/workers/mlcc-phase-2p-policy.js); `buildPhase2pValidateFutureGateManifest()` + `buildPhase2pPostValidateLadder()`; run `verify:lk:rpa-safety` | Runtime validate/checkout/submit; worker or probe importing **2p** before execution phase; assuming validate is safe without evidence |
 
 **Pre-browser:** deterministic payload validation (`assertDeterministicExecutionPayload`) before Playwright launch.
 
@@ -85,7 +86,7 @@ Stages: `mlcc_phase_2l_pre_sequence_snapshot`, `mlcc_phase_2l_pre_sequence_evide
 **Phase 2m does not have its own browser entry point** and has **no** `MLCC_ADD_BY_CODE_PHASE_2M` env flag. [`mlcc-phase-2m-policy.js`](../../../services/api/src/workers/mlcc-phase-2m-policy.js) is **imported by the probe only** (for **2n** / **2o** evidence). The **worker** must **not** import **2m** (`verify:lk:rpa-safety`).
 
 - **Canonical machine-readable gates:** `buildPhase2mAddApplyLineFutureGateManifest()` — evidence expectations after **2l**, tenant **non-heuristic** control selector list, Layer 2/3 expectations for a **single** add/apply click, hard-fail stops, observable proof criteria (with explicit limits: client abort counts ≠ server cart), and **mandatory_disclaimers**.
-- **Post-add/apply ladder:** `buildPhase2mPostAddApplyLadder()` — `add_apply_line_rehearsal` **`implemented_as_phase_2n_when_env_gated`**; `post_add_apply_observation` **`implemented_as_phase_2o_when_env_gated`**; `validate_order` → `checkout_submit` remain **`out_of_scope_until_separate_approval`** until implemented.
+- **Post-add/apply ladder:** `buildPhase2mPostAddApplyLadder()` — `add_apply_line_rehearsal` **`implemented_as_phase_2n_when_env_gated`**; `post_add_apply_observation` **`implemented_as_phase_2o_when_env_gated`**; `validate_order` → `checkout_submit` remain **`out_of_scope_until_separate_approval`** until implemented. **`validate_order`** planning detail: [`mlcc-phase-2p-policy.js`](../../../services/api/src/workers/mlcc-phase-2p-policy.js) (`PHASE_2P_POLICY_VERSION`).
 - **Alignment:** Specializes the **2k** ladder notion of **add_or_apply_line**; see [`mlcc-phase-2k-policy.js`](../../../services/api/src/workers/mlcc-phase-2k-policy.js).
 
 ## Phase 2n evidence (worker / probe)
@@ -96,8 +97,16 @@ Stages: `mlcc_phase_2n_pre_click_snapshot` (optional screenshot path), `mlcc_pha
 
 Stages: `mlcc_phase_2o_pre_observation_snapshot` (optional screenshot), `mlcc_phase_2o_pre_observation_evidence`, `mlcc_phase_2o_post_observation_snapshot` (optional), `mlcc_phase_2o_observation_findings` (or `mlcc_phase_2o_observation_blocked`). Attributes include `observation_pre` / `observation_post` (structured read-only scrape), `observation_diff` (heuristic delta flags, explicitly **not** server proof), `clicks_performed_this_phase: 0`, Layer 2 counts at window start/end, `no_new_blocked_downstream_requests_observed`, and disclaimers that regex-based cart clues are **inference only**.
 
-## Next execution phase (2p — not implemented)
+## Phase 2p (planning-only — validate interaction model)
 
-**Toward `validate_order`** in the **2m** ladder: a future phase may prepare or execute MLCC-style **validate** only with explicit env gates, docs, verify, and operator approval — **no** validate/checkout/submit in **2o** or in the current worker path.
+**Phase 2p has no browser entry point** and **no** env flag. [`mlcc-phase-2p-policy.js`](../../../services/api/src/workers/mlcc-phase-2p-policy.js) is **not** imported by the worker or probe until a future execution phase updates `verify:lk:rpa-safety`.
+
+- **`buildPhase2pValidateFutureGateManifest()`** — prerequisites from **2n** / **2o** (or documented equivalent when **2o** is off), tenant validate selector requirements, Layer 2 **special interpretation** (current `shouldBlockHttpRequest` may abort validate-shaped URLs until an execution phase documents any relaxation), Layer 3 expectations, hard-fail stops, bounded proof criteria, **mandatory_disclaimers** (browser ≠ backend order truth).
+- **`buildPhase2pPostValidateLadder()`** — `validate_order_bounded_interaction` → `post_validate_observation` → `checkout_flow` → `submit_finalize_order`; each step **`out_of_scope_until_separate_approval`** until implemented.
+- **Truthfulness:** Do **not** assume MLCC validate is safe; **2p** only codifies what would need to be true before a future runtime validate phase.
+
+## Next execution phase (2q — not implemented)
+
+First **runtime** phase that could perform a **bounded MLCC validate** interaction (if ever approved): must import **2p** manifest from the probe (or agreed module path), add env gates + operator approval, extend verify and Vitest, and preserve **no** checkout/submit in that phase unless a later phase explicitly allows them.
 
 See [rpa-safety-rules.md](./rpa-safety-rules.md) for non-negotiable safety rules.

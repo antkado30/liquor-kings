@@ -50,9 +50,17 @@ Phase **2k** is the versioned checklist in [`services/api/src/workers/mlcc-phase
 [`services/api/src/workers/mlcc-phase-2m-policy.js`](../../../services/api/src/workers/mlcc-phase-2m-policy.js) exports `buildPhase2mAddApplyLineFutureGateManifest` and `buildPhase2mPostAddApplyLadder`. The **probe** imports **2m** to echo the manifest and ladder during **2n** and **2o**; the **worker** must **not** import **2m** (verify enforces).
 
 - **Criteria (2m / 2n / 2o):** successful **2l** in the same run before **2n**; tenant-listed add/apply control selector(s); **at most one** add/apply click in **2n**; **2o** only after **2n** `add_apply_click_performed`; **2o** uses **zero** clicks and truthful disclaimers (DOM ≠ server cart; regex hints are inference only).
-- **Ladder:** `add_apply_line_rehearsal` is **implemented** as **2n** when env-gated; `post_add_apply_observation` is **implemented** as **2o** when env-gated; **validate** and **checkout/submit** remain **`out_of_scope_until_separate_approval`** until explicitly implemented.
+- **Ladder:** `add_apply_line_rehearsal` is **implemented** as **2n** when env-gated; `post_add_apply_observation` is **implemented** as **2o** when env-gated; **`validate_order`** and **checkout/submit** on the **2m** ladder remain **`out_of_scope_until_separate_approval`** until explicitly implemented; **validate** planning detail lives in **2p** (below).
+
+## Validate planning (Phase 2p)
+
+Phase **2p** is **planning-only**: [`services/api/src/workers/mlcc-phase-2p-policy.js`](../../../services/api/src/workers/mlcc-phase-2p-policy.js) exports `buildPhase2pValidateFutureGateManifest` and `buildPhase2pPostValidateLadder`. It **does not** run in the browser; the **worker** and **probe** **must not** import **2p** until a separately approved **execution** phase (e.g. **2q**) updates verify (same pattern as **2m** before **2n**).
+
+- **Criteria (manifest):** evidence expectations after **2n** / **2o** (or documented equivalent); tenant **non-heuristic** validate control selector list for any future phase; Layer 2 interpretation notes (validate-shaped URLs may be aborted today — execution phase needs explicit policy); Layer 3 / mutation-boundary family expectations; hard-fail stops; bounded proof criteria; **mandatory_disclaimers** (browser/client signals ≠ backend order truth; validate UI success ≠ safe checkout/submit).
+- **Post-validate ladder:** `validate_order_bounded_interaction` → `post_validate_observation` → `checkout_flow` → `submit_finalize_order` — each **`out_of_scope_until_separate_approval`** until implemented.
+- **Non-negotiable:** **No** runtime validate, checkout, submit, or finalize in **2p** itself; **do not** assume MLCC validate is safe.
 
 ## Drift enforcement
 
-- Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i**, **2k**, and **2m** policy files, phases-doc markers, Phase **2l**/**2n**/**2o** probe/worker markers, probe import of **2k** and **2m**, guard that the **worker** does not import **2k** or **2m**).
+- Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i**, **2k**, **2m**, and **2p** policy files, phases-doc markers, Phase **2l**/**2n**/**2o** probe/worker markers, probe import of **2k** and **2m**, guards that the **worker** does not import **2k** or **2m**, and guards that **neither** worker nor probe imports **2p** until an execution phase).
 - See [DEVELOPER_ANTI_DRIFT.md](../DEVELOPER_ANTI_DRIFT.md).

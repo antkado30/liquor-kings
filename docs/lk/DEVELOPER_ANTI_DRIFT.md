@@ -35,4 +35,4 @@ cd /path/to/repo && npm run build:admin
 
 ## RPA rebuild reminder
 
-No MLCC order submission, checkout, validate, or add-to-cart in the rebuild path until a **dedicated approved phase**. See `docs/lk/architecture/rpa-safety-rules.md`.
+No MLCC order submission, checkout, **runtime** validate, or add-to-cart in the rebuild path until a **dedicated approved phase**. Validate **planning** lives in `services/api/src/workers/mlcc-phase-2p-policy.js` (Phase **2p**; not imported by worker/probe until an execution phase). See `docs/lk/architecture/rpa-safety-rules.md`.
