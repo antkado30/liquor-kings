@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { failureGuidanceText } from "../lib/failureGuidance";
 import {
+  filterRunIdsFailedRetryable,
+  filterRunIdsManualReviewCandidates,
   partitionForBulkAcknowledge,
   partitionForBulkMarkManual,
 } from "./bulkTriageEligibility";
@@ -111,6 +113,15 @@ export function RunQueuePanel({
   const visibleBulkCount = useMemo(
     () => displayRuns.reduce((n, r) => n + (bulkSet.has(r.run_id) ? 1 : 0), 0),
     [displayRuns, bulkSet],
+  );
+  const hiddenInViewCount = Math.max(0, bulkSelectedRunIds.length - visibleBulkCount);
+  const failedRetryableIds = useMemo(
+    () => filterRunIdsFailedRetryable(filteredRuns),
+    [filteredRuns],
+  );
+  const manualReviewCandidateIds = useMemo(
+    () => filterRunIdsManualReviewCandidates(filteredRuns),
+    [filteredRuns],
   );
 
   return (
@@ -224,12 +235,34 @@ export function RunQueuePanel({
       <div className="bulk-triage-bar">
         <div className="bulk-triage-summary">
           <strong>Bulk triage</strong>
-          <span className="muted">
-            {bulkSelectedRunIds.length} selected
-            {filteredRuns.length > 0 && bulkSelectedRunIds.length > 0
-              ? ` · ${visibleBulkCount} in current list view`
-              : ""}
-          </span>
+          <span className="muted">Selection applies to the loaded batch; Load/Refresh drops IDs no longer returned.</span>
+        </div>
+        <div className="bulk-triage-stats" aria-live="polite">
+          <div className="stat-line">
+            <strong>{bulkSelectedRunIds.length}</strong> selected{" "}
+            <span className="stat-muted">of {runs.length} loaded</span>
+          </div>
+          <div className="stat-line">
+            Acknowledge: <strong>{ackBulk.eligible.length}</strong> eligible ·{" "}
+            <span className="stat-muted">{ackBulk.skipped.length} ineligible</span>
+          </div>
+          <div className="stat-line">
+            Mark manual: <strong>{manualBulk.eligible.length}</strong> eligible ·{" "}
+            <span className="stat-muted">{manualBulk.skipped.length} ineligible</span>
+          </div>
+          {bulkSelectedRunIds.length > 0 ? (
+            <div className="stat-line">
+              List view: <strong>{visibleBulkCount}</strong> selected
+              {hiddenInViewCount > 0 ? (
+                <>
+                  {" "}
+                  · <span className="stat-muted">{hiddenInViewCount} not in current view (search/sort)</span>
+                </>
+              ) : (
+                <span className="stat-muted"> (all visible)</span>
+              )}
+            </div>
+          ) : null}
         </div>
         <div className="bulk-triage-actions row" style={{ flexWrap: "wrap", gap: 8 }}>
           <button
@@ -238,7 +271,25 @@ export function RunQueuePanel({
             disabled={loadingRuns || actionInFlight || displayRuns.length === 0}
             onClick={() => onAddToBulkSelection(displayRuns.map((r) => r.run_id))}
           >
-            Select visible
+            Add visible ({displayRuns.length})
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={loadingRuns || actionInFlight || failedRetryableIds.length === 0}
+            title="Union into selection: failed runs with retry_allowed in the current filtered list."
+            onClick={() => onAddToBulkSelection(failedRetryableIds)}
+          >
+            Add failed · retryable ({failedRetryableIds.length})
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={loadingRuns || actionInFlight || manualReviewCandidateIds.length === 0}
+            title="Union into selection: manual_review_recommended or pending_manual_review, excluding terminal statuses."
+            onClick={() => onAddToBulkSelection(manualReviewCandidateIds)}
+          >
+            Add manual candidates ({manualReviewCandidateIds.length})
           </button>
           <button
             type="button"
@@ -282,12 +333,13 @@ export function RunQueuePanel({
         </div>
       </div>
       <p className="muted bulk-eligibility-hint" style={{ fontSize: 12, marginTop: 4 }}>
-        Eligibility is client-side triage only; each run is still validated when submitted.{" "}
-        <strong>Acknowledge</strong>: queued, running, or failed only.{" "}
-        <strong>Mark manual</strong>: skips succeeded, canceled, and runs already pending manual. Optional{" "}
-        <strong>reason</strong> / <strong>note</strong> in run detail apply to every bulk request.{" "}
-        <strong>Bulk resolve_without_retry</strong> is intentionally unavailable: failures need per-run review
-        before closing without retry.
+        Quick adds merge into selection (current filtered list). <strong>Add failed · retryable</strong> uses{" "}
+        <code>status=failed</code> + <code>retry_allowed</code>. <strong>Add manual candidates</strong> uses{" "}
+        <code>manual_review_recommended</code> or <code>pending_manual_review</code> (non-terminal). Eligibility
+        columns are client-side triage; each run is validated on submit. <strong>Acknowledge</strong>: queued,
+        running, or failed only. <strong>Mark manual</strong>: skips terminal runs and already-flagged manual.
+        Optional <strong>reason</strong>/<strong>note</strong> in run detail apply to every bulk request.{" "}
+        <strong>Bulk resolve_without_retry</strong> stays unavailable.
       </p>
       <Msg type={listMsg.type} text={listMsg.text} />
       <div className={`runs-list ${loadingRuns ? "loading" : ""}`}>

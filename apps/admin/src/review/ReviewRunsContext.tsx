@@ -18,9 +18,10 @@ import {
 import { useOperatorSession } from "../session/OperatorSessionContext";
 import type { FlashMsg, OpAction, RunSummaryRow, Summary } from "../operator-review/types";
 import {
+  formatBulkTriageResultMessage,
+  groupSkippedCounts,
   partitionForBulkAcknowledge,
   partitionForBulkMarkManual,
-  summarizeSkipped,
 } from "../operator-review/bulkTriageEligibility";
 import { buildQuery, CONFIRM_ACTIONS } from "../operator-review/utils";
 import { runIdFromReviewDetailPath } from "./pathUtils";
@@ -319,18 +320,24 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
           text:
             skipped.length === 0
               ? "No runs selected for bulk action."
-              : `No eligible runs. ${summarizeSkipped(skipped)}`,
+              : `No eligible runs in current selection.\n${groupSkippedCounts(skipped)
+                  .map((g) => `  • ${g.count}× ${g.label}`)
+                  .join("\n")}`,
         });
         return;
       }
-      const skipSummary = skipped.length
-        ? ` ${skipped.length} selected run(s) will be skipped (ineligible).`
-        : "";
+      const skipBreakdown =
+        skipped.length > 0
+          ? `\n\nWill skip ${skipped.length} ineligible (not sent):\n${groupSkippedCounts(skipped)
+              .map((g) => `  • ${g.count}× ${g.label}`)
+              .join("\n")}`
+          : "";
       const sharedNote = note.trim() || null;
       const sharedReason = reason.trim() || null;
+      const actionTitle = action.replace(/_/g, " ");
       if (
         !window.confirm(
-          `Bulk ${action.replace(/_/g, " ")}: the server will validate and audit each of ${eligible.length} run(s) separately. Optional reason/note from the detail panel apply to every request.${skipSummary}\n\nProceed?`,
+          `Bulk ${actionTitle}: validate and audit each of ${eligible.length} run(s) on the server (one request per run). Optional reason/note from the detail panel apply to all.${skipBreakdown}\n\nProceed?`,
         )
       ) {
         return;
@@ -359,25 +366,18 @@ export function ReviewRunsProvider({ children }: { children: ReactNode }) {
             successes.push(id);
           }
         }
-        const parts = [
-          `Bulk ${action}: ${successes.length} ok`,
-          failures.length ? `${failures.length} rejected by server` : null,
-          skipped.length ? `${skipped.length} skipped (ineligible before submit)` : null,
-        ].filter(Boolean);
-        let text = parts.join(", ") + ".";
-        if (skipped.length) {
-          text += ` Skipped: ${summarizeSkipped(skipped)}`;
-        }
-        if (failures.length) {
-          text +=
-            " Server errors: " +
-            failures
-              .slice(0, 5)
-              .map((f) => `${f.id.slice(0, 8)}… ${f.err}`)
-              .join("; ");
-          if (failures.length > 5) text += ` (+${failures.length - 5} more)`;
-        }
-        setListMsg({ type: failures.length ? "warn" : "success", text });
+        const text = formatBulkTriageResultMessage(actionTitle, {
+          succeeded: successes.length,
+          skippedBefore: skipped,
+          failures,
+        });
+        const msgType =
+          failures.length > 0 && successes.length === 0
+            ? "error"
+            : failures.length > 0
+              ? "warn"
+              : "success";
+        setListMsg({ type: msgType, text });
         setBulkSelectedRunIds((prev) => prev.filter((id) => !successes.includes(id)));
         await loadRuns({ silentSuccess: true });
         if (selectedRunId && successes.includes(selectedRunId)) {
