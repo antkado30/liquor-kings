@@ -5,7 +5,7 @@
  * Bump version when add/apply-line criteria or ladder semantics change.
  */
 
-export const PHASE_2M_POLICY_VERSION = "lk-rpa-2m-4";
+export const PHASE_2M_POLICY_VERSION = "lk-rpa-2m-5";
 
 /**
  * Approval model for Phase 2n: **one** bounded add-line / apply / equivalent control click when env-gated.
@@ -103,13 +103,16 @@ export function buildPhase2mPostAddApplyLadder() {
       {
         id: "validate_order",
         label: "Cart or order validate (MLCC-style)",
-        status: "out_of_scope_until_separate_approval",
+        status: "implemented_as_phase_2q_when_env_gated",
+        implementation_note:
+          "runtime_mlcc_browser_add_by_code_probe_runAddByCodePhase2qBoundedValidateSingleClick",
         planning_gate_detail:
-          "approval_criteria_and_post_validate_ladder_in_mlcc_phase_2p_policy_js_planning_only_until_execution_phase",
+          "approval_criteria_and_post_validate_ladder_in_mlcc_phase_2p_policy_js_echoed_at_phase_2q_runtime",
         forbids_until_approved: [
           "checkout",
           "submit",
           "finalize_order",
+          "second_validate",
         ],
       },
       {

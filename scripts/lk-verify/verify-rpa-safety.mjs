@@ -45,13 +45,13 @@ if (!probe.includes("mlcc-phase-2m-policy")) {
 
 if (worker.includes("mlcc-phase-2p-policy")) {
   checks.push(
-    "mlcc-browser-worker.js must not import mlcc-phase-2p-policy.js (Phase 2p is planning-only until a future execution phase)",
+    "mlcc-browser-worker.js must not import mlcc-phase-2p-policy.js (Phase 2p manifest is echoed from the probe for Phase 2q only)",
   );
 }
 
-if (probe.includes("mlcc-phase-2p-policy")) {
+if (!probe.includes("mlcc-phase-2p-policy")) {
   checks.push(
-    "mlcc-browser-add-by-code-probe.js must not import mlcc-phase-2p-policy.js (Phase 2p is planning-only until a future execution phase)",
+    "mlcc-browser-add-by-code-probe.js must import mlcc-phase-2p-policy.js for Phase 2q validate gate manifest echo",
   );
 }
 
@@ -263,6 +263,46 @@ if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2O_APPROVED")) {
 
 if (!phasesDoc.includes("Phase 2o")) {
   checks.push("rpa-rebuild-phases.md must document Phase 2o");
+}
+
+if (!probe.includes("export async function runAddByCodePhase2qBoundedValidateSingleClick")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export runAddByCodePhase2qBoundedValidateSingleClick (Phase 2q)",
+  );
+}
+
+if (!probe.includes("export const PHASE_2Q_VALIDATE_POLICY_VERSION")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export PHASE_2Q_VALIDATE_POLICY_VERSION (Phase 2q)",
+  );
+}
+
+if (!probe.includes("export function parsePhase2qValidateCandidateSelectors")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export parsePhase2qValidateCandidateSelectors (Phase 2q)",
+  );
+}
+
+if (!probe.includes("export function evaluatePhase2qValidateCandidateEligibility")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export evaluatePhase2qValidateCandidateEligibility (Phase 2q)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2Q_APPROVED")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2Q_APPROVED (Phase 2q)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2Q_VALIDATE_SELECTORS")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2Q_VALIDATE_SELECTORS (Phase 2q)",
+  );
+}
+
+if (!phasesDoc.includes("Phase 2q")) {
+  checks.push("rpa-rebuild-phases.md must document Phase 2q");
 }
 
 if (!probe.includes("mlcc-phase-2k-policy")) {

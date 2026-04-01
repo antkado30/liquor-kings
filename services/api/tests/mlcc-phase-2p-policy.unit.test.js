@@ -15,7 +15,7 @@ describe("mlcc-phase-2p-policy", () => {
     const m = buildPhase2pValidateFutureGateManifest();
 
     expect(m.version).toBe(PHASE_2P_POLICY_VERSION);
-    expect(m.phase_intent).toMatch(/planning_only|no_runtime_validate/i);
+    expect(m.phase_intent).toMatch(/phase_2q|probe_only|no_worker_import/i);
     expect(Array.isArray(m.relationship_to_prior_phases)).toBe(true);
     expect(
       Array.isArray(m.evidence_prerequisites_before_validate_execution_considered),
@@ -35,7 +35,7 @@ describe("mlcc-phase-2p-policy", () => {
     expect(Array.isArray(m.mandatory_disclaimers)).toBe(true);
   });
 
-  it("post-validate ladder marks all steps out of scope until separate approval", () => {
+  it("post-validate ladder: bounded validate implemented as 2q; later steps out of scope", () => {
     const ladder = buildPhase2pPostValidateLadder();
 
     expect(ladder.version).toBe(PHASE_2P_POLICY_VERSION);
@@ -50,9 +50,22 @@ describe("mlcc-phase-2p-policy", () => {
     expect(ids).toContain("checkout_flow");
     expect(ids).toContain("submit_finalize_order");
 
+    const validateStep = ladder.steps.find(
+      (s) => s.id === "validate_order_bounded_interaction",
+    );
+
+    expect(validateStep?.status).toBe("implemented_as_phase_2q_when_env_gated");
+
     for (const step of ladder.steps) {
-      expect(step.status).toBe("out_of_scope_until_separate_approval");
       expect(Array.isArray(step.forbids_until_approved)).toBe(true);
+      if (step.id === "validate_order_bounded_interaction") {
+        continue;
+      }
+      expect(step.status).toBe("out_of_scope_until_separate_approval");
     }
+
+    expect(ladder.steps.some((s) => /out_of_scope/.test(String(s.status)))).toBe(
+      true,
+    );
   });
 });

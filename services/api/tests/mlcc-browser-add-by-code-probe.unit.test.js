@@ -9,6 +9,7 @@ import {
   diffPhase2oObservationSnapshots,
   evaluatePhase2fOpenCandidateEligibility,
   evaluatePhase2nAddApplyCandidateEligibility,
+  evaluatePhase2qValidateCandidateEligibility,
   isProbeUiTextUnsafe,
   parseMutationBoundaryUncertainHints,
   parsePhase2fSafeOpenTextAllowSubstrings,
@@ -18,6 +19,8 @@ import {
   parsePhase2lFieldOrder,
   parsePhase2nAddApplyCandidateSelectors,
   parsePhase2oSettleMs,
+  parsePhase2qPostValidateObserveSettleMs,
+  parsePhase2qValidateCandidateSelectors,
   parseSafeOpenCandidateSelectors,
   PHASE_2G_TYPING_POLICY_VERSION,
   PHASE_2J_QUANTITY_POLICY_VERSION,
@@ -42,12 +45,12 @@ describe("shouldBlockHttpRequest", () => {
     expect(b.block).toBe(false);
   });
 
-  it("still blocks POST to validate paths", () => {
+  it("does not block POST to validate paths (Phase 2q may require real validate XHRs; checkout/submit patterns stay blocked)", () => {
     const b = shouldBlockHttpRequest(
       "https://vendor.example/order/validate",
       "POST",
     );
-    expect(b.block).toBe(true);
+    expect(b.block).toBe(false);
   });
 
   it("allows GET navigation to generic pages", () => {
@@ -322,6 +325,50 @@ describe("parsePhase2nAddApplyCandidateSelectors", () => {
   });
 });
 
+describe("parsePhase2qValidateCandidateSelectors", () => {
+  it("parses non-empty JSON array", () => {
+    expect(parsePhase2qValidateCandidateSelectors('["#v",".x"]')).toEqual([
+      "#v",
+      ".x",
+    ]);
+  });
+
+  it("throws when empty", () => {
+    expect(() => parsePhase2qValidateCandidateSelectors("")).toThrow(
+      /MLCC_ADD_BY_CODE_PHASE_2Q_VALIDATE_SELECTORS/,
+    );
+  });
+});
+
+describe("parsePhase2qPostValidateObserveSettleMs", () => {
+  it("defaults to 400 when blank", () => {
+    expect(parsePhase2qPostValidateObserveSettleMs(null).ok).toBe(true);
+    expect(parsePhase2qPostValidateObserveSettleMs(null).value).toBe(400);
+  });
+
+  it("caps at 3000", () => {
+    expect(parsePhase2qPostValidateObserveSettleMs("99999").value).toBe(3000);
+  });
+});
+
+describe("evaluatePhase2qValidateCandidateEligibility", () => {
+  it("accepts validate wording via default intent", () => {
+    const r = evaluatePhase2qValidateCandidateEligibility(
+      { tag: "button", text: "Validate order" },
+      [],
+    );
+    expect(r.eligible).toBe(true);
+  });
+
+  it("rejects checkout labels", () => {
+    const r = evaluatePhase2qValidateCandidateEligibility(
+      { tag: "button", text: "Checkout" },
+      [],
+    );
+    expect(r.eligible).toBe(false);
+  });
+});
+
 describe("evaluatePhase2nAddApplyCandidateEligibility", () => {
   it("rejects validate-style labels (downstream blocklist and/or layer3)", () => {
     const r = evaluatePhase2nAddApplyCandidateEligibility(
@@ -407,7 +454,10 @@ describe("isProbeUiTextUnsafe", () => {
   it("flags checkout and add-to-cart labels", () => {
     expect(isProbeUiTextUnsafe("Add to cart").unsafe).toBe(true);
     expect(isProbeUiTextUnsafe("Checkout").unsafe).toBe(true);
-    expect(isProbeUiTextUnsafe("Validate order").unsafe).toBe(true);
+  });
+
+  it("does not globally block validate labels (Phase 2q uses evaluatePhase2qValidateCandidateEligibility)", () => {
+    expect(isProbeUiTextUnsafe("Validate order").unsafe).toBe(false);
   });
 
   it("allows neutral labels", () => {

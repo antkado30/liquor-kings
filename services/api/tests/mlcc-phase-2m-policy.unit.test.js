@@ -54,6 +54,8 @@ describe("mlcc-phase-2m-policy", () => {
         expect(step.status).toBe("implemented_as_phase_2n_when_env_gated");
       } else if (step.id === "post_add_apply_observation") {
         expect(step.status).toBe("implemented_as_phase_2o_when_env_gated");
+      } else if (step.id === "validate_order") {
+        expect(step.status).toBe("implemented_as_phase_2q_when_env_gated");
       } else {
         expect(step.status).toBe("out_of_scope_until_separate_approval");
       }

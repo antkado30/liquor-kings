@@ -16,6 +16,11 @@ import {
   PHASE_2M_POLICY_VERSION,
   buildPhase2mAddApplyLineFutureGateManifest,
 } from "./mlcc-phase-2m-policy.js";
+import {
+  PHASE_2P_POLICY_VERSION,
+  buildPhase2pPostValidateLadder,
+  buildPhase2pValidateFutureGateManifest,
+} from "./mlcc-phase-2p-policy.js";
 
 /** Clicks matching these labels are never performed during the probe. */
 export const MLCC_PROBE_UNSAFE_UI_TEXT = [
@@ -24,7 +29,6 @@ export const MLCC_PROBE_UNSAFE_UI_TEXT = [
   /checkout/i,
   /submit(\s*order)?/i,
   /place\s*order/i,
-  /validate/i,
   /update\s*cart/i,
   /buy\s*now/i,
   /purchase/i,
@@ -51,7 +55,6 @@ export function shouldBlockHttpRequest(url, method) {
       /\/order\/place/i,
       /place-order/i,
       /submit-order/i,
-      /\/validate/i,
       /\/finalize/i,
       /addtocart/i,
       /add-to-cart/i,
@@ -323,6 +326,62 @@ export function parsePhase2nAddApplyCandidateSelectors(raw) {
 }
 
 /**
+ * Phase 2q: JSON array of CSS selectors (priority order) for the single tenant validate control.
+ */
+export function parsePhase2qValidateCandidateSelectors(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_PHASE_2Q_VALIDATE_SELECTORS is empty (required when Phase 2q is enabled)",
+    );
+  }
+
+  const j = JSON.parse(String(raw));
+
+  if (!Array.isArray(j) || j.length === 0) {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_PHASE_2Q_VALIDATE_SELECTORS must be a non-empty JSON array of strings",
+    );
+  }
+
+  const out = [];
+
+  for (const x of j) {
+    if (typeof x === "string" && x.trim() !== "") {
+      out.push(x.trim());
+    }
+  }
+
+  if (out.length === 0) {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_PHASE_2Q_VALIDATE_SELECTORS must contain at least one non-empty selector string",
+    );
+  }
+
+  return out;
+}
+
+/**
+ * Optional settle ms before read-only post-validate scrape (default 400; max 3000; 0 skips extra scrape).
+ */
+export function parsePhase2qPostValidateObserveSettleMs(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return { ok: true, value: 400 };
+  }
+
+  const n = Number.parseInt(String(raw).trim(), 10);
+
+  if (!Number.isFinite(n) || n < 0) {
+    return {
+      ok: false,
+      value: null,
+      reason: "must_be_non_negative_integer_ms",
+    };
+  }
+
+  return { ok: true, value: Math.min(n, 3000) };
+}
+
+/**
  * Optional JSON array of substrings; extends which uncertain labels may open add-by-code (Phase 2f only).
  */
 export function parsePhase2fSafeOpenTextAllowSubstrings(raw) {
@@ -566,6 +625,167 @@ export function evaluatePhase2nAddApplyCandidateEligibility(row, textAllowSubstr
   };
 }
 
+const PHASE_2Q_DOWNSTREAM_FORBIDDEN_LABEL_RES = [
+  /add\s*to\s*cart/i,
+  /add\s*all/i,
+  /checkout/i,
+  /submit(\s*order)?/i,
+  /place\s*order/i,
+  /finalize/i,
+  /complete\s*order/i,
+  /confirm\s*order/i,
+  /purchase/i,
+  /buy\s*now/i,
+  /update\s*cart/i,
+];
+
+function isPhase2qDownstreamForbiddenLabel(text) {
+  const t = String(text ?? "").trim();
+
+  if (!t) {
+    return { forbidden: false };
+  }
+
+  for (const re of PHASE_2Q_DOWNSTREAM_FORBIDDEN_LABEL_RES) {
+    if (re.test(t)) {
+      return {
+        forbidden: true,
+        reason: `downstream_or_non_validate_label:${re}`,
+      };
+    }
+  }
+
+  return { forbidden: false };
+}
+
+function isPhase2qValidateOnlyHref(href) {
+  const h = String(href ?? "").trim().toLowerCase();
+
+  if (!h) {
+    return false;
+  }
+
+  if (
+    /checkout|order\/submit|place-order|submit-order|finalize|cart\/add|add-to-cart|addtocart/i.test(
+      h,
+    )
+  ) {
+    return false;
+  }
+
+  return /\bvalidate\b|\/validate|validateorder|validate-order/i.test(h);
+}
+
+const PHASE_2Q_DEFAULT_VALIDATE_INTENT_RES = [/\bvalidate\b/i, /^validate$/i];
+
+function textMatchesPhase2qDefaultValidateIntent(text) {
+  const t = String(text ?? "").trim();
+
+  return PHASE_2Q_DEFAULT_VALIDATE_INTENT_RES.some((re) => re.test(t));
+}
+
+/**
+ * Phase 2q: Layer 3 + mutation-boundary rules with explicit allowance for validate intent
+ * (tenant allowlist, default validate patterns, or validate-only href with empty visible text).
+ */
+export function evaluatePhase2qValidateCandidateEligibility(row, textAllowSubstrings) {
+  const text = String(row.text ?? "").trim();
+  const downstream = isPhase2qDownstreamForbiddenLabel(text);
+
+  if (downstream.forbidden) {
+    return {
+      eligible: false,
+      reason: downstream.reason,
+    };
+  }
+
+  const layer3 = isProbeUiTextUnsafe(text);
+
+  if (layer3.unsafe) {
+    return {
+      eligible: false,
+      reason: `rejected_layer3_ui_guard:${layer3.matched}`,
+    };
+  }
+
+  const classified = classifyMutationBoundaryControl(row);
+
+  if (classified.classification === "unsafe_mutation_likely") {
+    if (classified.rationale === "href_matches_mutation_path_heuristic") {
+      const href = String(row.href ?? "");
+      const subOk = textMatchesTenantOpenSubstrings(text, textAllowSubstrings);
+      const defOk = textMatchesPhase2qDefaultValidateIntent(text);
+      const emptyText = !text;
+
+      if (isPhase2qValidateOnlyHref(href)) {
+        if (subOk || defOk) {
+          return {
+            eligible: true,
+            reason: subOk
+              ? "accepted_validate_href_tenant_text_allowlist"
+              : "accepted_validate_href_default_intent_pattern",
+            classification: classified.classification,
+            rationale: classified.rationale,
+          };
+        }
+
+        if (emptyText) {
+          return {
+            eligible: true,
+            reason:
+              "accepted_validate_only_href_empty_visible_text_tenant_selector_target",
+            classification: classified.classification,
+            rationale: classified.rationale,
+          };
+        }
+      }
+    }
+
+    return {
+      eligible: false,
+      reason: `rejected_mutation_boundary:${classified.rationale}`,
+      classification: classified.classification,
+    };
+  }
+
+  if (classified.classification === "safe_informational") {
+    return {
+      eligible: false,
+      reason: "rejected_safe_informational_unlikely_validate_target",
+      classification: classified.classification,
+    };
+  }
+
+  if (classified.classification === "uncertain") {
+    const subOk = textMatchesTenantOpenSubstrings(text, textAllowSubstrings);
+    const defOk = textMatchesPhase2qDefaultValidateIntent(text);
+
+    if (subOk || defOk) {
+      return {
+        eligible: true,
+        reason: subOk
+          ? "accepted_uncertain_tenant_allowlist_validate"
+          : "accepted_uncertain_default_validate_intent",
+        classification: classified.classification,
+        uncertain_detail: classified.uncertain_detail,
+      };
+    }
+
+    return {
+      eligible: false,
+      reason: "rejected_uncertain_without_validate_intent_match",
+      classification: classified.classification,
+      uncertain_detail: classified.uncertain_detail,
+    };
+  }
+
+  return {
+    eligible: false,
+    reason: "rejected_unexpected_classification_state",
+    classification: classified.classification,
+  };
+}
+
 async function extractMutationBoundaryRowFromLocator(locator) {
   return locator.evaluate((el) => {
     if (!(el instanceof HTMLElement)) {
@@ -589,7 +809,10 @@ async function extractMutationBoundaryRowFromLocator(locator) {
       href = h || "";
     }
 
-    const text = (el.innerText || el.textContent || "").trim().slice(0, 300);
+    const inner = (el.innerText || el.textContent || "").trim();
+    const aria = (el.getAttribute("aria-label") || "").trim();
+    const title = (el.getAttribute("title") || "").trim();
+    const text = (inner || aria || title).slice(0, 300);
 
     return {
       tag,
@@ -2005,6 +2228,9 @@ export const PHASE_2N_ADD_APPLY_POLICY_VERSION = "lk-rpa-2n-1";
 
 /** Phase 2o: read-only DOM / status observation after Phase 2n; no clicks, no validate/checkout/submit. */
 export const PHASE_2O_OBSERVATION_POLICY_VERSION = "lk-rpa-2o-1";
+
+/** Phase 2q: one bounded validate click; aligns with mlcc-phase-2p-policy.js gate manifest. */
+export const PHASE_2Q_VALIDATE_POLICY_VERSION = "lk-rpa-2q-1";
 
 /**
  * Bounded settle wait between Phase 2o pre/post read-only scrapes (ms). Default 500; max 5000.
@@ -4727,6 +4953,490 @@ export async function runAddByCodePhase2oPostAddApplyObservation({
         : network_guard_delta_full_observation_window === 0,
     page_appears_changed_visible_dom_heuristic:
       observation_diff.any_heuristic_dom_or_signal_delta === true,
+  };
+}
+
+/**
+ * Phase 2q: at most one bounded validate click; optional read-only post-validate scrape (no further clicks).
+ * No checkout, submit, or order finalization.
+ */
+export async function runAddByCodePhase2qBoundedValidateSingleClick({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  buildStepEvidence,
+  phase2nResult,
+  phase2oResult,
+}) {
+  const gateManifest = buildPhase2pValidateFutureGateManifest();
+  const postValidateLadder = buildPhase2pPostValidateLadder();
+  const postObserveMs = config.addByCodePhase2qPostValidateObserveSettleMs ?? 400;
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2q_validate_start",
+    progressMessage:
+      "Phase 2q: tightly gated single validate click (no checkout/submit/finalize)",
+  });
+
+  const mutation_risk_checks_used = [
+    `phase_2p_policy_version_${PHASE_2P_POLICY_VERSION}`,
+    `phase_2q_policy_version_${PHASE_2Q_VALIDATE_POLICY_VERSION}`,
+    "phase_2p_validate_future_gate_manifest_echoed_in_evidence",
+    "phase_2p_post_validate_ladder_echoed_in_evidence",
+    "prerequisite_phase_2n_add_apply_click_performed_true_same_run",
+    "prerequisite_phase_2o_success_or_operator_explicit_waiver_when_2o_disabled",
+    "tenant_validate_selector_list_only_no_heuristic_only_path",
+    "layer_2_abort_counter_delta_zero_for_full_declared_phase_window_including_post_readonly_scrape",
+    "layer_3_evaluatePhase2qValidateCandidateEligibility",
+    "at_most_one_validate_click_in_this_phase_zero_additional_playwright_clicks",
+    "optional_read_only_post_validate_snapshot_via_collectPhase2oReadOnlyObservationSnapshot_no_clicks",
+    "no_checkout_submit_finalize_or_second_validate_in_this_phase",
+  ];
+
+  if (!phase2nResult || phase2nResult.add_apply_click_performed !== true) {
+    const err =
+      "Phase 2q requires Phase 2n to have completed with add_apply_click_performed=true in the same run";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2q_validate_blocked",
+        message: err,
+        attributes: {
+          phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+          phase_2p_policy_version: PHASE_2P_POLICY_VERSION,
+          phase_2p_validate_gate_manifest: gateManifest,
+          phase_2p_post_validate_ladder: postValidateLadder,
+          validate_click_performed: false,
+          block_reason: "phase_2n_prerequisite_not_satisfied",
+          mutation_risk_checks_used,
+          mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (config.addByCodePhase2o === true) {
+    if (!phase2oResult || phase2oResult.observation_performed !== true) {
+      const err =
+        "Phase 2q requires Phase 2o to have completed with observation_performed=true when MLCC_ADD_BY_CODE_PHASE_2O is enabled";
+
+      evidenceCollected.push(
+        buildEvidence({
+          kind: "mlcc_add_by_code_probe",
+          stage: "mlcc_phase_2q_validate_blocked",
+          message: err,
+          attributes: {
+            phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+            phase_2p_policy_version: PHASE_2P_POLICY_VERSION,
+            phase_2p_validate_gate_manifest: gateManifest,
+            validate_click_performed: false,
+            block_reason: "phase_2o_prerequisite_not_satisfied",
+            mutation_risk_checks_used,
+            mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+          },
+        }),
+      );
+
+      throw new Error(err);
+    }
+
+    if (phase2oResult.no_new_blocked_downstream_requests_observed === false) {
+      const err =
+        "Phase 2q requires Phase 2o no_new_blocked_downstream_requests_observed !== false when 2o is enabled";
+
+      evidenceCollected.push(
+        buildEvidence({
+          kind: "mlcc_add_by_code_probe",
+          stage: "mlcc_phase_2q_validate_blocked",
+          message: err,
+          attributes: {
+            phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+            validate_click_performed: false,
+            block_reason: "phase_2o_layer2_prerequisite_failed",
+            mutation_risk_checks_used,
+            mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+          },
+        }),
+      );
+
+      throw new Error(err);
+    }
+  } else if (config.addByCodePhase2qOperatorAcceptsMissing2o !== true) {
+    const err =
+      "Phase 2q when Phase 2o is disabled requires MLCC_ADD_BY_CODE_PHASE_2Q_OPERATOR_ACCEPTS_MISSING_2O=true (explicit tenant acknowledgment per Phase 2p)";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2q_validate_blocked",
+        message: err,
+        attributes: {
+          phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+          validate_click_performed: false,
+          block_reason: "missing_operator_acceptance_for_skipped_phase_2o",
+          mutation_risk_checks_used,
+          mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const candidates = config.addByCodePhase2qValidateCandidateSelectors ?? [];
+  const allowSubs = config.addByCodePhase2qTextAllowSubstrings ?? [];
+
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    const err =
+      "Phase 2q requires MLCC_ADD_BY_CODE_PHASE_2Q_VALIDATE_SELECTORS (non-empty tenant selector list)";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2q_validate_blocked",
+        message: err,
+        attributes: {
+          phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+          validate_click_performed: false,
+          block_reason: "missing_tenant_validate_selectors",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const blocked_at_phase_start =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2q_pre_validate_snapshot",
+        message:
+          "Phase 2q checkpoint before single validate click (policy + selector scan)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2q_pre_validate_evidence",
+      message:
+        "Phase 2q pre-click: Phase 2p gate manifest; validate candidate evaluation only until one eligible control",
+      attributes: {
+        phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+        phase_2p_policy_version: PHASE_2P_POLICY_VERSION,
+        phase_2p_validate_gate_manifest: gateManifest,
+        phase_2p_post_validate_ladder: postValidateLadder,
+        dry_run_safe_mode_expected: true,
+        candidate_selectors_configured: candidates,
+        text_allow_substrings_configured: allowSubs,
+        post_validate_observe_settle_ms: postObserveMs,
+        network_guard_blocked_request_count_at_phase_start:
+          blocked_at_phase_start,
+        mutation_risk_checks_used,
+        mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        truthfulness_note:
+          "this_phase_does_not_claim_backend_order_truth_or_checkout_readiness",
+      },
+    }),
+  );
+
+  const evaluations = [];
+
+  for (const sel of candidates) {
+    const loc = page.locator(sel).first();
+    const n = await loc.count().catch(() => 0);
+
+    if (n === 0) {
+      evaluations.push({
+        selector: sel,
+        eligible: false,
+        reason: "rejected_selector_no_match",
+      });
+      continue;
+    }
+
+    const vis = await loc.isVisible().catch(() => false);
+
+    if (!vis) {
+      evaluations.push({
+        selector: sel,
+        eligible: false,
+        reason: "rejected_not_visible",
+      });
+      continue;
+    }
+
+    const disabled = await loc.isDisabled().catch(() => false);
+
+    if (disabled) {
+      evaluations.push({
+        selector: sel,
+        eligible: false,
+        reason: "rejected_disabled_control",
+      });
+      continue;
+    }
+
+    const row = await extractMutationBoundaryRowFromLocator(loc);
+    const elig = evaluatePhase2qValidateCandidateEligibility(row, allowSubs);
+
+    evaluations.push({
+      selector: sel,
+      visible: true,
+      disabled: false,
+      tag: row.tag,
+      text_sample: (row.text ?? "").slice(0, 200),
+      href_sample: String(row.href ?? "").slice(0, 200),
+      ...elig,
+    });
+  }
+
+  const firstEligible = evaluations.find((e) => e.eligible === true);
+
+  if (!firstEligible) {
+    const err =
+      "Phase 2q: no eligible validate candidate (Layer 2/3 + mutation-boundary policy rejected all tenant selectors)";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2q_validate_blocked",
+        message: err,
+        attributes: {
+          phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+          candidate_evaluations: evaluations,
+          validate_click_performed: false,
+          block_reason: "no_eligible_candidate",
+          mutation_risk_checks_used,
+          mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const clickLoc = page.locator(firstEligible.selector).first();
+
+  try {
+    await clickLoc.click({ timeout: 12_000 });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2q_validate_blocked",
+        message: `Phase 2q: validate click failed: ${m}`,
+        attributes: {
+          phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+          candidate_evaluations: evaluations,
+          selector_attempted: firstEligible.selector,
+          validate_click_performed: false,
+          block_reason: `click_error:${m}`,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(`Phase 2q validate click failed: ${m}`);
+  }
+
+  await page
+    .waitForLoadState("domcontentloaded", { timeout: 45_000 })
+    .catch(() => {});
+  await new Promise((r) => setTimeout(r, 600));
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2q_after_validate_click",
+        message:
+          "Phase 2q checkpoint after exactly one validate click (no checkout/submit)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  const blocked_after_click =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_through_click =
+    blocked_at_phase_start != null && blocked_after_click != null
+      ? blocked_after_click - blocked_at_phase_start
+      : null;
+
+  if (
+    network_guard_delta_through_click != null &&
+    network_guard_delta_through_click !== 0
+  ) {
+    const err = `Phase 2q: Layer 2 blocked request counter increased during validate click window (delta=${network_guard_delta_through_click})`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2q_validate_blocked",
+        message: err,
+        attributes: {
+          phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+          candidate_evaluations: evaluations,
+          selector_clicked: firstEligible.selector,
+          validate_click_performed: true,
+          network_guard_blocked_at_phase_start: blocked_at_phase_start,
+          network_guard_blocked_after_click: blocked_after_click,
+          block_reason: "positive_layer2_abort_delta_during_validate_click",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  let post_validate_read_only_snapshot = null;
+
+  if (postObserveMs > 0) {
+    await new Promise((r) => setTimeout(r, postObserveMs));
+    post_validate_read_only_snapshot =
+      await collectPhase2oReadOnlyObservationSnapshot(page, config);
+
+    if (typeof buildStepEvidence === "function") {
+      evidenceCollected.push(
+        await buildStepEvidence({
+          page,
+          stage: "mlcc_phase_2q_post_validate_readonly_snapshot",
+          message:
+            "Phase 2q read-only post-validate scrape (no clicks; not checkout)",
+          kind: "mlcc_add_by_code_probe",
+          buildEvidence,
+          config,
+        }),
+      );
+    }
+  }
+
+  const blocked_at_phase_end =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_full_phase_window =
+    blocked_at_phase_start != null && blocked_at_phase_end != null
+      ? blocked_at_phase_end - blocked_at_phase_start
+      : null;
+
+  if (
+    network_guard_delta_full_phase_window != null &&
+    network_guard_delta_full_phase_window !== 0
+  ) {
+    const err = `Phase 2q: Layer 2 blocked request counter increased over full validate phase window including post-readonly scrape (delta=${network_guard_delta_full_phase_window})`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2q_validate_blocked",
+        message: err,
+        attributes: {
+          phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+          candidate_evaluations: evaluations,
+          selector_clicked: firstEligible.selector,
+          validate_click_performed: true,
+          post_validate_read_only_snapshot_present: post_validate_read_only_snapshot != null,
+          network_guard_blocked_at_phase_start: blocked_at_phase_start,
+          network_guard_blocked_at_phase_end: blocked_at_phase_end,
+          block_reason: "positive_layer2_abort_delta_full_phase_window",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2q_validate_findings",
+      message:
+        "Phase 2q: single validate click completed; no checkout/submit/finalize in this phase",
+      attributes: {
+        phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+        phase_2p_policy_version: PHASE_2P_POLICY_VERSION,
+        phase_2p_validate_gate_manifest: gateManifest,
+        phase_2p_post_validate_ladder: postValidateLadder,
+        candidate_evaluations: evaluations,
+        validate_click_performed: true,
+        click_count_this_phase: 1,
+        selector_clicked: firstEligible.selector,
+        playwright_clicks_after_validate: 0,
+        post_validate_observe_settle_ms_used: postObserveMs,
+        post_validate_read_only_snapshot:
+          post_validate_read_only_snapshot,
+        network_guard_blocked_at_phase_start: blocked_at_phase_start,
+        network_guard_blocked_after_click: blocked_after_click,
+        network_guard_blocked_at_phase_end: blocked_at_phase_end,
+        network_guard_delta_full_phase_window,
+        no_new_blocked_downstream_requests_observed:
+          network_guard_delta_full_phase_window === null
+            ? null
+            : network_guard_delta_full_phase_window === 0,
+        run_remained_without_checkout_submit_finalize_phase: true,
+        disclaimer_layer2_abort_observation:
+          "zero_delta_on_client_blocked_request_counter_for_configured_patterns_does_not_prove_no_backend_order_mutation",
+        disclaimer_browser_not_backend_order_truth:
+          "visible_messages_and_dom_do_not_prove_backend_order_inventory_or_checkout_safety",
+        disclaimer_no_general_validate_safety_claim:
+          "single_tenant_single_run_does_not_establish_general_validate_safety",
+        disclaimer_no_checkout_readiness:
+          "this_phase_does_not_assess_readiness_for_checkout_or_submit",
+        typing_policy_phase_2q:
+          "no_checkout_no_submit_no_finalize_no_second_validate",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2q_validate_complete",
+    progressMessage:
+      "Phase 2q complete (one validate click only; checkout/submit/finalize out of scope)",
+  });
+
+  return {
+    phase_2q_policy_version: PHASE_2Q_VALIDATE_POLICY_VERSION,
+    phase_2p_policy_version: PHASE_2P_POLICY_VERSION,
+    validate_click_performed: true,
+    selector_clicked: firstEligible.selector,
+    candidate_evaluations: evaluations,
+    network_guard_delta_full_phase_window,
+    no_new_blocked_downstream_requests_observed:
+      network_guard_delta_full_phase_window === null
+        ? null
+        : network_guard_delta_full_phase_window === 0,
+    post_validate_read_only_snapshot_present:
+      post_validate_read_only_snapshot != null,
+    phase_2p_gate_manifest_version: gateManifest.version,
   };
 }
 
