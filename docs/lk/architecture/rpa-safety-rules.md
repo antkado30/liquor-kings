@@ -27,7 +27,15 @@ Violations are a **product incident**, not a documentation gap.
 
 - Evidence and diagnostics must not claim precision beyond stored fields (`failure_details`, attempts, evidence attributes). MLCC signals may be explicit or inferred per `mlcc-operator-context.service.js`.
 
+## Future quantity and post-quantity ladder (Phase 2i)
+
+Phase **2i** is **planning-only**: the worker and probe **do not** execute it and **do not** type quantity, add to cart, validate, checkout, or submit.
+
+- **Canonical criteria** for any **future** quantity phase live in [`services/api/src/workers/mlcc-phase-2i-policy.js`](../../../services/api/src/workers/mlcc-phase-2i-policy.js) (`buildPhase2iQuantityFutureGateManifest`, `buildPhase2iBroaderInteractionLadder`). Summaries appear in [rpa-rebuild-phases.md](./rpa-rebuild-phases.md).
+- **Ladder:** quantity rehearsal → quantity clear/revert → add/apply-style step → validate → checkout/submit — each step **`out_of_scope_until_separate_approval`** until explicitly documented and verified.
+- **Non-negotiables unchanged:** quantity entry, add-to-cart, validate, checkout, and submission stay forbidden in the current implementation path.
+
 ## Drift enforcement
 
-- Run `npm run verify:lk:rpa-safety` from repo root.
+- Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i** policy file and phases-doc markers).
 - See [DEVELOPER_ANTI_DRIFT.md](../DEVELOPER_ANTI_DRIFT.md).

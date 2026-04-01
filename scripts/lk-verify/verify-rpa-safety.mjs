@@ -15,11 +15,15 @@ function read(rel) {
 
 const workerPath = "services/api/src/workers/mlcc-browser-worker.js";
 const probePath = "services/api/src/workers/mlcc-browser-add-by-code-probe.js";
+const phase2iPolicyPath = "services/api/src/workers/mlcc-phase-2i-policy.js";
+const phasesDocPath = "docs/lk/architecture/rpa-rebuild-phases.md";
 
 const checks = [];
 
 const worker = read(workerPath);
 const probe = read(probePath);
+const phase2iPolicy = read(phase2iPolicyPath);
+const phasesDoc = read(phasesDocPath);
 
 if (!worker.includes("export const MLCC_BROWSER_DRY_RUN_SAFE_MODE = true")) {
   checks.push("mlcc-browser-worker.js must export MLCC_BROWSER_DRY_RUN_SAFE_MODE = true");
@@ -113,6 +117,36 @@ if (!probe.includes("export const PHASE_2H_REAL_CODE_POLICY_VERSION")) {
 
 if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2H_APPROVED")) {
   checks.push("mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2H_APPROVED (Phase 2h)");
+}
+
+if (!phase2iPolicy.includes("export const PHASE_2I_POLICY_VERSION")) {
+  checks.push("mlcc-phase-2i-policy.js must export PHASE_2I_POLICY_VERSION (Phase 2i)");
+}
+
+if (!phase2iPolicy.includes("export function buildPhase2iQuantityFutureGateManifest")) {
+  checks.push("mlcc-phase-2i-policy.js must export buildPhase2iQuantityFutureGateManifest");
+}
+
+if (!phase2iPolicy.includes("export function buildPhase2iBroaderInteractionLadder")) {
+  checks.push("mlcc-phase-2i-policy.js must export buildPhase2iBroaderInteractionLadder");
+}
+
+if (!phase2iPolicy.includes("out_of_scope_until_separate_approval")) {
+  checks.push(
+    "mlcc-phase-2i-policy.js must tag ladder steps with out_of_scope_until_separate_approval",
+  );
+}
+
+if (!phasesDoc.includes("Phase 2i")) {
+  checks.push("rpa-rebuild-phases.md must document Phase 2i");
+}
+
+if (!/planning[- ]only/i.test(phasesDoc)) {
+  checks.push("rpa-rebuild-phases.md must state Phase 2i is planning-only");
+}
+
+if (!phasesDoc.includes("mlcc-phase-2i-policy.js")) {
+  checks.push("rpa-rebuild-phases.md must reference mlcc-phase-2i-policy.js");
 }
 
 // Phase 2b/2c: no product .fill in probe; Phase 2g sentinel; Phase 2h gated real code + clear.
