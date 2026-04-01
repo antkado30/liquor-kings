@@ -10,6 +10,141 @@ const TREND_RUN_CAP = 15000;
 const TREND_MANUAL_CAP = 5000;
 const TREND_LOOKBACK_DAYS = 30;
 
+/**
+ * Queue / worker heuristics (server UTC). Adjust only here; same values are returned in API
+ * `queue_health.thresholds_applied` so clients show what was used.
+ */
+export const QUEUE_HEALTH_THRESHOLDS = {
+  /** Running: heartbeat null or older than this → stale_heartbeat_count (inferred unhealthy worker). */
+  stale_heartbeat_minutes: 15,
+  /** Queued: age since queued_at (fallback created_at) exceeds this → likely_stuck_queued_count (inferred). */
+  stuck_queued_minutes: 30,
+  /** Max queued+running rows loaded; if this many returned, counts may be incomplete. */
+  active_run_query_cap: 5000,
+};
+
+const ACTIVE_RUN_CAP = QUEUE_HEALTH_THRESHOLDS.active_run_query_cap;
+
+function parseTsMs(iso) {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+function buildQueueHealthWarnings(h) {
+  const w = [];
+  if (h.active_runs_cap_hit) {
+    w.push({
+      severity: "warn",
+      code: "active_runs_capped",
+      message: `At least ${ACTIVE_RUN_CAP} queued+running rows exist; sample may omit oldest. Health counts can undercount.`,
+    });
+  }
+  if (h.stale_heartbeat_count > 0) {
+    w.push({
+      severity: "warn",
+      code: "stale_running_heartbeats",
+      message: `${h.stale_heartbeat_count} running run(s) have no heartbeat or heartbeat older than ${h.thresholds_applied.stale_heartbeat_minutes} minutes (inferred worker issue).`,
+    });
+  }
+  if (h.likely_stuck_queued_count > 0) {
+    w.push({
+      severity: "warn",
+      code: "old_queued_runs",
+      message: `${h.likely_stuck_queued_count} queued run(s) older than ${h.thresholds_applied.stuck_queued_minutes} minutes (inferred: worker not dequeuing).`,
+    });
+  }
+  return w;
+}
+
+/**
+ * @param {Array<Record<string, unknown>>} rows - queued+running only
+ * @param {number} nowMs
+ */
+function computeQueueHealth(rows, nowMs) {
+  const thresholdsApplied = { ...QUEUE_HEALTH_THRESHOLDS };
+  const staleMs = thresholdsApplied.stale_heartbeat_minutes * 60 * 1000;
+  const stuckQMs = thresholdsApplied.stuck_queued_minutes * 60 * 1000;
+
+  const queued = rows.filter((r) => r.status === "queued");
+  const running = rows.filter((r) => r.status === "running");
+
+  let oldestQueuedMs = null;
+  for (const r of queued) {
+    const t = parseTsMs(r.queued_at) ?? parseTsMs(r.created_at);
+    if (t != null && (oldestQueuedMs == null || t < oldestQueuedMs)) oldestQueuedMs = t;
+  }
+
+  let oldestRunningMs = null;
+  for (const r of running) {
+    const t = parseTsMs(r.started_at) ?? parseTsMs(r.heartbeat_at) ?? parseTsMs(r.created_at);
+    if (t != null && (oldestRunningMs == null || t < oldestRunningMs)) oldestRunningMs = t;
+  }
+
+  let staleHeartbeatCount = 0;
+  let likelyStuckQueuedCount = 0;
+  let runningMissingHeartbeatAt = 0;
+  let latestHbMs = null;
+
+  for (const r of running) {
+    const hb = parseTsMs(r.heartbeat_at);
+    if (hb == null) {
+      runningMissingHeartbeatAt += 1;
+      staleHeartbeatCount += 1;
+    } else {
+      if (latestHbMs == null || hb > latestHbMs) latestHbMs = hb;
+      if (nowMs - hb > staleMs) staleHeartbeatCount += 1;
+    }
+  }
+
+  for (const r of queued) {
+    const t = parseTsMs(r.queued_at) ?? parseTsMs(r.created_at);
+    if (t != null && nowMs - t > stuckQMs) likelyStuckQueuedCount += 1;
+  }
+
+  const distinctWorkerIds = [
+    ...new Set(running.map((r) => r.worker_id).filter((id) => id != null && String(id).length > 0)),
+  ];
+
+  const base = {
+    inferred: true,
+    interpretation_notes: [
+      "All metrics are derived from execution_runs for this store only (queued + running snapshot).",
+      "Stale / stuck labels are heuristics, not ground truth about worker processes.",
+    ],
+    thresholds_applied: thresholdsApplied,
+    queued_count: queued.length,
+    running_count: running.length,
+    oldest_queued_age_seconds:
+      oldestQueuedMs != null ? Math.max(0, Math.floor((nowMs - oldestQueuedMs) / 1000)) : null,
+    oldest_running_age_seconds:
+      oldestRunningMs != null ? Math.max(0, Math.floor((nowMs - oldestRunningMs) / 1000)) : null,
+    stale_heartbeat_count: staleHeartbeatCount,
+    likely_stuck_queued_count: likelyStuckQueuedCount,
+    likely_stuck_run_count: likelyStuckQueuedCount + staleHeartbeatCount,
+    active_runs_sampled: rows.length,
+    active_runs_cap_hit: rows.length >= ACTIVE_RUN_CAP,
+    worker_snapshot: {
+      inferred: true,
+      distinct_worker_ids: distinctWorkerIds,
+      running_with_worker_id: running.filter((r) => r.worker_id != null && String(r.worker_id).length > 0)
+        .length,
+      running_missing_heartbeat_at: runningMissingHeartbeatAt,
+      latest_heartbeat_at_utc:
+        latestHbMs != null ? new Date(latestHbMs).toISOString() : null,
+      notes: [
+        "worker_id is optional on runs; empty distinct_worker_ids does not prove no workers.",
+        "latest_heartbeat_at_utc is the newest heartbeat among currently running rows only (inferred activity pulse).",
+      ],
+    },
+  };
+
+  return {
+    ...base,
+    warnings: buildQueueHealthWarnings(base),
+  };
+}
+
 function summarizePayload(payload) {
   if (payload == null) return null;
   try {
@@ -185,7 +320,7 @@ export async function getOperatorDiagnosticsOverview(
   const since = new Date(Date.now() - runWindowDays * 24 * 60 * 60 * 1000).toISOString();
   const trendSince = new Date(Date.now() - TREND_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-  const [runsRes, diagRes, trendRunsRes, manualRes] = await Promise.all([
+  const [runsRes, diagRes, trendRunsRes, manualRes, activeHealthRes] = await Promise.all([
     supabase
       .from("execution_runs")
       .select("status, failure_type, retry_count, max_retries, created_at")
@@ -214,6 +349,15 @@ export async function getOperatorDiagnosticsOverview(
       .gte("created_at", trendSince)
       .order("created_at", { ascending: true })
       .limit(TREND_MANUAL_CAP),
+    supabase
+      .from("execution_runs")
+      .select(
+        "id, status, created_at, queued_at, started_at, heartbeat_at, worker_id, progress_stage",
+      )
+      .eq("store_id", storeId)
+      .in("status", ["queued", "running"])
+      .order("created_at", { ascending: true })
+      .limit(ACTIVE_RUN_CAP),
   ]);
 
   if (runsRes.error) {
@@ -249,6 +393,15 @@ export async function getOperatorDiagnosticsOverview(
       body: {
         error: manualRes.error.message,
         code: "diagnostics_trend_manual_actions_query_failed",
+      },
+    };
+  }
+  if (activeHealthRes.error) {
+    return {
+      statusCode: 500,
+      body: {
+        error: activeHealthRes.error.message,
+        code: "diagnostics_active_runs_health_query_failed",
       },
     };
   }
@@ -301,6 +454,8 @@ export async function getOperatorDiagnosticsOverview(
     manualRows.length >= TREND_MANUAL_CAP,
   );
 
+  const queueHealth = computeQueueHealth(activeHealthRes.data ?? [], Date.now());
+
   return {
     statusCode: 200,
     body: {
@@ -317,6 +472,7 @@ export async function getOperatorDiagnosticsOverview(
             "Execution run counts are for the current operator store only, within the time window, capped at execution_runs_row_cap rows (newest first).",
             "System diagnostics include this store and rows with store_id null (global). Operator session rows are a subset of payload.kind = operator_session.",
             "Trends (below) use a separate capped query over the last 30 days; summary cards above still use the execution_runs_window_days setting.",
+            "Queue health uses a live snapshot of queued+running runs (capped); see queue_health.thresholds_applied and interpretation_notes.",
           ],
         },
         execution_runs: {
@@ -325,6 +481,7 @@ export async function getOperatorDiagnosticsOverview(
           failed_retryable_count: failedRetryable,
           failed_non_retryable_count: failedNonRetryable,
         },
+        queue_health: queueHealth,
         trends,
         recent_system_diagnostics: recentRows,
         operator_session_events: operatorSessionEvents,

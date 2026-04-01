@@ -43,6 +43,38 @@ type TrendsData = {
   windows: Record<"24h" | "7d" | "30d", TrendWindow>;
 };
 
+type HealthWarning = { severity: string; code: string; message: string };
+
+type WorkerSnapshot = {
+  inferred: boolean;
+  distinct_worker_ids: string[];
+  running_with_worker_id: number;
+  running_missing_heartbeat_at: number;
+  latest_heartbeat_at_utc: string | null;
+  notes: string[];
+};
+
+type QueueHealthData = {
+  inferred: boolean;
+  interpretation_notes: string[];
+  thresholds_applied: {
+    stale_heartbeat_minutes: number;
+    stuck_queued_minutes: number;
+    active_run_query_cap: number;
+  };
+  queued_count: number;
+  running_count: number;
+  oldest_queued_age_seconds: number | null;
+  oldest_running_age_seconds: number | null;
+  stale_heartbeat_count: number;
+  likely_stuck_queued_count: number;
+  likely_stuck_run_count: number;
+  active_runs_sampled: number;
+  active_runs_cap_hit: boolean;
+  worker_snapshot: WorkerSnapshot;
+  warnings: HealthWarning[];
+};
+
 type OverviewData = {
   meta: {
     store_id: string;
@@ -59,6 +91,7 @@ type OverviewData = {
     failed_retryable_count: number;
     failed_non_retryable_count: number;
   };
+  queue_health?: QueueHealthData;
   trends?: TrendsData;
   recent_system_diagnostics: DiagRow[];
   operator_session_events: DiagRow[];
@@ -128,6 +161,133 @@ function sumValues(o: Record<string, number>): number {
 
 function entriesSorted(o: Record<string, number>): [string, number][] {
   return Object.entries(o).sort((a, b) => b[1] - a[1]);
+}
+
+function formatAgeSeconds(sec: number | null): string {
+  if (sec == null) return "—";
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  if (h < 48) return `${h}h ${remM}m`;
+  const d = Math.floor(h / 24);
+  const remH = h % 24;
+  return `${d}d ${remH}h`;
+}
+
+function QueueHealthSection({ qh }: { qh: QueueHealthData }) {
+  const th = qh.thresholds_applied;
+  return (
+    <div className="card queue-health-card" style={{ marginTop: 12 }}>
+      <h3 className="section-title">Queue & worker health (this store)</h3>
+      <p className="muted" style={{ marginTop: 0 }}>
+        <strong>Inferred</strong> from a live snapshot of <code>execution_runs</code> with status{" "}
+        <code>queued</code> or <code>running</code> (max {th.active_run_query_cap} rows, oldest-first
+        order). Not a substitute for host/worker logs.
+      </p>
+      <ul className="muted" style={{ margin: "0 0 12px", paddingLeft: 18, fontSize: 12 }}>
+        {qh.interpretation_notes.map((n, i) => (
+          <li key={i}>{n}</li>
+        ))}
+      </ul>
+      <div className="mono muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        Thresholds (API): stale heartbeat &gt; {th.stale_heartbeat_minutes}m · stuck queued &gt;{" "}
+        {th.stuck_queued_minutes}m · adjust in{" "}
+        <code>services/api/src/services/operator-diagnostics.service.js</code> (
+        <code>QUEUE_HEALTH_THRESHOLDS</code>)
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        <strong>Stale heartbeat</strong>: running row with <code>heartbeat_at</code> missing or older
+        than {th.stale_heartbeat_minutes} minutes. <strong>Stuck queued</strong>: queued row with{" "}
+        <code>queued_at</code> (else <code>created_at</code>) older than {th.stuck_queued_minutes}{" "}
+        minutes. <strong>Likely stuck runs</strong>: stuck queued count + stale running count (no
+        double-count across statuses).
+      </p>
+      {qh.warnings.length > 0 ? (
+        <div style={{ marginBottom: 12 }}>
+          {qh.warnings.map((w) => (
+            <div key={w.code} className="msg warn" style={{ marginTop: 8 }}>
+              {w.message}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="msg success" style={{ marginBottom: 12 }}>
+          No threshold warnings on this snapshot (heartbeats and queue ages look OK vs configured
+          limits).
+        </div>
+      )}
+      <div className="diag-cards">
+        <div className="card diag-card">
+          <div className="diag-card-label">Queued</div>
+          <div className="diag-card-value">{qh.queued_count}</div>
+        </div>
+        <div className="card diag-card">
+          <div className="diag-card-label">Running</div>
+          <div className="diag-card-value">{qh.running_count}</div>
+        </div>
+        <div className="card diag-card">
+          <div className="diag-card-label">Oldest queued age</div>
+          <div className="diag-card-value" style={{ fontSize: 18 }}>
+            {formatAgeSeconds(qh.oldest_queued_age_seconds)}
+          </div>
+        </div>
+        <div className="card diag-card">
+          <div className="diag-card-label">Oldest running age</div>
+          <div className="diag-card-value" style={{ fontSize: 18 }}>
+            {formatAgeSeconds(qh.oldest_running_age_seconds)}
+          </div>
+        </div>
+        <div className="card diag-card">
+          <div className="diag-card-label">Stale heartbeats</div>
+          <div className="diag-card-value">{qh.stale_heartbeat_count}</div>
+        </div>
+        <div className="card diag-card">
+          <div className="diag-card-label">Likely stuck (sum)</div>
+          <div className="diag-card-value">{qh.likely_stuck_run_count}</div>
+        </div>
+      </div>
+      <p className="mono muted" style={{ fontSize: 11, marginTop: 8 }}>
+        Sampled {qh.active_runs_sampled} active rows
+        {qh.active_runs_cap_hit ? " (cap hit — totals may be incomplete)" : ""}.
+      </p>
+      <h4 className="section-title" style={{ marginTop: 16, fontSize: 14 }}>
+        Worker snapshot <span className="muted">(inferred)</span>
+      </h4>
+      <ul className="muted" style={{ margin: "0 0 8px", paddingLeft: 18, fontSize: 12 }}>
+        {qh.worker_snapshot.notes.map((n, i) => (
+          <li key={i}>{n}</li>
+        ))}
+      </ul>
+      <table className="diag-table">
+        <tbody>
+          <tr>
+            <th scope="row">Distinct worker_id (running)</th>
+            <td className="mono">
+              {qh.worker_snapshot.distinct_worker_ids.length
+                ? qh.worker_snapshot.distinct_worker_ids.join(", ")
+                : "— none set on running rows"}
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">Running rows with worker_id</th>
+            <td>{qh.worker_snapshot.running_with_worker_id}</td>
+          </tr>
+          <tr>
+            <th scope="row">Running rows missing heartbeat_at</th>
+            <td>{qh.worker_snapshot.running_missing_heartbeat_at}</td>
+          </tr>
+          <tr>
+            <th scope="row">Latest heartbeat (running only)</th>
+            <td className="mono">
+              {qh.worker_snapshot.latest_heartbeat_at_utc ?? "— (no heartbeat on running rows)"}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export function DiagnosticsPage() {
@@ -212,6 +372,14 @@ export function DiagnosticsPage() {
               {data.meta.system_diagnostics_row_cap}
             </p>
           </div>
+
+          {data.queue_health ? (
+            <QueueHealthSection qh={data.queue_health} />
+          ) : (
+            <div className="card msg warn" style={{ marginTop: 12 }}>
+              Queue health not returned by API — deploy updated API for live queue/worker snapshot.
+            </div>
+          )}
 
           {data.trends ? (
             <div className="card" style={{ marginTop: 12 }}>
