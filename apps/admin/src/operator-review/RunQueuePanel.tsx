@@ -1,6 +1,14 @@
+import { useMemo, useState } from "react";
 import { failureGuidanceText } from "../lib/failureGuidance";
 import { FailureBadge, StatusBadge } from "./components/Badges";
 import { Msg } from "./components/Msg";
+import {
+  priorityReason,
+  queuedAgeMinutes,
+  QUEUED_OLD_MINUTES_WARN,
+  sortRunsForQueue,
+  type QueueSortMode,
+} from "./queuePrioritization";
 import type { FlashMsg, RunSummaryRow } from "./types";
 
 type Props = {
@@ -30,6 +38,18 @@ type Props = {
   onResetFilters: () => void;
 };
 
+function runCardPriorityClass(row: RunSummaryRow): string {
+  if (row.pending_manual_review) return "priority-band-critical";
+  if (row.status === "failed" && row.retry_allowed) return "priority-band-high";
+  if (row.status === "failed") return "priority-band-failed";
+  if (row.status === "running") return "priority-band-running";
+  if (row.status === "queued") {
+    const q = queuedAgeMinutes(row);
+    if (q != null && q >= QUEUED_OLD_MINUTES_WARN) return "priority-band-queued-old";
+  }
+  return "priority-band-default";
+}
+
 export function RunQueuePanel({
   statusFilter,
   setStatusFilter,
@@ -56,6 +76,13 @@ export function RunQueuePanel({
   onRefresh,
   onResetFilters,
 }: Props) {
+  const [sortMode, setSortMode] = useState<QueueSortMode>("priority");
+
+  const displayRuns = useMemo(
+    () => sortRunsForQueue(filteredRuns, sortMode),
+    [filteredRuns, sortMode],
+  );
+
   return (
     <section className="card">
       <h3 className="section-title">Run queue</h3>
@@ -117,6 +144,30 @@ export function RunQueuePanel({
         </button>
       </div>
       <div className="row" style={{ marginTop: 8 }}>
+        <label>Sort</label>
+        <select
+          value={sortMode}
+          onChange={(e) => setSortMode(e.target.value as QueueSortMode)}
+          disabled={loadingRuns}
+        >
+          <option value="priority">Priority (triage)</option>
+          <option value="newest">Newest first</option>
+          <option value="failed_only">Failed only (by priority)</option>
+        </select>
+      </div>
+      <p className="muted queue-sort-hint" style={{ fontSize: 12, margin: "4px 0 0" }}>
+        {sortMode === "priority" && (
+          <>
+            Client sort: manual review &amp; failed (retryable first) ahead of running &amp; queued;
+            long-wait queued runs bubble up. Tie-break: newest <code>created_at</code> in batch.
+          </>
+        )}
+        {sortMode === "newest" && <>API order overridden: newest <code>created_at</code> first.</>}
+        {sortMode === "failed_only" && (
+          <>Only <code>failed</code> rows from the loaded list; then same priority tiers among failures.</>
+        )}
+      </p>
+      <div className="row" style={{ marginTop: 8 }}>
         <label>Search queue</label>
         <input
           style={{ flex: 1, minWidth: 200 }}
@@ -152,21 +203,31 @@ export function RunQueuePanel({
             <strong>No queue matches</strong>
             Clear search or load a broader set.
           </div>
+        ) : sortMode === "failed_only" && displayRuns.length === 0 ? (
+          <div className="empty-state">
+            <strong>No failed runs</strong>
+            In this loaded batch nothing has status failed. Widen filters or use another sort.
+          </div>
         ) : (
-          filteredRuns.map((row) => {
+          displayRuns.map((row) => {
             const hint = failureGuidanceText(row.failure_type);
+            const band = runCardPriorityClass(row);
+            const reason = priorityReason(row);
             return (
               <div
                 key={row.run_id}
                 role="button"
                 tabIndex={0}
-                className={`run-card${row.pending_manual_review ? " pending-review" : ""}${selectedRunId === row.run_id ? " selected" : ""}`}
+                className={`run-card ${band}${row.pending_manual_review ? " pending-review" : ""}${selectedRunId === row.run_id ? " selected" : ""}`}
                 onClick={() => onSelectRun(row.run_id)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") onSelectRun(row.run_id);
                 }}
               >
                 <div>
+                  <div className="queue-priority-row">
+                    <span className="queue-priority-chip">{reason}</span>
+                  </div>
                   <div className="primary-line">
                     <StatusBadge status={row.status} />
                     <FailureBadge ft={row.failure_type} />
