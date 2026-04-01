@@ -13,14 +13,14 @@ Violations are a **product incident**, not a documentation gap.
 
 1. **Code paths** — Worker does not implement submit/checkout/validate/add-to-cart; success notes explicitly state no mutations. `assertMlccSubmissionAllowed` exists for **future** submit code and **throws** unless `MLCC_SUBMISSION_ARMED=true` (currently unused in the happy path).
 2. **Network** — `installMlccSafetyNetworkGuards` + `shouldBlockHttpRequest` in `mlcc-browser-add-by-code-probe.js` aborts matching mutation-like URLs (methods/patterns as coded).
-3. **UI** — `MLCC_PROBE_UNSAFE_UI_TEXT` / `isProbeUiTextUnsafe` block labels on **allowed** probe clicks; Phase 2d classifies controls but **does not click**.
+3. **UI** — `MLCC_PROBE_UNSAFE_UI_TEXT` / `isProbeUiTextUnsafe` block labels on **allowed** probe clicks; Phase 2d/2e classify controls (2e may scope to a root selector) but **do not click**.
 
 `MLCC_BROWSER_DRY_RUN_SAFE_MODE` is exported as `true` from `mlcc-browser-worker.js`.
 
 ## Hard-fail behavior
 
 - Worker failures finalize runs with `failure_type` / `failure_details` / `evidence` as implemented.
-- Phase 2c/2d errors are wrapped with identifiable messages (`MLCC add-by-code phase 2c failed`, etc.) for operator diagnostics.
+- Phase 2c/2d/2e errors are wrapped with identifiable messages (`MLCC add-by-code phase 2c failed`, `… phase 2e failed`, etc.) for operator diagnostics.
 
 ## Truthfulness
 

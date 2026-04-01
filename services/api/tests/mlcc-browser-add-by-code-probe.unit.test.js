@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  applyTenantAdvisoryForUncertain,
   buildPlaywrightSelectorFromHint,
   classifyMutationBoundaryControl,
   isProbeUiTextUnsafe,
+  parseMutationBoundaryUncertainHints,
   shouldBlockHttpRequest,
 } from "../src/workers/mlcc-browser-add-by-code-probe.js";
 
@@ -42,13 +44,58 @@ describe("classifyMutationBoundaryControl", () => {
     expect(r.classification).toBe("safe_informational");
   });
 
-  it("returns uncertain for ambiguous labels", () => {
+  it("returns uncertain for ambiguous labels with uncertain_detail", () => {
     const r = classifyMutationBoundaryControl({
       tag: "button",
       text: "Continue",
     });
 
     expect(r.classification).toBe("uncertain");
+    expect(r.uncertain_detail).toBe(
+      "generic_navigation_or_action_verb_needs_tenant_context",
+    );
+  });
+});
+
+describe("parseMutationBoundaryUncertainHints", () => {
+  it("returns empty array for null/blank", () => {
+    expect(parseMutationBoundaryUncertainHints(null)).toEqual([]);
+    expect(parseMutationBoundaryUncertainHints("  ")).toEqual([]);
+  });
+
+  it("parses valid hint entries", () => {
+    const raw = JSON.stringify([
+      { contains: "foo", advisory_label: "note" },
+      { contains: "", advisory_label: "x" },
+    ]);
+    expect(parseMutationBoundaryUncertainHints(raw)).toEqual([
+      { contains: "foo", advisory_label: "note" },
+    ]);
+  });
+
+  it("throws when JSON is not an array", () => {
+    expect(() => parseMutationBoundaryUncertainHints('{"x":1}')).toThrow(
+      /must be a JSON array/,
+    );
+  });
+});
+
+describe("applyTenantAdvisoryForUncertain", () => {
+  it("does not attach hints for unsafe classification", () => {
+    const row = { text: "Add to cart" };
+    const out = applyTenantAdvisoryForUncertain(row, "unsafe_mutation_likely", [
+      { contains: "cart", advisory_label: "wrong" },
+    ]);
+    expect(out).toEqual({});
+  });
+
+  it("attaches advisory only for uncertain rows", () => {
+    const row = { text: "Enter sku here" };
+    const out = applyTenantAdvisoryForUncertain(row, "uncertain", [
+      { contains: "sku", advisory_label: "Tenant: code field area" },
+    ]);
+    expect(out.tenant_advisory_label).toBe("Tenant: code field area");
+    expect(out.tenant_advisory_disclaimer).toMatch(/non_authoritative/);
   });
 });
 

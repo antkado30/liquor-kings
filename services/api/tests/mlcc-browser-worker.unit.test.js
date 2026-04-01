@@ -48,6 +48,9 @@ describe("buildMlccBrowserConfig", () => {
       addByCodeQtyFieldSelector: null,
       addByCodeSafeFocusBlur: false,
       addByCodePhase2d: false,
+      addByCodePhase2e: false,
+      mutationBoundaryRootSelector: null,
+      mutationBoundaryUncertainHints: [],
     });
   });
 
@@ -201,6 +204,80 @@ describe("buildMlccBrowserConfig", () => {
 
     expect(out.ready).toBe(false);
     expect(out.errors[0].message).toMatch(/MLCC_ADD_BY_CODE_PROBE/);
+  });
+
+  it("rejects Phase 2e without Phase 2b probe", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PHASE_2E: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors[0].message).toMatch(/MLCC_ADD_BY_CODE_PROBE/);
+  });
+
+  it("rejects Phase 2d and Phase 2e together", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2D: "true",
+      MLCC_ADD_BY_CODE_PHASE_2E: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors.some((e) => /mutually exclusive/i.test(e.message))).toBe(
+      true,
+    );
+  });
+
+  it("parses Phase 2e root selector and uncertain hints JSON", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const hints = JSON.stringify([
+      { contains: "sku", advisory_label: "Likely product lookup (advisory)" },
+    ]);
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2E: "true",
+      MLCC_MUTATION_BOUNDARY_ROOT_SELECTOR: "  #add-by-code-panel  ",
+      MLCC_MUTATION_BOUNDARY_UNCERTAIN_HINTS: hints,
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2e).toBe(true);
+    expect(out.config.mutationBoundaryRootSelector).toBe("#add-by-code-panel");
+    expect(out.config.mutationBoundaryUncertainHints).toEqual([
+      { contains: "sku", advisory_label: "Likely product lookup (advisory)" },
+    ]);
+  });
+
+  it("fails config when MLCC_MUTATION_BOUNDARY_UNCERTAIN_HINTS is not a JSON array", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2E: "true",
+      MLCC_MUTATION_BOUNDARY_UNCERTAIN_HINTS: "{}",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) => /MLCC_MUTATION_BOUNDARY_UNCERTAIN_HINTS/.test(e.message)),
+    ).toBe(true);
   });
 
   it("rejects Phase 2c without Phase 2b probe", () => {

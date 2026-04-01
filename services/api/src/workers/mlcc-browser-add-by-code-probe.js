@@ -155,7 +155,88 @@ export function classifyMutationBoundaryControl(row) {
   return {
     classification: "uncertain",
     rationale: "no_definitive_safe_or_unsafe_match_heuristic_ambiguous",
+    uncertain_detail: deriveUncertainDetail(row),
   };
+}
+
+function deriveUncertainDetail(row) {
+  const text = String(row.text ?? "").trim();
+
+  if (!text) {
+    return "empty_or_missing_visible_text";
+  }
+
+  if (text.length <= 1) {
+    return "very_short_label";
+  }
+
+  if (/^(continue|next|apply|done|ok|go|proceed)\b/i.test(text)) {
+    return "generic_navigation_or_action_verb_needs_tenant_context";
+  }
+
+  if (/\b(add|save|update|remove)\b/i.test(text.toLowerCase())) {
+    return "commerce_adjacent_verb_not_matching_layer3_blocklist";
+  }
+
+  return "no_safe_or_unsafe_pattern_match";
+}
+
+/**
+ * Parse tenant advisory hints for uncertain controls only (JSON array).
+ * Each item: { "contains": "substring", "advisory_label": "operator_note" }
+ * Does not change classification; never overrides unsafe → safe.
+ */
+export function parseMutationBoundaryUncertainHints(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return [];
+  }
+
+  const j = JSON.parse(String(raw));
+
+  if (!Array.isArray(j)) {
+    throw new Error("MLCC_MUTATION_BOUNDARY_UNCERTAIN_HINTS must be a JSON array");
+  }
+
+  const out = [];
+
+  for (const x of j) {
+    if (!x || typeof x !== "object") {
+      continue;
+    }
+
+    const contains = String(x.contains ?? "").trim();
+    const advisory_label = String(x.advisory_label ?? "").trim();
+
+    if (contains && advisory_label) {
+      out.push({ contains, advisory_label });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Attach non-authoritative tenant notes to uncertain rows only (substring match).
+ */
+export function applyTenantAdvisoryForUncertain(row, classification, hints) {
+  if (classification !== "uncertain" || !Array.isArray(hints) || hints.length === 0) {
+    return {};
+  }
+
+  const text = String(row.text ?? "").toLowerCase();
+
+  for (const h of hints) {
+    if (text.includes(h.contains.toLowerCase())) {
+      return {
+        tenant_advisory_label: h.advisory_label,
+        tenant_advisory_matched_contains: h.contains,
+        tenant_advisory_disclaimer:
+          "non_authoritative_operator_env_hint_does_not_change_classification",
+      };
+    }
+  }
+
+  return {};
 }
 
 /**
@@ -901,6 +982,144 @@ async function collectMutationBoundaryControls(page, maxElements) {
   }, maxElements);
 }
 
+async function collectMutationBoundaryControlsInRoot(
+  page,
+  rootSelector,
+  maxElements,
+) {
+  const loc = page.locator(rootSelector).first();
+  const handle = await loc.elementHandle();
+
+  if (!handle) {
+    return [];
+  }
+
+  return handle.evaluate((root, max) => {
+    const cap = Math.min(Math.max(max, 1), 150);
+    const selectors = [
+      "button",
+      "a[href]",
+      "[role=\"button\"]",
+      "input[type=\"submit\"]",
+      "input[type=\"button\"]",
+      "input[type=\"reset\"]",
+    ];
+    const seen = new Set();
+    const out = [];
+
+    const isVisibleEl = (el) => {
+      if (!(el instanceof HTMLElement)) {
+        return false;
+      }
+
+      const st = window.getComputedStyle(el);
+
+      if (
+        st.display === "none" ||
+        st.visibility === "hidden" ||
+        Number(st.opacity) === 0
+      ) {
+        return false;
+      }
+
+      const r = el.getBoundingClientRect();
+
+      return r.width >= 2 && r.height >= 2;
+    };
+
+    const tryAdd = (el) => {
+      if (!(el instanceof HTMLElement)) {
+        return;
+      }
+
+      if (!isVisibleEl(el)) {
+        return;
+      }
+
+      if (seen.has(el)) {
+        return;
+      }
+
+      if (out.length >= cap) {
+        return;
+      }
+
+      seen.add(el);
+
+      const tag = el.tagName.toLowerCase();
+      let type = null;
+
+      if (el instanceof HTMLInputElement) {
+        type = el.type || "text";
+      }
+
+      const text = (
+        el.innerText ||
+        (el instanceof HTMLInputElement ? el.value : "") ||
+        el.getAttribute("aria-label") ||
+        ""
+      )
+        .trim()
+        .slice(0, 200);
+
+      let href = null;
+
+      if (el instanceof HTMLAnchorElement) {
+        href = el.href || null;
+      }
+
+      out.push({
+        tag,
+        type,
+        role: el.getAttribute("role"),
+        text,
+        href,
+        id: el.id || null,
+        name: el.getAttribute("name"),
+        className:
+          typeof el.className === "string"
+            ? el.className.slice(0, 120)
+            : null,
+      });
+    };
+
+    for (const sel of selectors) {
+      try {
+        if (root instanceof HTMLElement && root.matches(sel)) {
+          tryAdd(root);
+        }
+      } catch {
+        // invalid selector for matches
+      }
+
+      root.querySelectorAll(sel).forEach((el) => tryAdd(el));
+    }
+
+    return out;
+  }, maxElements);
+}
+
+function classifyBoundaryRows(raw, tenantHints) {
+  return raw.map((row) => {
+    const classified = classifyMutationBoundaryControl(row);
+    const { classification, rationale, uncertain_detail } = classified;
+
+    const tenant = applyTenantAdvisoryForUncertain(
+      row,
+      classification,
+      tenantHints,
+    );
+
+    return {
+      ...row,
+      classification,
+      rationale,
+      ...(uncertain_detail != null ? { uncertain_detail } : {}),
+      ...tenant,
+    };
+  });
+}
+
 /**
  * Phase 2d: read-only scan of interactive controls; heuristic safe / unsafe / uncertain buckets.
  * No clicks, no typing, no cart mutation.
@@ -921,15 +1140,7 @@ export async function runAddByCodePhase2dMutationBoundaryMap({
 
   const raw = await collectMutationBoundaryControls(page, maxControls);
 
-  const mutation_boundary_controls = raw.map((row) => {
-    const { classification, rationale } = classifyMutationBoundaryControl(row);
-
-    return {
-      ...row,
-      classification,
-      rationale,
-    };
-  });
+  const mutation_boundary_controls = classifyBoundaryRows(raw, []);
 
   const safe_controls_seen = mutation_boundary_controls.filter(
     (c) => c.classification === "safe_informational",
@@ -941,6 +1152,16 @@ export async function runAddByCodePhase2dMutationBoundaryMap({
 
   const uncertain_controls_seen = mutation_boundary_controls.filter(
     (c) => c.classification === "uncertain",
+  );
+
+  const uncertain_review_examples = uncertain_controls_seen.slice(0, 15).map(
+    (c) => ({
+      text: c.text,
+      tag: c.tag,
+      type: c.type,
+      id: c.id,
+      uncertain_detail: c.uncertain_detail ?? null,
+    }),
   );
 
   const layer3_ui_guard_text_match_count = raw.filter((row) => {
@@ -964,6 +1185,7 @@ export async function runAddByCodePhase2dMutationBoundaryMap({
         safe_controls_seen,
         blocked_controls_seen,
         uncertain_controls_seen,
+        uncertain_review_examples,
         network_guard_blocked_request_count:
           guardStats && typeof guardStats.blockedRequestCount === "number"
             ? guardStats.blockedRequestCount
@@ -988,5 +1210,151 @@ export async function runAddByCodePhase2dMutationBoundaryMap({
     safe_count: safe_controls_seen.length,
     unsafe_count: blocked_controls_seen.length,
     uncertain_count: uncertain_controls_seen.length,
+  };
+}
+
+/**
+ * Phase 2e: scoped mutation-boundary map (add-by-code area) with safe fallback to broad scan.
+ * Tenant uncertain hints are advisory only. No clicks, no typing, no cart mutation.
+ */
+export async function runAddByCodePhase2eMutationBoundaryMap({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  maxControls = 100,
+}) {
+  await heartbeat({
+    progressStage: "mlcc_mutation_boundary_phase_2e_start",
+    progressMessage:
+      "Phase 2e: scoped mutation-boundary map (read-only; fallback to broad if needed)",
+  });
+
+  const rootSel = config.mutationBoundaryRootSelector;
+  const tenantHints = config.mutationBoundaryUncertainHints ?? [];
+
+  let raw = [];
+  let scoped_root_selector_configured = Boolean(
+    rootSel && typeof rootSel === "string",
+  );
+  let scoped_root_matched_visible = false;
+  let fallback_to_broad_scan = false;
+  let scope_status = "no_root_selector_configured";
+
+  if (scoped_root_selector_configured) {
+    const loc = page.locator(rootSel).first();
+    const n = await loc.count().catch(() => 0);
+
+    if (n === 0) {
+      scope_status = "root_selector_zero_matches";
+      fallback_to_broad_scan = true;
+    } else {
+      const vis = await loc.isVisible().catch(() => false);
+
+      if (!vis) {
+        scope_status = "root_not_visible";
+        fallback_to_broad_scan = true;
+      } else {
+        scope_status = "scoped_scan_active";
+        scoped_root_matched_visible = true;
+        raw = await collectMutationBoundaryControlsInRoot(
+          page,
+          rootSel,
+          maxControls,
+        );
+      }
+    }
+  } else {
+    fallback_to_broad_scan = true;
+  }
+
+  if (fallback_to_broad_scan) {
+    raw = await collectMutationBoundaryControls(page, maxControls);
+  }
+
+  const mutation_boundary_controls = classifyBoundaryRows(raw, tenantHints);
+
+  const safe_controls_seen = mutation_boundary_controls.filter(
+    (c) => c.classification === "safe_informational",
+  );
+
+  const blocked_controls_seen = mutation_boundary_controls.filter(
+    (c) => c.classification === "unsafe_mutation_likely",
+  );
+
+  const uncertain_controls_seen = mutation_boundary_controls.filter(
+    (c) => c.classification === "uncertain",
+  );
+
+  const uncertain_review_examples = uncertain_controls_seen.slice(0, 15).map(
+    (c) => ({
+      text: c.text,
+      tag: c.tag,
+      type: c.type,
+      id: c.id,
+      uncertain_detail: c.uncertain_detail ?? null,
+      tenant_advisory_label: c.tenant_advisory_label ?? null,
+    }),
+  );
+
+  const layer3_ui_guard_text_match_count = raw.filter((row) => {
+    const p = isProbeUiTextUnsafe(String(row.text ?? "").trim());
+
+    return p.unsafe === true;
+  }).length;
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_mutation_boundary_phase_2e_findings",
+      message:
+        "Phase 2e scoped mutation boundary (heuristic; not proof of behavior)",
+      attributes: {
+        scoped_root_selector: rootSel ?? null,
+        scoped_root_selector_configured,
+        scoped_root_matched_visible,
+        fallback_to_broad_scan,
+        scope_status,
+        tenant_uncertain_hints_count: tenantHints.length,
+        scan_count: mutation_boundary_controls.length,
+        max_controls: maxControls,
+        total_controls_in_scan: mutation_boundary_controls.length,
+        safe_count: safe_controls_seen.length,
+        unsafe_count: blocked_controls_seen.length,
+        uncertain_count: uncertain_controls_seen.length,
+        mutation_boundary_controls,
+        safe_controls_seen,
+        blocked_controls_seen,
+        uncertain_controls_seen,
+        uncertain_review_examples,
+        network_guard_blocked_request_count:
+          guardStats && typeof guardStats.blockedRequestCount === "number"
+            ? guardStats.blockedRequestCount
+            : null,
+        layer3_ui_guard_text_match_count,
+        disclaimer:
+          "classifications_are_heuristic_ambiguity_remains_possible_do_not_infer_cart_safety",
+        typing_policy_phase_2e: "no_product_code_or_quantity_typing",
+        cart_mutation: "none",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_mutation_boundary_phase_2e_complete",
+    progressMessage:
+      "Phase 2e complete (no validate/add-to-cart/checkout/submit)",
+  });
+
+  return {
+    scan_count: mutation_boundary_controls.length,
+    safe_count: safe_controls_seen.length,
+    unsafe_count: blocked_controls_seen.length,
+    uncertain_count: uncertain_controls_seen.length,
+    scoped_root_matched_visible,
+    fallback_to_broad_scan,
+    scope_status,
   };
 }
