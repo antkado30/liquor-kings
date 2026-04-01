@@ -7,6 +7,7 @@ import {
   classifyMutationBoundaryControl,
   computePhase2gExtendedMutationRisk,
   evaluatePhase2fOpenCandidateEligibility,
+  evaluatePhase2nAddApplyCandidateEligibility,
   isProbeUiTextUnsafe,
   parseMutationBoundaryUncertainHints,
   parsePhase2fSafeOpenTextAllowSubstrings,
@@ -14,6 +15,7 @@ import {
   parsePhase2hTestCode,
   parsePhase2jTestQuantity,
   parsePhase2lFieldOrder,
+  parsePhase2nAddApplyCandidateSelectors,
   parseSafeOpenCandidateSelectors,
   PHASE_2G_TYPING_POLICY_VERSION,
   PHASE_2J_QUANTITY_POLICY_VERSION,
@@ -30,9 +32,17 @@ describe("shouldBlockHttpRequest", () => {
     expect(b.block).toBe(true);
   });
 
-  it("blocks POST to apply-line style paths", () => {
+  it("does not block POST to apply-line URLs (Phase 2n may require real apply-line XHRs; validate/checkout patterns stay blocked)", () => {
     const b = shouldBlockHttpRequest(
       "https://vendor.example/order/apply-line",
+      "POST",
+    );
+    expect(b.block).toBe(false);
+  });
+
+  it("still blocks POST to validate paths", () => {
+    const b = shouldBlockHttpRequest(
+      "https://vendor.example/order/validate",
       "POST",
     );
     expect(b.block).toBe(true);
@@ -254,6 +264,65 @@ describe("evaluatePhase2fOpenCandidateEligibility", () => {
   });
 });
 
+describe("parsePhase2nAddApplyCandidateSelectors", () => {
+  it("parses non-empty JSON array", () => {
+    expect(parsePhase2nAddApplyCandidateSelectors('["#a","#b"]')).toEqual([
+      "#a",
+      "#b",
+    ]);
+  });
+
+  it("throws when empty", () => {
+    expect(() => parsePhase2nAddApplyCandidateSelectors("")).toThrow(
+      /MLCC_ADD_BY_CODE_PHASE_2N_ADD_APPLY_SELECTORS/,
+    );
+  });
+});
+
+describe("evaluatePhase2nAddApplyCandidateEligibility", () => {
+  it("rejects validate-style labels (downstream blocklist and/or layer3)", () => {
+    const r = evaluatePhase2nAddApplyCandidateEligibility(
+      { tag: "button", text: "Validate order" },
+      [],
+    );
+    expect(r.eligible).toBe(false);
+    expect(r.reason).toMatch(/downstream|layer3/);
+  });
+
+  it("accepts Add line label via default add/apply intent (mutation-boundary cart-line heuristic)", () => {
+    const r = evaluatePhase2nAddApplyCandidateEligibility(
+      { tag: "button", text: "Add line" },
+      [],
+    );
+    expect(r.eligible).toBe(true);
+    expect(r.reason).toBe("accepted_add_apply_line_default_intent_pattern");
+  });
+
+  it("accepts Apply alone as uncertain + default intent", () => {
+    const r = evaluatePhase2nAddApplyCandidateEligibility(
+      { tag: "button", text: "Apply" },
+      [],
+    );
+    expect(r.eligible).toBe(true);
+  });
+
+  it("rejects Continue without tenant allowlist match", () => {
+    const r = evaluatePhase2nAddApplyCandidateEligibility(
+      { tag: "button", text: "Continue" },
+      [],
+    );
+    expect(r.eligible).toBe(false);
+  });
+
+  it("accepts uncertain label when tenant substring matches add/apply wording", () => {
+    const r = evaluatePhase2nAddApplyCandidateEligibility(
+      { tag: "button", text: "Continue to apply line" },
+      ["apply line"],
+    );
+    expect(r.eligible).toBe(true);
+  });
+});
+
 describe("applyTenantAdvisoryForUncertain", () => {
   it("does not attach hints for unsafe classification", () => {
     const row = { text: "Add to cart" };
@@ -301,5 +370,10 @@ describe("isProbeUiTextUnsafe", () => {
   it("allows neutral labels", () => {
     expect(isProbeUiTextUnsafe("Add by code").unsafe).toBe(false);
     expect(isProbeUiTextUnsafe("Enter code").unsafe).toBe(false);
+  });
+
+  it("does not treat add-line / apply-line wording as globally unsafe (Phase 2n uses dedicated eligibility)", () => {
+    expect(isProbeUiTextUnsafe("Add line").unsafe).toBe(false);
+    expect(isProbeUiTextUnsafe("Apply line").unsafe).toBe(false);
   });
 });

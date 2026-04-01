@@ -12,6 +12,10 @@ import {
   PHASE_2K_POLICY_VERSION,
   buildPhase2kCombinedInteractionFutureGateManifest,
 } from "./mlcc-phase-2k-policy.js";
+import {
+  PHASE_2M_POLICY_VERSION,
+  buildPhase2mAddApplyLineFutureGateManifest,
+} from "./mlcc-phase-2m-policy.js";
 
 /** Clicks matching these labels are never performed during the probe. */
 export const MLCC_PROBE_UNSAFE_UI_TEXT = [
@@ -27,8 +31,6 @@ export const MLCC_PROBE_UNSAFE_UI_TEXT = [
   /complete\s*order/i,
   /confirm\s*order/i,
   /finalize/i,
-  /add\s*line/i,
-  /\bapply\s*line\b/i,
 ];
 
 /**
@@ -54,9 +56,6 @@ export function shouldBlockHttpRequest(url, method) {
       /addtocart/i,
       /add-to-cart/i,
       /\/order\/create/i,
-      /addline/i,
-      /apply-line/i,
-      /\/apply\b/i,
     ];
     for (const re of patterns) {
       if (re.test(u)) {
@@ -289,6 +288,41 @@ export function parseSafeOpenCandidateSelectors(raw) {
 }
 
 /**
+ * Phase 2n: JSON array of CSS selectors (priority order) for the single tenant add-line / apply-line control.
+ */
+export function parsePhase2nAddApplyCandidateSelectors(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_PHASE_2N_ADD_APPLY_SELECTORS is empty (required when Phase 2n is enabled)",
+    );
+  }
+
+  const j = JSON.parse(String(raw));
+
+  if (!Array.isArray(j) || j.length === 0) {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_PHASE_2N_ADD_APPLY_SELECTORS must be a non-empty JSON array of strings",
+    );
+  }
+
+  const out = [];
+
+  for (const x of j) {
+    if (typeof x === "string" && x.trim() !== "") {
+      out.push(x.trim());
+    }
+  }
+
+  if (out.length === 0) {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_PHASE_2N_ADD_APPLY_SELECTORS must contain at least one non-empty selector string",
+    );
+  }
+
+  return out;
+}
+
+/**
  * Optional JSON array of substrings; extends which uncertain labels may open add-by-code (Phase 2f only).
  */
 export function parsePhase2fSafeOpenTextAllowSubstrings(raw) {
@@ -385,6 +419,141 @@ export function evaluatePhase2fOpenCandidateEligibility(row, textAllowSubstrings
     return {
       eligible: false,
       reason: "rejected_uncertain_without_open_intent_match",
+      classification: classified.classification,
+      uncertain_detail: classified.uncertain_detail,
+    };
+  }
+
+  return {
+    eligible: false,
+    reason: "rejected_unexpected_classification_state",
+    classification: classified.classification,
+  };
+}
+
+const PHASE_2N_DOWNSTREAM_FORBIDDEN_LABEL_RES = [
+  /add\s*to\s*cart/i,
+  /add\s*all/i,
+  /checkout/i,
+  /submit(\s*order)?/i,
+  /place\s*order/i,
+  /validate/i,
+  /finalize/i,
+  /complete\s*order/i,
+  /confirm\s*order/i,
+  /purchase/i,
+  /buy\s*now/i,
+  /update\s*cart/i,
+];
+
+function isPhase2nDownstreamForbiddenLabel(text) {
+  const t = String(text ?? "").trim();
+
+  if (!t) {
+    return { forbidden: true, reason: "empty_control_text" };
+  }
+
+  for (const re of PHASE_2N_DOWNSTREAM_FORBIDDEN_LABEL_RES) {
+    if (re.test(t)) {
+      return {
+        forbidden: true,
+        reason: `downstream_or_cart_like_label:${re}`,
+      };
+    }
+  }
+
+  return { forbidden: false };
+}
+
+const PHASE_2N_DEFAULT_ADD_APPLY_INTENT_RES = [
+  /\badd\s*line\b/i,
+  /\bapply\s*line\b/i,
+  /^apply$/i,
+  /^add$/i,
+];
+
+function textMatchesPhase2nDefaultAddApplyIntent(text) {
+  const t = String(text ?? "").trim();
+
+  return PHASE_2N_DEFAULT_ADD_APPLY_INTENT_RES.some((re) => re.test(t));
+}
+
+/**
+ * Phase 2n: Layer 3 downstream blocklist + mutation-boundary rules, with explicit allowance for
+ * add-line / apply-line style labels (tenant allowlist or default intent patterns).
+ */
+export function evaluatePhase2nAddApplyCandidateEligibility(row, textAllowSubstrings) {
+  const text = String(row.text ?? "").trim();
+  const downstream = isPhase2nDownstreamForbiddenLabel(text);
+
+  if (downstream.forbidden) {
+    return {
+      eligible: false,
+      reason: downstream.reason,
+    };
+  }
+
+  const layer3 = isProbeUiTextUnsafe(text);
+
+  if (layer3.unsafe) {
+    return {
+      eligible: false,
+      reason: `rejected_layer3_ui_guard:${layer3.matched}`,
+    };
+  }
+
+  const classified = classifyMutationBoundaryControl(row);
+
+  if (classified.classification === "unsafe_mutation_likely") {
+    if (classified.rationale === "label_suggests_cart_line_mutation_heuristic") {
+      const subOk = textMatchesTenantOpenSubstrings(text, textAllowSubstrings);
+      const defOk = textMatchesPhase2nDefaultAddApplyIntent(text);
+
+      if (subOk || defOk) {
+        return {
+          eligible: true,
+          reason: subOk
+            ? "accepted_add_apply_line_tenant_text_allowlist"
+            : "accepted_add_apply_line_default_intent_pattern",
+          classification: classified.classification,
+          rationale: classified.rationale,
+        };
+      }
+    }
+
+    return {
+      eligible: false,
+      reason: `rejected_mutation_boundary:${classified.rationale}`,
+      classification: classified.classification,
+    };
+  }
+
+  if (classified.classification === "safe_informational") {
+    return {
+      eligible: false,
+      reason: "rejected_safe_informational_unlikely_add_apply_target",
+      classification: classified.classification,
+    };
+  }
+
+  if (classified.classification === "uncertain") {
+    const subOk = textMatchesTenantOpenSubstrings(text, textAllowSubstrings);
+    const defOk = textMatchesPhase2nDefaultAddApplyIntent(text);
+
+    if (subOk || defOk) {
+      return {
+        eligible: true,
+        reason: subOk
+          ? "accepted_uncertain_tenant_allowlist_add_apply"
+          : "accepted_uncertain_default_add_apply_intent",
+        classification: classified.classification,
+        uncertain_detail: classified.uncertain_detail,
+      };
+    }
+
+    return {
+      eligible: false,
+      reason: "rejected_uncertain_without_add_apply_intent_match",
       classification: classified.classification,
       uncertain_detail: classified.uncertain_detail,
     };
@@ -1830,6 +1999,9 @@ export function parsePhase2jTestQuantity(raw) {
 }
 
 export const PHASE_2L_COMBINED_POLICY_VERSION = "lk-rpa-2l-1";
+
+/** Phase 2n: one bounded add/apply-line click; aligns with mlcc-phase-2m-policy.js gate manifest. */
+export const PHASE_2N_ADD_APPLY_POLICY_VERSION = "lk-rpa-2n-1";
 
 /**
  * Tenant-documented fill order for Phase 2l (code first vs quantity first).
@@ -3606,6 +3778,379 @@ export async function runAddByCodePhase2lCombinedCodeQuantityTypingRehearsal({
     mutation_risk_code_after_first_fill: mutation_risk_code,
     mutation_risk_qty_after_first_fill: mutation_risk_qty,
     blur_used: allowBlur,
+  };
+}
+
+/**
+ * Phase 2n: at most one bounded click on a tenant-listed add/apply-line candidate that passes Layer 2/3 and
+ * Phase 2m-aligned eligibility. Requires a successful non-mutating Phase 2l result in the same run.
+ * Does not validate, checkout, submit, or click any second control.
+ */
+export async function runAddByCodePhase2nAddApplyLineSingleClick({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  buildStepEvidence,
+  phase2lResult,
+}) {
+  const gateManifest = buildPhase2mAddApplyLineFutureGateManifest();
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2n_add_apply_start",
+    progressMessage:
+      "Phase 2n: tightly gated single add/apply-line click (no validate/checkout/submit)",
+  });
+
+  const mutation_risk_checks_used = [
+    `phase_2m_policy_version_${PHASE_2M_POLICY_VERSION}`,
+    `phase_2n_policy_version_${PHASE_2N_ADD_APPLY_POLICY_VERSION}`,
+    "phase_2m_add_apply_line_future_gate_manifest_echoed_in_evidence",
+    "prerequisite_phase_2l_combined_rehearsal_succeeded_same_run",
+    "prerequisite_phase_2l_run_remained_fully_non_mutating_layer2_delta_checks_on_2l",
+    "tenant_selector_list_only_no_heuristic_guess_click_path",
+    "layer_2_network_abort_counter_guardStats_blockedRequestCount_delta_zero_required_after_click",
+    "layer_3_isProbeUiTextUnsafe_plus_evaluatePhase2nAddApplyCandidateEligibility",
+    "at_most_one_playwright_click_in_this_phase",
+    "no_validate_checkout_submit_or_second_apply_in_this_phase",
+  ];
+
+  if (
+    !phase2lResult ||
+    phase2lResult.combined_rehearsal_performed !== true ||
+    phase2lResult.run_remained_fully_non_mutating !== true
+  ) {
+    const err =
+      "Phase 2n requires a successful Phase 2l combined rehearsal in the same run with run_remained_fully_non_mutating=true (see Phase 2m prerequisites)";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2n_add_apply_blocked",
+        message: err,
+        attributes: {
+          phase_2n_policy_version: PHASE_2N_ADD_APPLY_POLICY_VERSION,
+          phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+          phase_2m_add_apply_gate_manifest: gateManifest,
+          add_apply_click_performed: false,
+          block_reason: "phase_2l_prerequisite_not_satisfied",
+          phase_2l_snapshot_for_gate: phase2lResult
+            ? {
+                combined_rehearsal_performed:
+                  phase2lResult.combined_rehearsal_performed ?? null,
+                run_remained_fully_non_mutating:
+                  phase2lResult.run_remained_fully_non_mutating ?? null,
+              }
+            : null,
+          mutation_risk_checks_used,
+          mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const candidates = config.addByCodePhase2nAddApplyCandidateSelectors ?? [];
+  const allowSubs = config.addByCodePhase2nTextAllowSubstrings ?? [];
+
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    const err =
+      "Phase 2n requires MLCC_ADD_BY_CODE_PHASE_2N_ADD_APPLY_SELECTORS (non-empty tenant selector list)";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2n_add_apply_blocked",
+        message: err,
+        attributes: {
+          phase_2n_policy_version: PHASE_2N_ADD_APPLY_POLICY_VERSION,
+          phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+          phase_2m_add_apply_gate_manifest: gateManifest,
+          add_apply_click_performed: false,
+          block_reason: "missing_or_empty_tenant_add_apply_selectors",
+          mutation_risk_checks_used,
+          mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const blocked_before_phase =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2n_pre_click_snapshot",
+        message:
+          "Phase 2n checkpoint before single add/apply-line click (policy + selector scan)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2n_pre_click_evidence",
+      message:
+        "Phase 2n pre-click: Phase 2m gate manifest; candidate evaluation only until one eligible control",
+      attributes: {
+        phase_2n_policy_version: PHASE_2N_ADD_APPLY_POLICY_VERSION,
+        phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+        phase_2m_add_apply_gate_manifest: gateManifest,
+        dry_run_safe_mode_expected: true,
+        candidate_selectors_configured: candidates,
+        text_allow_substrings_configured: allowSubs,
+        network_guard_blocked_request_count_before:
+          blocked_before_phase,
+        mutation_risk_checks_used,
+        mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        truthfulness_note:
+          "this_phase_does_not_claim_server_cart_mutation_or_validate_readiness",
+      },
+    }),
+  );
+
+  const evaluations = [];
+
+  for (const sel of candidates) {
+    const loc = page.locator(sel).first();
+    const n = await loc.count().catch(() => 0);
+
+    if (n === 0) {
+      evaluations.push({
+        selector: sel,
+        eligible: false,
+        reason: "rejected_selector_no_match",
+      });
+      continue;
+    }
+
+    const vis = await loc.isVisible().catch(() => false);
+
+    if (!vis) {
+      evaluations.push({
+        selector: sel,
+        eligible: false,
+        reason: "rejected_not_visible",
+      });
+      continue;
+    }
+
+    const disabled = await loc.isDisabled().catch(() => false);
+
+    if (disabled) {
+      evaluations.push({
+        selector: sel,
+        eligible: false,
+        reason: "rejected_disabled_control",
+      });
+      continue;
+    }
+
+    const row = await extractMutationBoundaryRowFromLocator(loc);
+    const elig = evaluatePhase2nAddApplyCandidateEligibility(row, allowSubs);
+
+    evaluations.push({
+      selector: sel,
+      visible: true,
+      disabled: false,
+      tag: row.tag,
+      text_sample: (row.text ?? "").slice(0, 200),
+      href_sample: String(row.href ?? "").slice(0, 200),
+      ...elig,
+    });
+  }
+
+  const firstEligible = evaluations.find((e) => e.eligible === true);
+
+  if (!firstEligible) {
+    const err =
+      "Phase 2n: no eligible add/apply-line candidate (Layer 2/3 + mutation-boundary policy rejected all tenant selectors)";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2n_add_apply_blocked",
+        message: err,
+        attributes: {
+          phase_2n_policy_version: PHASE_2N_ADD_APPLY_POLICY_VERSION,
+          phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+          phase_2m_add_apply_gate_manifest: gateManifest,
+          candidate_evaluations: evaluations,
+          add_apply_click_performed: false,
+          block_reason: "no_eligible_candidate",
+          mutation_risk_checks_used,
+          mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const blocked_immediately_before_click =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const clickLoc = page.locator(firstEligible.selector).first();
+
+  try {
+    await clickLoc.click({ timeout: 12_000 });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2n_add_apply_blocked",
+        message: `Phase 2n: click failed: ${m}`,
+        attributes: {
+          phase_2n_policy_version: PHASE_2N_ADD_APPLY_POLICY_VERSION,
+          phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+          phase_2m_add_apply_gate_manifest: gateManifest,
+          candidate_evaluations: evaluations,
+          selector_attempted: firstEligible.selector,
+          add_apply_click_performed: false,
+          block_reason: `click_error:${m}`,
+          mutation_risk_checks_used,
+          mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        },
+      }),
+    );
+
+    throw new Error(`Phase 2n add/apply-line click failed: ${m}`);
+  }
+
+  await page
+    .waitForLoadState("domcontentloaded", { timeout: 45_000 })
+    .catch(() => {});
+  await new Promise((r) => setTimeout(r, 600));
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2n_after_single_add_apply_click",
+        message:
+          "Phase 2n checkpoint after exactly one add/apply-line click (no further UI actions)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  const blocked_after_click =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_during_click =
+    blocked_immediately_before_click != null && blocked_after_click != null
+      ? blocked_after_click - blocked_immediately_before_click
+      : null;
+
+  const no_new_blocked_downstream_requests =
+    network_guard_delta_during_click === null ||
+    network_guard_delta_during_click === 0;
+
+  if (!no_new_blocked_downstream_requests) {
+    const err = `Phase 2n: Layer 2 blocked request counter increased during click window (delta=${network_guard_delta_during_click}); hard-stop per Phase 2m`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2n_add_apply_blocked",
+        message: err,
+        attributes: {
+          phase_2n_policy_version: PHASE_2N_ADD_APPLY_POLICY_VERSION,
+          phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+          phase_2m_add_apply_gate_manifest: gateManifest,
+          candidate_evaluations: evaluations,
+          selector_clicked: firstEligible.selector,
+          add_apply_click_performed: true,
+          network_guard_blocked_before_click: blocked_immediately_before_click,
+          network_guard_blocked_after_click: blocked_after_click,
+          network_guard_delta_during_click,
+          block_reason: "positive_layer2_abort_delta_during_click",
+          mutation_risk_checks_used,
+          mandatory_disclaimers: gateManifest.mandatory_disclaimers,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2n_add_apply_findings",
+      message:
+        "Phase 2n: single add/apply-line click completed; no validate/checkout/submit in this phase",
+      attributes: {
+        phase_2n_policy_version: PHASE_2N_ADD_APPLY_POLICY_VERSION,
+        phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+        phase_2m_add_apply_gate_manifest: gateManifest,
+        candidate_evaluations: evaluations,
+        add_apply_click_performed: true,
+        click_count_this_phase: 1,
+        selector_clicked: firstEligible.selector,
+        network_guard_blocked_before_phase: blocked_before_phase,
+        network_guard_blocked_immediately_before_click:
+          blocked_immediately_before_click,
+        network_guard_blocked_after_click: blocked_after_click,
+        network_guard_delta_during_click,
+        no_new_blocked_downstream_requests_observed:
+          network_guard_delta_during_click === null
+            ? null
+            : network_guard_delta_during_click === 0,
+        run_remained_within_safe_mode_no_validate_checkout_submit_phase:
+          true,
+        disclaimer_layer2_abort_observation:
+          "zero_delta_on_client_blocked_request_counter_for_configured_patterns_does_not_prove_no_server_side_cart_or_line_change",
+        disclaimer_browser_not_server_cart_truth:
+          "browser_evidence_is_not_server_cart_truth",
+        disclaimer_no_general_add_apply_safety_claim:
+          "single_tenant_single_run_does_not_establish_general_add_apply_line_safety",
+        disclaimer_no_validate_readiness:
+          "this_phase_does_not_assess_readiness_for_validate_checkout_or_submit",
+        typing_policy_phase_2n: "no_validate_no_checkout_no_submit_no_second_apply",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2n_add_apply_complete",
+    progressMessage:
+      "Phase 2n complete (one add/apply click only; downstream order steps out of scope)",
+  });
+
+  return {
+    phase_2n_policy_version: PHASE_2N_ADD_APPLY_POLICY_VERSION,
+    phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+    add_apply_click_performed: true,
+    selector_clicked: firstEligible.selector,
+    candidate_evaluations: evaluations,
+    network_guard_delta_during_click,
+    no_new_blocked_downstream_requests_observed:
+      network_guard_delta_during_click === null
+        ? null
+        : network_guard_delta_during_click === 0,
+    phase_2m_gate_manifest_version: gateManifest.version,
   };
 }
 

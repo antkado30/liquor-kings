@@ -1,24 +1,24 @@
 /**
- * Phase 2m — planning-only repo truth for future add-line / apply-line (pre-cart commit) interaction.
- * Not imported by mlcc-browser-worker or mlcc-browser-add-by-code-probe until a separately approved execution phase.
- * Aligns with Phase 2k ladder step `add_or_apply_line`; this file specializes approval criteria for that step.
+ * Phase 2m — canonical add-line / apply-line (pre-cart commit) approval model and post-add/apply ladder.
+ * Imported by mlcc-browser-add-by-code-probe.js only (Phase 2n echoes this manifest in evidence).
+ * mlcc-browser-worker.js must not import this module (verify:lk:rpa-safety).
  * Bump version when add/apply-line criteria or ladder semantics change.
  */
 
-export const PHASE_2M_POLICY_VERSION = "lk-rpa-2m-1";
+export const PHASE_2M_POLICY_VERSION = "lk-rpa-2m-2";
 
 /**
- * Approval model for a future runtime phase that performs **one** bounded add-line / apply / equivalent control click.
- * Does **not** authorize validate, checkout, submit, second apply clicks, or cart mutation beyond what that control implies.
+ * Approval model for Phase 2n: **one** bounded add-line / apply / equivalent control click when env-gated.
+ * Does **not** authorize validate, checkout, submit, second apply clicks, or any claim of server cart truth.
  */
 export function buildPhase2mAddApplyLineFutureGateManifest() {
   return {
     version: PHASE_2M_POLICY_VERSION,
     phase_intent:
-      "planning_only_no_add_apply_line_runtime_in_worker_or_probe_until_separate_execution_phase",
+      "canonical_gate_manifest_for_add_apply_line_phase_2n_runtime_imports_probe_only_no_worker_import",
     relationship_to_prior_phases: [
       "phase_2l_established_combined_code_quantity_fill_clear_rehearsal_evidence_patterns",
-      "phase_2k_post_combined_ladder_lists_add_or_apply_line_as_next_logical_step_still_out_of_scope",
+      "phase_2k_post_combined_ladder_lists_add_or_apply_line_next_phase_2n_implements_single_click_when_gated",
       "add_apply_safety_is_unknown_do_not_infer_from_field_only_rehearsals_or_single_tenant_dom",
     ],
     evidence_prerequisites_before_add_apply_considered: [
@@ -63,7 +63,7 @@ export function buildPhase2mAddApplyLineFutureGateManifest() {
 }
 
 /**
- * Ordered ladder from add/apply-line onward; each step stays out of scope until repo + verify + operator approval.
+ * Ordered ladder from add/apply-line onward; each step after 2n stays out of scope until repo + verify + operator approval.
  */
 export function buildPhase2mPostAddApplyLadder() {
   return {
@@ -75,7 +75,9 @@ export function buildPhase2mPostAddApplyLadder() {
         id: "add_apply_line_rehearsal",
         label:
           "Gated single add-line / apply / equivalent pre-cart commit control click (no validate/checkout/submit)",
-        status: "out_of_scope_until_separate_approval",
+        status: "implemented_as_phase_2n_when_env_gated",
+        implementation_note:
+          "runtime_mlcc_browser_add_by_code_probe_runAddByCodePhase2nAddApplyLineSingleClick",
         forbids_until_approved: [
           "second_add_or_apply_click",
           "validate",

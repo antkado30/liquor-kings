@@ -29,9 +29,15 @@ const phase2kPolicy = read(phase2kPolicyPath);
 const phase2mPolicy = read(phase2mPolicyPath);
 const phasesDoc = read(phasesDocPath);
 
-if (worker.includes("mlcc-phase-2m-policy") || probe.includes("mlcc-phase-2m-policy")) {
+if (worker.includes("mlcc-phase-2m-policy")) {
   checks.push(
-    "Phase 2m policy must not be imported by mlcc-browser-worker.js or mlcc-browser-add-by-code-probe.js until a future execution phase implements add/apply-line interaction",
+    "mlcc-browser-worker.js must not import mlcc-phase-2m-policy.js (Phase 2m manifest is echoed from the probe for Phase 2n only)",
+  );
+}
+
+if (!probe.includes("mlcc-phase-2m-policy")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must import mlcc-phase-2m-policy.js for Phase 2n add/apply-line gate manifest echo",
   );
 }
 
@@ -169,6 +175,46 @@ if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2L_APPROVED")) {
   checks.push(
     "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2L_APPROVED (Phase 2l)",
   );
+}
+
+if (!probe.includes("export function evaluatePhase2nAddApplyCandidateEligibility")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export evaluatePhase2nAddApplyCandidateEligibility (Phase 2n)",
+  );
+}
+
+if (!probe.includes("export async function runAddByCodePhase2nAddApplyLineSingleClick")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export runAddByCodePhase2nAddApplyLineSingleClick (Phase 2n)",
+  );
+}
+
+if (!probe.includes("export const PHASE_2N_ADD_APPLY_POLICY_VERSION")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export PHASE_2N_ADD_APPLY_POLICY_VERSION (Phase 2n)",
+  );
+}
+
+if (!probe.includes("export function parsePhase2nAddApplyCandidateSelectors")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export parsePhase2nAddApplyCandidateSelectors (Phase 2n)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2N_APPROVED")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2N_APPROVED (Phase 2n)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2N_ADD_APPLY_SELECTORS")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2N_ADD_APPLY_SELECTORS (Phase 2n)",
+  );
+}
+
+if (!phasesDoc.includes("Phase 2n")) {
+  checks.push("rpa-rebuild-phases.md must document Phase 2n");
 }
 
 if (!probe.includes("mlcc-phase-2k-policy")) {

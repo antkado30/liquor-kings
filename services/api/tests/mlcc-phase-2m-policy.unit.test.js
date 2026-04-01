@@ -15,7 +15,7 @@ describe("mlcc-phase-2m-policy", () => {
     const m = buildPhase2mAddApplyLineFutureGateManifest();
 
     expect(m.version).toBe(PHASE_2M_POLICY_VERSION);
-    expect(m.phase_intent).toMatch(/planning_only/i);
+    expect(m.phase_intent).toMatch(/phase_2n|canonical_gate_manifest/i);
     expect(Array.isArray(m.relationship_to_prior_phases)).toBe(true);
     expect(
       Array.isArray(m.evidence_prerequisites_before_add_apply_considered),
@@ -34,7 +34,7 @@ describe("mlcc-phase-2m-policy", () => {
     expect(Array.isArray(m.mandatory_disclaimers)).toBe(true);
   });
 
-  it("post-add/apply ladder marks all steps out of scope until separate approval", () => {
+  it("post-add/apply ladder: 2n implements first step; later steps stay out of scope", () => {
     const ladder = buildPhase2mPostAddApplyLadder();
 
     expect(ladder.version).toBe(PHASE_2M_POLICY_VERSION);
@@ -49,8 +49,16 @@ describe("mlcc-phase-2m-policy", () => {
     expect(ids).toContain("checkout_submit");
 
     for (const step of ladder.steps) {
-      expect(step.status).toBe("out_of_scope_until_separate_approval");
       expect(Array.isArray(step.forbids_until_approved)).toBe(true);
+      if (step.id === "add_apply_line_rehearsal") {
+        expect(step.status).toBe("implemented_as_phase_2n_when_env_gated");
+      } else {
+        expect(step.status).toBe("out_of_scope_until_separate_approval");
+      }
     }
+
+    expect(ladder.steps.some((s) => /out_of_scope/.test(String(s.status)))).toBe(
+      true,
+    );
   });
 });

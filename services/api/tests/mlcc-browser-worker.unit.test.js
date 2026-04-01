@@ -72,6 +72,10 @@ describe("buildMlccBrowserConfig", () => {
       addByCodePhase2lTestQuantity: null,
       addByCodePhase2lFieldOrder: null,
       addByCodePhase2lAllowBlur: false,
+      addByCodePhase2n: false,
+      addByCodePhase2nApproved: false,
+      addByCodePhase2nAddApplyCandidateSelectors: [],
+      addByCodePhase2nTextAllowSubstrings: [],
     });
   });
 
