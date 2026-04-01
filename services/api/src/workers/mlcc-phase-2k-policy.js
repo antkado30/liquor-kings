@@ -1,12 +1,13 @@
 /**
- * Phase 2k — planning-only repo truth for future combined code+quantity interaction and later ladder.
- * Not imported by mlcc-browser-worker or mlcc-browser-add-by-code-probe until a separately approved execution phase.
+ * Phase 2k — repo truth for combined code+quantity interaction and later ladder.
+ * Imported by mlcc-browser-add-by-code-probe for Phase 2l evidence echo only (not executed here).
+ * mlcc-browser-worker does not import this module.
  * Bump version when combined-interaction criteria or ladder semantics change.
  *
  * Complements Phase 2i (quantity-only gates + broader ladder) and Phase 2j (runtime qty-only rehearsal).
  */
 
-export const PHASE_2K_POLICY_VERSION = "lk-rpa-2k-1";
+export const PHASE_2K_POLICY_VERSION = "lk-rpa-2k-2";
 
 /**
  * Approval model for a future runtime phase that fills **both** code and quantity in one session.
@@ -16,7 +17,7 @@ export function buildPhase2kCombinedInteractionFutureGateManifest() {
   return {
     version: PHASE_2K_POLICY_VERSION,
     phase_intent:
-      "planning_only_no_combined_code_quantity_runtime_in_worker_until_separate_execution_phase",
+      "planning_repo_truth_phase_2l_combined_rehearsal_runtime_env_gated_in_probe_not_in_worker",
     relationship_to_prior_phases: [
       "phase_2h_established_tenant_code_field_only_rehearsal_evidence_patterns",
       "phase_2j_established_tenant_quantity_field_only_rehearsal_evidence_patterns",
@@ -50,7 +51,7 @@ export function buildPhase2kCombinedInteractionFutureGateManifest() {
     network_and_ui_guard_signals_required_zero_for_non_mutating_claim: [
       "layer_2_guardstats_blockedrequestcount_delta_zero_during_each_fill_step_and_any_documented_blur",
       "layer_2_delta_zero_during_clear_or_revert_steps_if_clear_allowed_same_family_as_2h_2j",
-      "layer_3_no_clicks_on_add_to_cart_validate_checkout_submit_or_final_confirmation_in_combined_rehearsal_phase",
+      "layer_3_no_clicks_on_add_line_apply_add_to_cart_validate_checkout_submit_or_final_confirmation_in_combined_rehearsal_phase",
     ],
     hard_fail_stop_conditions: [
       "any_positive_network_guard_delta_during_any_fill_immediate_stop_clear_policy_same_family_as_phase_2h_2j",
@@ -58,6 +59,7 @@ export function buildPhase2kCombinedInteractionFutureGateManifest() {
       "either_field_not_visible_disabled_or_readonly_at_step_boundary",
       "unexpected_navigation_or_url_change_during_rehearsal_without_prior_approval",
       "attempt_to_skip_documented_field_order_or_touch_unrelated_controls",
+      "any_add_line_apply_or_cart_mutation_control_click_in_phase_2l",
     ],
     observable_non_mutating_combined_proof_criteria: [
       "per_step_layer_2_abort_deltas_zero_on_that_run_only_for_declared_steps",
@@ -82,7 +84,11 @@ export function buildPhase2kPostCombinedInteractionLadder() {
         label:
           "Gated combined code+quantity field rehearsal (fill sequence per tenant order doc; no add/validate/checkout)",
         status: "out_of_scope_until_separate_approval",
+        implementation_note:
+          "bounded_subset_implemented_as_runAddByCodePhase2lCombinedCodeQuantityTypingRehearsal_when_MLCC_ADD_BY_CODE_PHASE_2L_and_2L_APPROVED",
         forbids_until_approved: [
+          "add_line",
+          "apply_line",
           "add_to_cart",
           "validate",
           "checkout",

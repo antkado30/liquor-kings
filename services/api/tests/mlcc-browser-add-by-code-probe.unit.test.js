@@ -13,9 +13,11 @@ import {
   parsePhase2gSentinelValue,
   parsePhase2hTestCode,
   parsePhase2jTestQuantity,
+  parsePhase2lFieldOrder,
   parseSafeOpenCandidateSelectors,
   PHASE_2G_TYPING_POLICY_VERSION,
   PHASE_2J_QUANTITY_POLICY_VERSION,
+  PHASE_2L_COMBINED_POLICY_VERSION,
   shouldBlockHttpRequest,
 } from "../src/workers/mlcc-browser-add-by-code-probe.js";
 
@@ -23,6 +25,14 @@ describe("shouldBlockHttpRequest", () => {
   it("blocks mutation methods to cart/order-like URLs", () => {
     const b = shouldBlockHttpRequest(
       "https://vendor.example/api/cart/add",
+      "POST",
+    );
+    expect(b.block).toBe(true);
+  });
+
+  it("blocks POST to apply-line style paths", () => {
+    const b = shouldBlockHttpRequest(
+      "https://vendor.example/order/apply-line",
       "POST",
     );
     expect(b.block).toBe(true);
@@ -101,6 +111,24 @@ describe("parsePhase2hTestCode", () => {
     expect(parsePhase2hTestCode("").ok).toBe(false);
     expect(parsePhase2hTestCode("a".repeat(65)).ok).toBe(false);
     expect(parsePhase2hTestCode("a\nb").ok).toBe(false);
+  });
+});
+
+describe("parsePhase2lFieldOrder", () => {
+  it("accepts code_first and quantity_first with optional hyphen", () => {
+    expect(parsePhase2lFieldOrder("CODE_FIRST").value).toBe("code_first");
+    expect(parsePhase2lFieldOrder("quantity-first").value).toBe("quantity_first");
+  });
+
+  it("rejects invalid order", () => {
+    expect(parsePhase2lFieldOrder("").ok).toBe(false);
+    expect(parsePhase2lFieldOrder("both_at_once").ok).toBe(false);
+  });
+});
+
+describe("PHASE_2L_COMBINED_POLICY_VERSION", () => {
+  it("exports a stable policy version string", () => {
+    expect(PHASE_2L_COMBINED_POLICY_VERSION).toMatch(/^lk-rpa-2l-/);
   });
 });
 

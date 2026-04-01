@@ -1,7 +1,7 @@
 /**
  * Phase 2i — planning repo truth for quantity gates and post-quantity ladder.
  * Imported by mlcc-browser-add-by-code-probe for Phase 2j evidence echo only (not executed here).
- * Combined code+quantity planning lives in mlcc-phase-2k-policy.js (Phase 2k; not imported here).
+ * Combined code+quantity planning lives in mlcc-phase-2k-policy.js (Phase 2k; imported by probe for Phase 2l echo only).
  * Bump version when criteria or ladder semantics change.
  */
 

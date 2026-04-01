@@ -27,9 +27,9 @@ const phase2iPolicy = read(phase2iPolicyPath);
 const phase2kPolicy = read(phase2kPolicyPath);
 const phasesDoc = read(phasesDocPath);
 
-if (worker.includes("mlcc-phase-2k-policy") || probe.includes("mlcc-phase-2k-policy")) {
+if (worker.includes("mlcc-phase-2k-policy")) {
   checks.push(
-    "Phase 2k policy must not be imported by mlcc-browser-worker.js or mlcc-browser-add-by-code-probe.js until a future execution phase implements combined code+quantity interaction",
+    "mlcc-browser-worker.js must not import mlcc-phase-2k-policy.js (Phase 2k manifest is echoed from the probe for Phase 2l only)",
   );
 }
 
@@ -145,6 +145,30 @@ if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2J_APPROVED")) {
   );
 }
 
+if (!probe.includes("runAddByCodePhase2lCombinedCodeQuantityTypingRehearsal")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must define runAddByCodePhase2lCombinedCodeQuantityTypingRehearsal (Phase 2l)",
+  );
+}
+
+if (!probe.includes("export const PHASE_2L_COMBINED_POLICY_VERSION")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export PHASE_2L_COMBINED_POLICY_VERSION (Phase 2l)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2L_APPROVED")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2L_APPROVED (Phase 2l)",
+  );
+}
+
+if (!probe.includes("mlcc-phase-2k-policy")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must import mlcc-phase-2k-policy.js for Phase 2l evidence (Phase 2k manifest echo)",
+  );
+}
+
 if (!phase2iPolicy.includes("export const PHASE_2I_POLICY_VERSION")) {
   checks.push("mlcc-phase-2i-policy.js must export PHASE_2I_POLICY_VERSION (Phase 2i)");
 }
@@ -215,11 +239,15 @@ if (!phasesDoc.includes("Phase 2k")) {
   checks.push("rpa-rebuild-phases.md must document Phase 2k");
 }
 
+if (!phasesDoc.includes("Phase 2l")) {
+  checks.push("rpa-rebuild-phases.md must document Phase 2l");
+}
+
 if (!phasesDoc.includes("mlcc-phase-2k-policy.js")) {
   checks.push("rpa-rebuild-phases.md must reference mlcc-phase-2k-policy.js");
 }
 
-// Phase 2b/2c: no product .fill in probe; Phase 2g sentinel; Phase 2h gated real code + clear; Phase 2j qty + clear.
+// Phase 2b/2c: no product .fill in probe; Phase 2g sentinel; Phase 2h/2j single-field; Phase 2l combined two-field + reverse clear.
 if (/\b\.fill\s*\(/u.test(probe)) {
   const onlyPhase2gSentinel =
     probe.includes("runAddByCodePhase2gTypingPolicyAndRehearsal") &&
@@ -233,9 +261,19 @@ if (/\b\.fill\s*\(/u.test(probe)) {
     probe.includes("runAddByCodePhase2jQuantityTypingRehearsal") &&
     probe.includes("fill(testQuantity") &&
     probe.includes('fill("",');
-  if (!onlyPhase2gSentinel && !phase2hRealCode && !phase2jQuantity) {
+  const phase2lCombined =
+    probe.includes("runAddByCodePhase2lCombinedCodeQuantityTypingRehearsal") &&
+    probe.includes("fill(testCode") &&
+    probe.includes("fill(testQuantity") &&
+    probe.includes('fill("",');
+  if (
+    !onlyPhase2gSentinel &&
+    !phase2hRealCode &&
+    !phase2jQuantity &&
+    !phase2lCombined
+  ) {
     checks.push(
-      "mlcc-browser-add-by-code-probe.js: .fill( allowed only for Phase 2g sentinel, Phase 2h gated real code + clear, or Phase 2j quantity + clear",
+      "mlcc-browser-add-by-code-probe.js: .fill( allowed only for Phase 2g sentinel, Phase 2h, Phase 2j, or Phase 2l gated fill/clear paths",
     );
   }
 }

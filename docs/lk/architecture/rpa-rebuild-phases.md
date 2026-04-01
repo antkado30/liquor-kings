@@ -5,7 +5,7 @@
 **Dry-run plan:** `services/api/src/workers/mlcc-dry-run.js`  
 **Entry script:** `npm run worker:mlcc-browser-dry-run` in `services/api/package.json`
 
-## Runtime through Phase 2j; planning through Phase 2k (as documented)
+## Runtime through Phase 2l (as implemented); Phase 2k checklist echoed for combined rehearsal
 
 | Phase | Summary | Allowed | Forbidden |
 |-------|---------|---------|-----------|
@@ -19,13 +19,14 @@
 | **2h** | **Gated real code-field rehearsal** (tenant `MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR` only): `Playwright` **fill** of env test code, **no Enter**, **no quantity** interaction, **no blur**; same **extended mutation-risk** as 2g must pass first; **Layer 2** abort counter must not increase during type — otherwise **hard-fail** and **field not cleared**; if type is clean, **clear** via `fill("")` and re-check aborts | `MLCC_ADD_BY_CODE_PHASE_2H=true` + `MLCC_ADD_BY_CODE_PHASE_2H_APPROVED=true` + `MLCC_ADD_BY_CODE_PHASE_2H_TEST_CODE` (non-empty, ≤64 chars, no newlines) + tenant code selector | Quantity typing, Enter/submit, add-to-cart/validate/checkout, `type=number` target, heuristic-only code field |
 | **2i** | **Planning repo truth** for quantity gates and post-quantity ladder (machine-readable checklist). **Not a standalone browser phase** — criteria are echoed and enforced when **2j** runs | Read [`mlcc-phase-2i-policy.js`](../../../services/api/src/workers/mlcc-phase-2i-policy.js); run `verify:lk:rpa-safety` | Claiming quantity or cart safety beyond evidence; skipping doc/verify when changing 2i/2j semantics |
 | **2j** | **Gated quantity-field-only rehearsal** (tenant `MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR` only): `Playwright` **fill** of env test quantity, **no code field** interaction, **no Enter**, **no** add/validate/checkout/submit clicks; same **extended mutation-risk** as 2g must pass; **Layer 2** abort counter must not increase during type — otherwise **hard-fail** and **field not cleared**; if type is clean, **clear** via `fill("")` and re-check aborts. Optional **blur** only when `MLCC_ADD_BY_CODE_PHASE_2J_ALLOW_BLUR=true` | `MLCC_ADD_BY_CODE_PHASE_2J=true` + `MLCC_ADD_BY_CODE_PHASE_2J_APPROVED=true` + `MLCC_ADD_BY_CODE_PHASE_2J_TEST_QUANTITY` (strict positive integer string) + tenant **quantity** selector | Code field typing, code+quantity **combined** interaction in this phase, Enter/submit, add-to-cart/validate/checkout, `select` quantity control, heuristic-only qty field |
-| **2k** | **Planning-only** — no browser execution, **no** worker/probe imports, **no** env flags. Codifies **future combined code+quantity** approval criteria and a **post-combined** interaction ladder (combined rehearsal → combined clear → add/apply → validate → checkout/submit) as repo truth | Read [`mlcc-phase-2k-policy.js`](../../../services/api/src/workers/mlcc-phase-2k-policy.js); run `verify:lk:rpa-safety` | Implementing combined fill in worker/probe without a new execution phase; add-to-cart, validate, checkout, submit; importing `mlcc-phase-2k-policy.js` into worker/probe before **2l** (or successor) is documented |
+| **2k** | **Planning repo truth** for combined code+quantity gates and **post-combined** ladder. **No** `PHASE_2K` env flag; **no** worker import of the policy file — the **probe** imports it to echo the manifest during **2l** | Read [`mlcc-phase-2k-policy.js`](../../../services/api/src/workers/mlcc-phase-2k-policy.js); run `verify:lk:rpa-safety` | Worker importing `mlcc-phase-2k-policy.js`; claiming combined or cart safety beyond evidence |
+| **2l** | **Gated combined code+quantity rehearsal** in **one** tenant-documented order (`MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER` = `code_first` \| `quantity_first`): two `fill` steps (**no Enter**), extended mutation-risk on **both** fields before sequence and **re-check after first fill**; **Layer 2** abort delta must stay **zero** per fill step — otherwise **hard-fail** and **fields not cleared**; **reverse-order** `fill("")` clear when fills were clean; optional blur on last filled field only if `MLCC_ADD_BY_CODE_PHASE_2L_ALLOW_BLUR=true` | `MLCC_ADD_BY_CODE_PHASE_2L=true` + `MLCC_ADD_BY_CODE_PHASE_2L_APPROVED=true` + `MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE` + `MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY` + `MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER` + both tenant selectors | Add/apply line, validate, checkout, submit, Enter, heuristic-only selectors, skipping documented field order |
 
 **Pre-browser:** deterministic payload validation (`assertDeterministicExecutionPayload`) before Playwright launch.
 
 ## Environment flags (non-exhaustive)
 
-- `MLCC_ADD_BY_CODE_PROBE`, `MLCC_ADD_BY_CODE_PHASE_2C`, `MLCC_ADD_BY_CODE_PHASE_2D`, `MLCC_ADD_BY_CODE_PHASE_2E` (2D and 2E must not both be true), `MLCC_ADD_BY_CODE_PHASE_2F`, `MLCC_ADD_BY_CODE_PHASE_2G`, `MLCC_ADD_BY_CODE_PHASE_2H`, `MLCC_ADD_BY_CODE_PHASE_2H_APPROVED`, `MLCC_ADD_BY_CODE_PHASE_2H_TEST_CODE`, `MLCC_ADD_BY_CODE_PHASE_2J`, `MLCC_ADD_BY_CODE_PHASE_2J_APPROVED`, `MLCC_ADD_BY_CODE_PHASE_2J_TEST_QUANTITY`, `MLCC_ADD_BY_CODE_PHASE_2J_ALLOW_BLUR` (optional)
+- `MLCC_ADD_BY_CODE_PROBE`, `MLCC_ADD_BY_CODE_PHASE_2C`, `MLCC_ADD_BY_CODE_PHASE_2D`, `MLCC_ADD_BY_CODE_PHASE_2E` (2D and 2E must not both be true), `MLCC_ADD_BY_CODE_PHASE_2F`, `MLCC_ADD_BY_CODE_PHASE_2G`, `MLCC_ADD_BY_CODE_PHASE_2H`, `MLCC_ADD_BY_CODE_PHASE_2H_APPROVED`, `MLCC_ADD_BY_CODE_PHASE_2H_TEST_CODE`, `MLCC_ADD_BY_CODE_PHASE_2J`, `MLCC_ADD_BY_CODE_PHASE_2J_APPROVED`, `MLCC_ADD_BY_CODE_PHASE_2J_TEST_QUANTITY`, `MLCC_ADD_BY_CODE_PHASE_2J_ALLOW_BLUR` (optional), `MLCC_ADD_BY_CODE_PHASE_2L`, `MLCC_ADD_BY_CODE_PHASE_2L_APPROVED`, `MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE`, `MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY`, `MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER`, `MLCC_ADD_BY_CODE_PHASE_2L_ALLOW_BLUR` (optional)
 - `MLCC_ADD_BY_CODE_PHASE_2G_FOCUS_BLUR_REHEARSAL`, `MLCC_ADD_BY_CODE_PHASE_2G_SENTINEL_TYPING`, `MLCC_ADD_BY_CODE_PHASE_2G_SENTINEL_VALUE` (Phase **2g** rehearsal; sentinel pattern enforced)
 - `MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS` — JSON array of CSS selectors (Phase **2f**, required when 2F is on)
 - `MLCC_ADD_BY_CODE_SAFE_OPEN_TEXT_ALLOW_SUBSTRINGS` — optional JSON array for Phase **2f** uncertain open-intent matching
@@ -64,23 +65,20 @@ Stages: `mlcc_phase_2h_pre_type_snapshot`, `mlcc_phase_2h_real_code_findings` (a
 
 Stages: `mlcc_phase_2j_pre_type_snapshot`, `mlcc_phase_2j_pre_type_evidence`, `mlcc_phase_2j_quantity_findings` (and `mlcc_phase_2j_quantity_blocked` / `mlcc_phase_2j_post_clear_snapshot` as applicable). Attributes include `phase_2i_quantity_gate_manifest`, `mutation_risk`, `mutation_risk_checks_used`, Layer 2 deltas for type and clear, `code_field_parity_*` (when tenant code selector is configured and visible), `blur_used`, test quantity **length only** (not the value), and strict disclaimers.
 
-## Phase 2k (planning-only — combined interaction model)
+## Phase 2k (planning checklist — combined interaction; echoed at Phase 2l runtime)
 
-**Phase 2k does not run in the browser** and has **no** `MLCC_ADD_BY_CODE_PHASE_2K` env flag. The worker and probe **must not** import [`mlcc-phase-2k-policy.js`](../../../services/api/src/workers/mlcc-phase-2k-policy.js) until a separately approved **execution** phase (e.g. **2l**) exists in this doc and in verify/tests.
+**Phase 2k has no standalone browser entry point** and **no** `MLCC_ADD_BY_CODE_PHASE_2K` env flag. [`mlcc-phase-2k-policy.js`](../../../services/api/src/workers/mlcc-phase-2k-policy.js) is **imported by the probe only** (for **2l** evidence). **verify:lk:rpa-safety** forbids the **worker** from importing this module.
 
-- **Canonical machine-readable gates:** `buildPhase2kCombinedInteractionFutureGateManifest()` — prerequisites from **2h**/**2j**, required tenant **code** and **quantity** selectors (non-heuristic), **tenant-documented field order** (code→qty, qty→code, or other), extended mutation-risk on **both** locators, Layer 2/3 guard expectations, hard-fail stops, and observable “non-mutating combined rehearsal” proof criteria (without claiming server cart state).
-- **Post-combined ladder:** `buildPhase2kPostCombinedInteractionLadder()` — `combined_code_quantity_rehearsal` → `combined_clear_revert` → `add_or_apply_line` → `validate_order` → `checkout_submit`; each step **`out_of_scope_until_separate_approval`** until explicitly implemented and verified.
-- **Truthfulness:** Successful **2h** and **2j** runs **do not** prove combined interaction is safe; **2k** states that explicitly in repo truth.
+- **Canonical machine-readable gates:** `buildPhase2kCombinedInteractionFutureGateManifest()` — prerequisites from **2h**/**2j**, required tenant selectors, **tenant-documented field order**, extended mutation-risk on **both** locators + re-check after first fill, Layer 2/3 expectations, hard-fail stops, and observable proof criteria (no server cart claims).
+- **Post-combined ladder:** `buildPhase2kPostCombinedInteractionLadder()` — after **2l**, `combined_clear_revert` → `add_or_apply_line` → `validate_order` → `checkout_submit` remain **`out_of_scope_until_separate_approval`** until future phases.
+- **Truthfulness:** Separate **2h** + **2j** success **does not** imply combined safety; **2k** + **2l** disclaimers repeat that for a single combined run only.
 
-## Next execution phase (2l — not implemented)
+## Phase 2l evidence (worker / probe)
 
-The first **runtime** phase that could implement **combined code+quantity** rehearsal (single phase, both fields, still **no** add-to-cart/validate/checkout/submit) **must**:
+Stages: `mlcc_phase_2l_pre_sequence_snapshot`, `mlcc_phase_2l_pre_sequence_evidence`, `mlcc_phase_2l_combined_findings` (and `mlcc_phase_2l_combined_blocked` on failure), optional `mlcc_phase_2l_post_clear_snapshot`. Attributes include `phase_2k_combined_gate_manifest`, `field_order`, per-step `fill_step_deltas` / `clear_step_deltas`, `mutation_risk_code_before_fills`, `mutation_risk_qty_before_fills`, post-first-fill risks, code and quantity **length only** (not values), `blur_used`, `run_remained_fully_non_mutating`, and strict disclaimers (no general combined safety, no add-line readiness, no cart proof).
 
-1. Be documented in this table and in [rpa-safety-rules.md](./rpa-safety-rules.md) with dedicated env gates and operator approval flags.
-2. Import or echo [`mlcc-phase-2k-policy.js`](../../../services/api/src/workers/mlcc-phase-2k-policy.js) only after relaxing the verify rule that currently forbids worker/probe imports of that module.
-3. Extend `verify:lk:rpa-safety` and Vitest so the new path cannot land without repo truth.
-4. Preserve three-layer safety; follow tenant-documented field order from **2k** manifest.
+## Next execution phase (2m — not implemented)
 
-**Phase 2k** remains planning-only until **2l** (or a renamed successor) is implemented.
+The first phase that could implement **add line / apply** (or equivalent pre-cart commit control) **must** be separately documented, env-gated, approved in repo, and covered by `verify:lk:rpa-safety` + tests. **2l** must not be extended into add/apply without that split.
 
 See [rpa-safety-rules.md](./rpa-safety-rules.md) for non-negotiable safety rules.

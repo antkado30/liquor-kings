@@ -8,6 +8,10 @@ import {
   PHASE_2I_POLICY_VERSION,
   buildPhase2iQuantityFutureGateManifest,
 } from "./mlcc-phase-2i-policy.js";
+import {
+  PHASE_2K_POLICY_VERSION,
+  buildPhase2kCombinedInteractionFutureGateManifest,
+} from "./mlcc-phase-2k-policy.js";
 
 /** Clicks matching these labels are never performed during the probe. */
 export const MLCC_PROBE_UNSAFE_UI_TEXT = [
@@ -23,6 +27,8 @@ export const MLCC_PROBE_UNSAFE_UI_TEXT = [
   /complete\s*order/i,
   /confirm\s*order/i,
   /finalize/i,
+  /add\s*line/i,
+  /\bapply\s*line\b/i,
 ];
 
 /**
@@ -48,6 +54,9 @@ export function shouldBlockHttpRequest(url, method) {
       /addtocart/i,
       /add-to-cart/i,
       /\/order\/create/i,
+      /addline/i,
+      /apply-line/i,
+      /\/apply\b/i,
     ];
     for (const re of patterns) {
       if (re.test(u)) {
@@ -1820,6 +1829,58 @@ export function parsePhase2jTestQuantity(raw) {
   return { ok: true, value: v };
 }
 
+export const PHASE_2L_COMBINED_POLICY_VERSION = "lk-rpa-2l-1";
+
+/**
+ * Tenant-documented fill order for Phase 2l (code first vs quantity first).
+ */
+export function parsePhase2lFieldOrder(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return {
+      ok: false,
+      value: null,
+      reason: "empty_or_missing",
+    };
+  }
+
+  const v = String(raw).trim().toLowerCase().replace(/-/g, "_");
+
+  if (v === "code_first") {
+    return { ok: true, value: "code_first" };
+  }
+
+  if (v === "quantity_first") {
+    return { ok: true, value: "quantity_first" };
+  }
+
+  return {
+    ok: false,
+    value: null,
+    reason: "must_be_code_first_or_quantity_first",
+  };
+}
+
+function phase2hCodeFieldDomSnapshotAllowed(snap) {
+  if (!snap || snap.unsupported) {
+    return { ok: false, reason: "unsupported_or_missing_snapshot" };
+  }
+
+  const t = String(snap.type || "").toLowerCase();
+
+  if (t === "select") {
+    return { ok: false, reason: "select_element_not_allowed_code_field" };
+  }
+
+  if (t === "number") {
+    return {
+      ok: false,
+      reason: "input_type_number_rejected_code_field_phase_2l",
+    };
+  }
+
+  return { ok: true };
+}
+
 /**
  * Phase 2h: one tenant code field only; real test value from env; no Enter, no qty, no clicks.
  * Hard-fails if Layer 2 guard count increases during type. Clears field only when type caused no new aborts.
@@ -2886,6 +2947,664 @@ export async function runAddByCodePhase2jQuantityTypingRehearsal({
     network_guard_delta_during_clear,
     mutation_risk_checks_used,
     mutation_risk,
+    blur_used: allowBlur,
+  };
+}
+
+/**
+ * Phase 2l: combined code + quantity fill in one tenant-documented order; no Enter, no add/apply/validate/checkout/submit.
+ * Echoes Phase 2k manifest in evidence. Hard-fails if Layer 2 guard increases during any fill step (no clear).
+ */
+export async function runAddByCodePhase2lCombinedCodeQuantityTypingRehearsal({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  buildStepEvidence,
+}) {
+  const gateManifest = buildPhase2kCombinedInteractionFutureGateManifest();
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2l_combined_start",
+    progressMessage:
+      "Phase 2l: gated combined code+quantity rehearsal (no add line; no submit)",
+  });
+
+  const testCode = config.addByCodePhase2lTestCode;
+  const testQuantity = config.addByCodePhase2lTestQuantity;
+  const fieldOrder = config.addByCodePhase2lFieldOrder;
+  const allowBlur = config.addByCodePhase2lAllowBlur === true;
+  const codeSel = config.addByCodeCodeFieldSelector;
+  const qtySel = config.addByCodeQtyFieldSelector;
+
+  const mutation_risk_checks_used = [
+    "phase_2k_combined_interaction_future_gate_manifest_echoed",
+    `phase_2k_policy_version_${PHASE_2K_POLICY_VERSION}`,
+    "computePhase2gExtendedMutationRisk_code_locator_before_sequence",
+    "computePhase2gExtendedMutationRisk_quantity_locator_before_sequence",
+    "computePhase2gExtendedMutationRisk_both_locators_after_first_fill",
+    "layer_2_guardstats_blockedRequestCount_delta_zero_per_fill_step",
+    "layer_2_delta_zero_per_clear_step_if_tracked",
+    "no_enter_playwright_fill_only",
+    `tenant_field_order_${fieldOrder}`,
+    allowBlur
+      ? "optional_blur_MLCC_ADD_BY_CODE_PHASE_2L_ALLOW_BLUR"
+      : "no_blur_unless_MLCC_ADD_BY_CODE_PHASE_2L_ALLOW_BLUR_true",
+    "code_dom_surface_same_family_as_phase_2h_not_number",
+    "quantity_dom_surface_same_family_as_phase_2j",
+  ];
+
+  const baseBlockedAttrs = (extra = {}) => ({
+    phase_2l_policy_version: PHASE_2L_COMBINED_POLICY_VERSION,
+    phase_2k_policy_version: PHASE_2K_POLICY_VERSION,
+    phase_2k_combined_gate_manifest: gateManifest,
+    field_order: fieldOrder,
+    combined_rehearsal_performed: false,
+    mutation_risk_checks_used,
+    ...extra,
+  });
+
+  if (!codeSel || !qtySel) {
+    const err =
+      "Phase 2l requires MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR and MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2l_combined_blocked",
+        message: err,
+        attributes: baseBlockedAttrs({
+          block_reason: "missing_tenant_code_or_quantity_selector",
+        }),
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const codeLoc = page.locator(codeSel.trim()).first();
+  const qtyLoc = page.locator(qtySel.trim()).first();
+
+  const codeN = await codeLoc.count().catch(() => 0);
+  const qtyN = await qtyLoc.count().catch(() => 0);
+
+  if (codeN === 0 || qtyN === 0) {
+    const err = "Phase 2l: code or quantity selector matched no elements";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2l_combined_blocked",
+        message: err,
+        attributes: baseBlockedAttrs({
+          selector_code: codeSel.trim(),
+          selector_qty: qtySel.trim(),
+          code_match_count: codeN,
+          qty_match_count: qtyN,
+          block_reason: "selector_zero_matches",
+        }),
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const codeVis = await codeLoc.isVisible().catch(() => false);
+  const qtyVis = await qtyLoc.isVisible().catch(() => false);
+
+  if (!codeVis || !qtyVis) {
+    const err = "Phase 2l: code or quantity field not visible";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2l_combined_blocked",
+        message: err,
+        attributes: baseBlockedAttrs({
+          code_visible: codeVis,
+          qty_visible: qtyVis,
+          block_reason: "field_not_visible",
+        }),
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const snapCodeBefore = await readFieldDomSnapshot(codeLoc);
+  const snapQtyBefore = await readFieldDomSnapshot(qtyLoc);
+
+  const codeSurface = phase2hCodeFieldDomSnapshotAllowed(snapCodeBefore);
+  const qtySurface = phase2jQuantityDomSnapshotAllowed(snapQtyBefore);
+
+  if (!codeSurface.ok) {
+    const err = `Phase 2l: code field surface rejected (${codeSurface.reason})`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2l_combined_blocked",
+        message: err,
+        attributes: baseBlockedAttrs({
+          dom_snapshot_code_before: snapCodeBefore,
+          block_reason: codeSurface.reason,
+        }),
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (!qtySurface.ok) {
+    const err = `Phase 2l: quantity field surface rejected (${qtySurface.reason})`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2l_combined_blocked",
+        message: err,
+        attributes: baseBlockedAttrs({
+          dom_snapshot_qty_before: snapQtyBefore,
+          block_reason: qtySurface.reason,
+        }),
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (snapCodeBefore.disabled || snapCodeBefore.readOnly) {
+    const err = "Phase 2l: code field disabled or read-only";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2l_combined_blocked",
+        message: err,
+        attributes: baseBlockedAttrs({
+          dom_snapshot_code_before: snapCodeBefore,
+          block_reason: "code_disabled_or_readonly",
+        }),
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (snapQtyBefore.disabled || snapQtyBefore.readOnly) {
+    const err = "Phase 2l: quantity field disabled or read-only";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2l_combined_blocked",
+        message: err,
+        attributes: baseBlockedAttrs({
+          dom_snapshot_qty_before: snapQtyBefore,
+          block_reason: "qty_disabled_or_readonly",
+        }),
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const rawCode = await collectPhase2gRiskPayloadFromLocator(codeLoc);
+  const rawQty = await collectPhase2gRiskPayloadFromLocator(qtyLoc);
+  let mutation_risk_code = computePhase2gExtendedMutationRisk(rawCode);
+  let mutation_risk_qty = computePhase2gExtendedMutationRisk(rawQty);
+
+  if (mutation_risk_code.rehearsal_blocked || mutation_risk_qty.rehearsal_blocked) {
+    const err = `Phase 2l: extended mutation risk blocked: code=${mutation_risk_code.block_reasons.join("|")} qty=${mutation_risk_qty.block_reasons.join("|")}`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2l_combined_blocked",
+        message: err,
+        attributes: baseBlockedAttrs({
+          dom_snapshot_code_before: snapCodeBefore,
+          dom_snapshot_qty_before: snapQtyBefore,
+          mutation_risk_code,
+          mutation_risk_qty,
+          block_reason: "extended_mutation_risk",
+        }),
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const mutation_risk_code_before_fills = mutation_risk_code;
+  const mutation_risk_qty_before_fills = mutation_risk_qty;
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2l_pre_sequence_snapshot",
+        message:
+          "Phase 2l checkpoint before combined fill sequence (no Enter; tenant field order)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2l_pre_sequence_evidence",
+      message:
+        "Phase 2l pre-interaction evidence (both locators; Phase 2k gates; non-mutating intent)",
+      attributes: {
+        phase_2l_policy_version: PHASE_2L_COMBINED_POLICY_VERSION,
+        phase_2k_policy_version: PHASE_2K_POLICY_VERSION,
+        phase_2k_combined_gate_manifest: gateManifest,
+        field_order: fieldOrder,
+        dom_snapshot_code_before: snapCodeBefore,
+        dom_snapshot_qty_before: snapQtyBefore,
+        mutation_risk_code,
+        mutation_risk_qty,
+        mutation_risk_checks_used,
+        run_non_mutating_intent:
+          "no_add_line_validate_checkout_submit_no_enter_no_apply",
+        test_code_redacted: "[length_only_in_findings]",
+        test_quantity_redacted: "[length_only_in_findings]",
+      },
+    }),
+  );
+
+  const fillSteps =
+    fieldOrder === "quantity_first"
+      ? [
+          {
+            key: "quantity",
+            loc: qtyLoc,
+            value: testQuantity,
+            label: "quantity_first_step",
+          },
+          {
+            key: "code",
+            loc: codeLoc,
+            value: testCode,
+            label: "code_second_step",
+          },
+        ]
+      : [
+          {
+            key: "code",
+            loc: codeLoc,
+            value: testCode,
+            label: "code_first_step",
+          },
+          {
+            key: "quantity",
+            loc: qtyLoc,
+            value: testQuantity,
+            label: "quantity_second_step",
+          },
+        ];
+
+  const blockedBeforeSequence =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const fillStepDeltas = [];
+
+  for (let i = 0; i < fillSteps.length; i++) {
+    const step = fillSteps[i];
+    const blockedBeforeStep =
+      guardStats && typeof guardStats.blockedRequestCount === "number"
+        ? guardStats.blockedRequestCount
+        : null;
+
+    try {
+      await step.loc.fill(step.value, { timeout: 8000 });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+
+      evidenceCollected.push(
+        buildEvidence({
+          kind: "mlcc_add_by_code_probe",
+          stage: "mlcc_phase_2l_combined_blocked",
+          message: `Phase 2l: fill failed (${step.label}): ${m}`,
+          attributes: baseBlockedAttrs({
+            failed_step: step.label,
+            block_reason: `fill_error:${m}`,
+            dom_snapshot_code_before: snapCodeBefore,
+            dom_snapshot_qty_before: snapQtyBefore,
+            mutation_risk_code,
+            mutation_risk_qty,
+          }),
+        }),
+      );
+
+      throw new Error(`Phase 2l combined fill failed: ${m}`);
+    }
+
+    await new Promise((r) => setTimeout(r, 250));
+
+    const blockedAfterStep =
+      guardStats && typeof guardStats.blockedRequestCount === "number"
+        ? guardStats.blockedRequestCount
+        : null;
+
+    const deltaStep =
+      blockedBeforeStep != null && blockedAfterStep != null
+        ? blockedAfterStep - blockedBeforeStep
+        : null;
+
+    fillStepDeltas.push({
+      step: step.label,
+      key: step.key,
+      network_guard_delta: deltaStep,
+    });
+
+    if (deltaStep != null && deltaStep > 0) {
+      evidenceCollected.push(
+        buildEvidence({
+          kind: "mlcc_add_by_code_probe",
+          stage: "mlcc_phase_2l_combined_findings",
+          message:
+            "Phase 2l stopped: network guard saw new blocked requests during a fill step; fields not cleared",
+          attributes: {
+            phase_2l_policy_version: PHASE_2L_COMBINED_POLICY_VERSION,
+            phase_2k_policy_version: PHASE_2K_POLICY_VERSION,
+            phase_2k_combined_gate_manifest: gateManifest,
+            field_order: fieldOrder,
+            failed_step: step.label,
+            fill_step_deltas: fillStepDeltas,
+            test_code_length: testCode.length,
+            test_quantity_length: testQuantity.length,
+            network_guard_blocked_before_sequence: blockedBeforeSequence,
+            network_guard_blocked_after_failed_step: blockedAfterStep,
+            combined_rehearsal_performed: true,
+            fields_cleared_after: false,
+            clear_skipped_reason:
+              "network_abort_during_fill_clearing_would_be_ambiguous_stop_hard_fail",
+            run_remained_fully_non_mutating: false,
+            mutation_risk_checks_used,
+            mutation_risk_code,
+            mutation_risk_qty,
+            disclaimer:
+              "single_run_observation_does_not_prove_combined_interaction_safety_no_cart_state_proof",
+          },
+        }),
+      );
+
+      throw new Error(
+        "Phase 2l combined rehearsal: network guard triggered during fill (cart/order mutation URL pattern aborted)",
+      );
+    }
+
+    if (i === 0) {
+      const rawCodeAfter = await collectPhase2gRiskPayloadFromLocator(codeLoc);
+      const rawQtyAfter = await collectPhase2gRiskPayloadFromLocator(qtyLoc);
+      mutation_risk_code = computePhase2gExtendedMutationRisk(rawCodeAfter);
+      mutation_risk_qty = computePhase2gExtendedMutationRisk(rawQtyAfter);
+
+      if (mutation_risk_code.rehearsal_blocked || mutation_risk_qty.rehearsal_blocked) {
+        const err = `Phase 2l: extended mutation risk blocked after first fill: code=${mutation_risk_code.block_reasons.join("|")} qty=${mutation_risk_qty.block_reasons.join("|")}`;
+
+        evidenceCollected.push(
+          buildEvidence({
+            kind: "mlcc_add_by_code_probe",
+            stage: "mlcc_phase_2l_combined_blocked",
+            message: err,
+            attributes: baseBlockedAttrs({
+              block_reason: "extended_mutation_risk_after_first_fill",
+              mutation_risk_code_after_first_fill: mutation_risk_code,
+              mutation_risk_qty_after_first_fill: mutation_risk_qty,
+              fill_step_deltas: fillStepDeltas,
+            }),
+          }),
+        );
+
+        throw new Error(err);
+      }
+    }
+  }
+
+  const lastFilledLoc = fillSteps[fillSteps.length - 1].loc;
+
+  if (allowBlur) {
+    try {
+      if (typeof lastFilledLoc.blur === "function") {
+        await lastFilledLoc.blur({ timeout: 3000 });
+      } else {
+        await lastFilledLoc.evaluate((el) => {
+          if (el instanceof HTMLElement) {
+            el.blur();
+          }
+        });
+      }
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+
+      evidenceCollected.push(
+        buildEvidence({
+          kind: "mlcc_add_by_code_probe",
+          stage: "mlcc_phase_2l_combined_blocked",
+          message: `Phase 2l: blur failed: ${m}`,
+          attributes: baseBlockedAttrs({
+            block_reason: `blur_error:${m}`,
+            fill_step_deltas: fillStepDeltas,
+          }),
+        }),
+      );
+
+      throw new Error(`Phase 2l blur failed: ${m}`);
+    }
+
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  const blockedAfterFills =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_during_fills =
+    blockedBeforeSequence != null && blockedAfterFills != null
+      ? blockedAfterFills - blockedBeforeSequence
+      : null;
+
+  const snapCodeAfterFills = await readFieldDomSnapshot(codeLoc);
+  const snapQtyAfterFills = await readFieldDomSnapshot(qtyLoc);
+
+  let run_remained_fully_non_mutating = true;
+  let network_guard_delta_during_clear = null;
+  const clearStepDeltas = [];
+
+  if (
+    network_guard_delta_during_fills != null &&
+    network_guard_delta_during_fills > 0
+  ) {
+    run_remained_fully_non_mutating = false;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2l_combined_findings",
+        message:
+          "Phase 2l stopped: cumulative network guard delta positive after fills; fields not cleared",
+        attributes: {
+          phase_2l_policy_version: PHASE_2L_COMBINED_POLICY_VERSION,
+          field_order: fieldOrder,
+          fill_step_deltas: fillStepDeltas,
+          network_guard_delta_during_fills,
+          combined_rehearsal_performed: true,
+          fields_cleared_after: false,
+          run_remained_fully_non_mutating: false,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(
+      "Phase 2l: network guard cumulative delta positive after combined fills",
+    );
+  }
+
+  const clearSteps = [...fillSteps].reverse();
+
+  for (const step of clearSteps) {
+    const blockedBeforeClear =
+      guardStats && typeof guardStats.blockedRequestCount === "number"
+        ? guardStats.blockedRequestCount
+        : null;
+
+    try {
+      await step.loc.fill("", { timeout: 8000 });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+
+      evidenceCollected.push(
+        buildEvidence({
+          kind: "mlcc_add_by_code_probe",
+          stage: "mlcc_phase_2l_combined_findings",
+          message: `Phase 2l: clear fill failed (${step.label}): ${m}`,
+          attributes: {
+            phase_2l_policy_version: PHASE_2L_COMBINED_POLICY_VERSION,
+            field_order: fieldOrder,
+            clear_failed_step: step.label,
+            clear_error: m,
+            combined_rehearsal_performed: true,
+            fields_cleared_after: false,
+            run_remained_fully_non_mutating: false,
+            mutation_risk_checks_used,
+          },
+        }),
+      );
+
+      throw new Error(`Phase 2l clear failed: ${m}`);
+    }
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    const blockedAfterClearStep =
+      guardStats && typeof guardStats.blockedRequestCount === "number"
+        ? guardStats.blockedRequestCount
+        : null;
+
+    const dClear =
+      blockedBeforeClear != null && blockedAfterClearStep != null
+        ? blockedAfterClearStep - blockedBeforeClear
+        : null;
+
+    clearStepDeltas.push({ step: step.label, network_guard_delta: dClear });
+
+    if (dClear != null && dClear > 0) {
+      run_remained_fully_non_mutating = false;
+    }
+  }
+
+  const blockedAfterClear =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  network_guard_delta_during_clear =
+    blockedAfterFills != null && blockedAfterClear != null
+      ? blockedAfterClear - blockedAfterFills
+      : null;
+
+  if (
+    network_guard_delta_during_clear != null &&
+    network_guard_delta_during_clear > 0
+  ) {
+    run_remained_fully_non_mutating = false;
+  }
+
+  const snapCodeAfterClear = await readFieldDomSnapshot(codeLoc);
+  const snapQtyAfterClear = await readFieldDomSnapshot(qtyLoc);
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2l_post_clear_snapshot",
+        message: "Phase 2l checkpoint after reverse-order clear fills",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2l_combined_findings",
+      message:
+        "Phase 2l combined rehearsal complete (truthful; no add line; no cart mutation path)",
+      attributes: {
+        phase_2l_policy_version: PHASE_2L_COMBINED_POLICY_VERSION,
+        phase_2k_policy_version: PHASE_2K_POLICY_VERSION,
+        phase_2k_combined_gate_manifest: gateManifest,
+        field_order: fieldOrder,
+        selector_code: codeSel.trim(),
+        selector_qty: qtySel.trim(),
+        test_code_length: testCode.length,
+        test_quantity_length: testQuantity.length,
+        test_code_redacted: "[length_only_not_value]",
+        test_quantity_redacted: "[length_only_not_value]",
+        dom_snapshot_code_before: snapCodeBefore,
+        dom_snapshot_qty_before: snapQtyBefore,
+        dom_snapshot_code_after_fills: snapCodeAfterFills,
+        dom_snapshot_qty_after_fills: snapQtyAfterFills,
+        dom_snapshot_code_after_clear: snapCodeAfterClear,
+        dom_snapshot_qty_after_clear: snapQtyAfterClear,
+        mutation_risk_code_before_fills,
+        mutation_risk_qty_before_fills,
+        mutation_risk_checks_used,
+        mutation_risk_code_after_first_fill: mutation_risk_code,
+        mutation_risk_qty_after_first_fill: mutation_risk_qty,
+        fill_step_deltas: fillStepDeltas,
+        clear_step_deltas: clearStepDeltas,
+        blur_used: allowBlur,
+        network_guard_blocked_before_sequence: blockedBeforeSequence,
+        network_guard_blocked_after_fills: blockedAfterFills,
+        network_guard_delta_during_fills,
+        network_guard_blocked_after_clear: blockedAfterClear,
+        network_guard_delta_during_clear,
+        combined_rehearsal_performed: true,
+        code_field_touched: true,
+        quantity_field_touched: true,
+        fields_cleared_after: true,
+        run_remained_fully_non_mutating,
+        interaction_method: allowBlur
+          ? "two_fills_reverse_clear_optional_blur_last_field_no_enter_no_clicks"
+          : "two_fills_reverse_clear_no_blur_no_enter_no_clicks",
+        disclaimer:
+          "observed_no_new_layer2_aborts_during_declared_fill_and_clear_steps_on_this_run_only_does_not_prove_general_combined_safety_or_server_cart_state_not_ready_for_add_line",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2l_combined_complete",
+    progressMessage:
+      "Phase 2l complete (combined fill+clear; no validate/add-line/checkout/submit)",
+  });
+
+  return {
+    phase_2l_policy_version: PHASE_2L_COMBINED_POLICY_VERSION,
+    phase_2k_policy_version: PHASE_2K_POLICY_VERSION,
+    combined_rehearsal_performed: true,
+    fields_cleared_after: true,
+    field_order: fieldOrder,
+    run_remained_fully_non_mutating,
+    network_guard_delta_during_fills,
+    network_guard_delta_during_clear,
+    mutation_risk_checks_used,
+    mutation_risk_code_after_first_fill: mutation_risk_code,
+    mutation_risk_qty_after_first_fill: mutation_risk_qty,
     blur_used: allowBlur,
   };
 }

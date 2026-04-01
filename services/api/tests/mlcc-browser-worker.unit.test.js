@@ -66,6 +66,12 @@ describe("buildMlccBrowserConfig", () => {
       addByCodePhase2jApproved: false,
       addByCodePhase2jTestQuantity: null,
       addByCodePhase2jAllowBlur: false,
+      addByCodePhase2l: false,
+      addByCodePhase2lApproved: false,
+      addByCodePhase2lTestCode: null,
+      addByCodePhase2lTestQuantity: null,
+      addByCodePhase2lFieldOrder: null,
+      addByCodePhase2lAllowBlur: false,
     });
   });
 
@@ -369,6 +375,50 @@ describe("buildMlccBrowserConfig", () => {
     expect(out.config.addByCodePhase2jApproved).toBe(true);
     expect(out.config.addByCodePhase2jTestQuantity).toBe("42");
     expect(out.config.addByCodeQtyFieldSelector).toBe("#qty");
+  });
+
+  it("rejects Phase 2l without approval flag", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "X",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors.some((e) => /2L_APPROVED/.test(e.message))).toBe(true);
+  });
+
+  it("accepts Phase 2l when approved with selectors, test values, and field order", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#sku",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#qty",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "  ABC  ",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "  2  ",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "quantity-first",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2l).toBe(true);
+    expect(out.config.addByCodePhase2lTestCode).toBe("ABC");
+    expect(out.config.addByCodePhase2lTestQuantity).toBe("2");
+    expect(out.config.addByCodePhase2lFieldOrder).toBe("quantity_first");
   });
 
   it("rejects Phase 2j without tenant quantity field selector", () => {

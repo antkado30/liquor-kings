@@ -15,7 +15,7 @@ describe("mlcc-phase-2k-policy", () => {
     const m = buildPhase2kCombinedInteractionFutureGateManifest();
 
     expect(m.version).toBe(PHASE_2K_POLICY_VERSION);
-    expect(m.phase_intent).toMatch(/planning_only/i);
+    expect(m.phase_intent).toMatch(/planning_/i);
     expect(Array.isArray(m.relationship_to_prior_phases)).toBe(true);
     expect(
       Array.isArray(m.evidence_prerequisites_before_combined_rehearsal_considered),
