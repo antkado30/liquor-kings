@@ -4,6 +4,8 @@ Minimal Vite + React surface for the operator review workflow. Uses the same bac
 
 Production URL on the API host: **`/operator-review/app/`** (or open **`/operator-review`**, which redirects to the SPA when the built app is present). See **`services/api/OPERATOR_REVIEW.md`** for serving, env vars, and deploy.
 
+In-app routes (relative to that base): **`/review`** (queue), **`/review/:runId`** (detail), **`/diagnostics`** (placeholder).
+
 ## Development
 
 1. Start the API (default `http://127.0.0.1:4000`).
