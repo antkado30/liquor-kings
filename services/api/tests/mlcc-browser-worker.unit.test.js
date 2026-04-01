@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  assertMlccSubmissionAllowed,
   buildMlccBrowserConfig,
   loginAndVerifyMlccLanding,
 } from "../src/workers/mlcc-browser-worker.js";
@@ -29,7 +30,11 @@ describe("buildMlccBrowserConfig", () => {
       password: "secret",
       loginUrl: "https://example.com/login",
       safeTargetUrl: "https://example.com/safe",
+      orderingEntryUrl: null,
       headless: false,
+      submissionArmed: false,
+      stepScreenshotsEnabled: false,
+      stepScreenshotMaxBytes: 200_000,
     });
   });
 
@@ -99,5 +104,32 @@ describe("buildMlccBrowserConfig", () => {
 
   it("loginAndVerifyMlccLanding is not exercised against real MLCC in this suite", () => {
     expect(typeof loginAndVerifyMlccLanding).toBe("function");
+  });
+
+  it("parses optional ordering entry, submission armed, and screenshot settings", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ORDERING_ENTRY_URL: "  https://example.com/order  ",
+      MLCC_SUBMISSION_ARMED: "true",
+      MLCC_STEP_SCREENSHOTS: "true",
+      MLCC_STEP_SCREENSHOT_MAX_BYTES: "100000",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.orderingEntryUrl).toBe("https://example.com/order");
+    expect(out.config.submissionArmed).toBe(true);
+    expect(out.config.stepScreenshotsEnabled).toBe(true);
+    expect(out.config.stepScreenshotMaxBytes).toBe(100_000);
+  });
+
+  it("assertMlccSubmissionAllowed throws when not armed", () => {
+    expect(() => assertMlccSubmissionAllowed({ submissionArmed: false })).toThrow(
+      /MLCC submission blocked/,
+    );
+    expect(() => assertMlccSubmissionAllowed({ submissionArmed: true })).not.toThrow();
   });
 });

@@ -2,10 +2,15 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import {
+  buildPageSnapshotAttributes,
+  maybeScreenshotPngBase64,
+  mergeSnapshotAndScreenshot,
+} from "./mlcc-browser-evidence.js";
 import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
 import {
-  claimNextRun,
   assertDeterministicExecutionPayload,
+  claimNextRun,
   finalizeRun,
   heartbeatRun,
 } from "./execution-worker.js";
@@ -15,6 +20,17 @@ import {
 } from "../services/execution-failure.service.js";
 import { MLCC_SIGNAL } from "../services/mlcc-operator-context.service.js";
 
+/** Dry-run worker never performs order submission; kept explicit for future phases. */
+export const MLCC_BROWSER_DRY_RUN_SAFE_MODE = true;
+
+/**
+ * Env (documented):
+ * - MLCC_LOGIN_URL, MLCC_PASSWORD, MLCC_SAFE_TARGET_URL, MLCC_HEADLESS — existing
+ * - MLCC_ORDERING_ENTRY_URL — optional; navigated after login, before safe target (when both differ)
+ * - MLCC_SUBMISSION_ARMED — must be "true" before any future submit step is allowed (no submit in this worker yet)
+ * - MLCC_STEP_SCREENSHOTS — "true" to attach capped PNG base64 to step/failure evidence
+ * - MLCC_STEP_SCREENSHOT_MAX_BYTES — default 200000
+ */
 export function buildMlccBrowserConfig({ payload, env }) {
   if (!payload) {
     return {
@@ -95,7 +111,27 @@ export function buildMlccBrowserConfig({ payload, env }) {
     safeTargetUrl = safeTargetRaw.trim();
   }
 
+  const orderingEntryRaw = env?.MLCC_ORDERING_ENTRY_URL;
+  let orderingEntryUrl = null;
+
+  if (
+    typeof orderingEntryRaw === "string" &&
+    orderingEntryRaw.trim() !== ""
+  ) {
+    orderingEntryUrl = orderingEntryRaw.trim();
+  }
+
   const headless = env?.MLCC_HEADLESS === "false" ? false : true;
+
+  const submissionArmed = env?.MLCC_SUBMISSION_ARMED === "true";
+
+  const stepScreenshotsEnabled = env?.MLCC_STEP_SCREENSHOTS === "true";
+
+  const maxRaw = env?.MLCC_STEP_SCREENSHOT_MAX_BYTES;
+  const maxParsed = maxRaw != null ? Number.parseInt(String(maxRaw), 10) : NaN;
+  const stepScreenshotMaxBytes = Number.isFinite(maxParsed) && maxParsed > 0
+    ? maxParsed
+    : 200_000;
 
   return {
     ready: true,
@@ -104,7 +140,11 @@ export function buildMlccBrowserConfig({ payload, env }) {
       password,
       loginUrl,
       safeTargetUrl,
+      orderingEntryUrl,
       headless,
+      submissionArmed,
+      stepScreenshotsEnabled,
+      stepScreenshotMaxBytes,
     },
     errors: [],
   };
@@ -249,6 +289,88 @@ export async function loginAndVerifyMlccLanding({ page, config }) {
   return { finalUrl, title };
 }
 
+/**
+ * Future submit/checkout steps must call this and abort unless explicitly armed.
+ */
+export function assertMlccSubmissionAllowed(config) {
+  if (!config?.submissionArmed) {
+    throw new Error(
+      "MLCC submission blocked: set MLCC_SUBMISSION_ARMED=true only after explicit operator approval",
+    );
+  }
+}
+
+/**
+ * Post-login navigation only: optional ordering entry, then optional safe target.
+ * Never submits orders. License/store selection and add-by-code are Phase 2.
+ */
+export async function navigateMlccPostLoginSafeFlow({
+  page,
+  config,
+  heartbeat,
+}) {
+  const { orderingEntryUrl, safeTargetUrl } = config;
+
+  if (orderingEntryUrl) {
+    await page.goto(orderingEntryUrl, { waitUntil: "domcontentloaded" });
+
+    await heartbeat({
+      progressStage: "mlcc_ordering_entry",
+      progressMessage: "MLCC ordering entry URL loaded (post-login)",
+    });
+  }
+
+  if (safeTargetUrl) {
+    const sameAsPrevious =
+      orderingEntryUrl && safeTargetUrl === orderingEntryUrl;
+
+    if (!sameAsPrevious) {
+      await page.goto(safeTargetUrl, { waitUntil: "domcontentloaded" });
+    }
+
+    await heartbeat({
+      progressStage: "mlcc_safe_navigation_complete",
+      progressMessage: sameAsPrevious
+        ? "MLCC safe target matches ordering entry; single navigation"
+        : "MLCC safe target navigation completed",
+    });
+  } else {
+    await heartbeat({
+      progressStage: "mlcc_safe_navigation_complete",
+      progressMessage: orderingEntryUrl
+        ? "Post-login flow stopped at ordering entry (no MLCC_SAFE_TARGET_URL)"
+        : "MLCC authenticated landing verified (no extra navigation URLs)",
+    });
+  }
+}
+
+async function buildStepEvidence({
+  page,
+  stage,
+  message,
+  kind,
+  buildEvidence,
+  config,
+}) {
+  const snap = await buildPageSnapshotAttributes(page);
+  let attrs = { ...snap };
+
+  if (config.stepScreenshotsEnabled) {
+    const shot = await maybeScreenshotPngBase64(
+      page,
+      config.stepScreenshotMaxBytes,
+    );
+    attrs = mergeSnapshotAndScreenshot(attrs, shot);
+  }
+
+  return buildEvidence({
+    kind,
+    stage,
+    message,
+    attributes: attrs,
+  });
+}
+
 export async function processOneMlccBrowserDryRun({
   apiBaseUrl,
   workerId,
@@ -360,96 +482,136 @@ export async function processOneMlccBrowserDryRun({
   }
 
   const config = browserConfig.config;
+
+  await heartbeatRun({
+    apiBaseUrl,
+    runId: run.id,
+    storeId,
+    workerId,
+    progressStage: "validate",
+    progressMessage: "Validating execution payload (deterministic, pre-browser)",
+  });
+
+  const deterministic = assertDeterministicExecutionPayload(payload);
+  if (!deterministic.ok) {
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "deterministic assertion failed in MLCC browser worker (pre-browser)",
+      errorMessage: deterministic.message,
+      failureType: deterministic.code ?? FAILURE_TYPE.UNKNOWN,
+      failureDetails: {
+        ...(deterministic.details && typeof deterministic.details === "object"
+          ? deterministic.details
+          : {}),
+        stage: "validate",
+        mlcc_signal:
+          deterministic.code === FAILURE_TYPE.CODE_MISMATCH
+            ? MLCC_SIGNAL.CART_IDENTITY
+            : MLCC_SIGNAL.QUANTITY_RULES,
+      },
+      evidence: [
+        buildEvidence({
+          kind: "cart_verification_snapshot",
+          stage: "validate",
+          message: deterministic.message,
+          attributes: deterministic.details ?? {},
+        }),
+      ],
+    });
+
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+    };
+  }
+
+  await heartbeatRun({
+    apiBaseUrl,
+    runId: run.id,
+    storeId,
+    workerId,
+    progressStage: "assertions_passed",
+    progressMessage: "Deterministic payload assertions passed; starting browser",
+  });
+
   let browser;
+  /** @type {import('playwright').Page | null} */
+  let page = null;
+
+  const evidenceCollected = [];
+
+  const heartbeat = async ({ progressStage, progressMessage }) =>
+    heartbeatRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      workerId,
+      progressStage,
+      progressMessage,
+    });
 
   try {
     const { chromium } = await import("playwright");
 
     browser = await chromium.launch({ headless: config.headless });
     const context = await browser.newContext();
-    const page = await context.newPage();
+    page = await context.newPage();
 
-    await heartbeatRun({
-      apiBaseUrl,
-      runId: run.id,
-      storeId,
-      workerId,
+    await heartbeat({
       progressStage: "mlcc_browser_launching",
       progressMessage: "Launching MLCC browser dry-run session",
     });
 
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_browser_ready",
+        message: "Browser context ready",
+        kind: "mlcc_step_snapshot",
+        buildEvidence,
+        config,
+      }),
+    );
+
     await loginAndVerifyMlccLanding({ page, config });
 
-    const deterministic = assertDeterministicExecutionPayload(payload);
-    if (!deterministic.ok) {
-      await finalizeRun({
-        apiBaseUrl,
-        runId: run.id,
-        storeId,
-        status: "failed",
-        workerNotes: "deterministic assertion failed in MLCC browser worker",
-        errorMessage: deterministic.message,
-        failureType: deterministic.code ?? FAILURE_TYPE.UNKNOWN,
-        failureDetails: {
-          ...(deterministic.details && typeof deterministic.details === "object"
-            ? deterministic.details
-            : {}),
-          stage: "validate",
-          mlcc_signal:
-            deterministic.code === FAILURE_TYPE.CODE_MISMATCH
-              ? MLCC_SIGNAL.CART_IDENTITY
-              : MLCC_SIGNAL.QUANTITY_RULES,
-        },
-        evidence: [
-          buildEvidence({
-            kind: "cart_verification_snapshot",
-            stage: "validate",
-            message: deterministic.message,
-            attributes: deterministic.details ?? {},
-          }),
-        ],
-      });
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_post_login",
+        message: "Post-login landing",
+        kind: "mlcc_step_snapshot",
+        buildEvidence,
+        config,
+      }),
+    );
 
-      return {
-        success: false,
-        claimed: true,
-        failed: true,
-        runId: run.id,
-      };
-    }
-
-    await heartbeatRun({
-      apiBaseUrl,
-      runId: run.id,
-      storeId,
-      workerId,
+    await heartbeat({
       progressStage: "mlcc_authenticated",
       progressMessage: "MLCC login succeeded",
     });
 
-    if (config.safeTargetUrl) {
-      await page.goto(config.safeTargetUrl, {
-        waitUntil: "domcontentloaded",
-      });
+    await navigateMlccPostLoginSafeFlow({
+      page,
+      config,
+      heartbeat: async (args) => heartbeat(args),
+    });
 
-      await heartbeatRun({
-        apiBaseUrl,
-        runId: run.id,
-        storeId,
-        workerId,
-        progressStage: "mlcc_safe_navigation_complete",
-        progressMessage: "MLCC safe target navigation completed",
-      });
-    } else {
-      await heartbeatRun({
-        apiBaseUrl,
-        runId: run.id,
-        storeId,
-        workerId,
-        progressStage: "mlcc_safe_navigation_complete",
-        progressMessage: "MLCC authenticated landing verified",
-      });
-    }
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_flow_checkpoint",
+        message: "Post-navigation checkpoint (dry-run; no cart mutations)",
+        kind: "mlcc_step_snapshot",
+        buildEvidence,
+        config,
+      }),
+    );
 
     const finalUrl = page.url();
     let title = null;
@@ -470,14 +632,23 @@ export async function processOneMlccBrowserDryRun({
       storeId,
       status: "succeeded",
       workerNotes:
-        "MLCC browser dry run completed successfully; no cart mutations or submit actions were performed",
+        "MLCC browser dry run completed successfully; no cart mutations or submit actions were performed. " +
+        `dry_run_safe_mode=${MLCC_BROWSER_DRY_RUN_SAFE_MODE} submission_armed=${config.submissionArmed}`,
       errorMessage: undefined,
       evidence: [
+        ...evidenceCollected,
         buildEvidence({
           kind: "worker_log",
           stage: "completed",
           message: "MLCC browser dry-run completed",
-          attributes: { finalUrl, title },
+          attributes: {
+            finalUrl,
+            title,
+            dry_run_safe_mode: MLCC_BROWSER_DRY_RUN_SAFE_MODE,
+            submission_armed: config.submissionArmed,
+            ordering_entry_configured: Boolean(config.orderingEntryUrl),
+            safe_target_configured: Boolean(config.safeTargetUrl),
+          },
         }),
       ],
     });
@@ -506,6 +677,20 @@ export async function processOneMlccBrowserDryRun({
         ? MLCC_SIGNAL.NETWORK_TRANSPORT
         : MLCC_SIGNAL.BROWSER_RUNTIME;
 
+    const failAttrs = await buildPageSnapshotAttributes(page);
+    let failureEvidenceAttrs = { ...failAttrs, error: msg };
+
+    if (page && config.stepScreenshotsEnabled) {
+      const shot = await maybeScreenshotPngBase64(
+        page,
+        config.stepScreenshotMaxBytes,
+      );
+      failureEvidenceAttrs = mergeSnapshotAndScreenshot(
+        failureEvidenceAttrs,
+        shot,
+      );
+    }
+
     try {
       await finalizeRun({
         apiBaseUrl,
@@ -521,11 +706,12 @@ export async function processOneMlccBrowserDryRun({
           classified_type: classified,
         },
         evidence: [
+          ...evidenceCollected,
           buildEvidence({
             kind: "mlcc_ui_diagnostics",
             stage: "browser_runtime",
             message: "MLCC browser runtime failure",
-            attributes: { error: msg },
+            attributes: failureEvidenceAttrs,
           }),
         ],
       });
