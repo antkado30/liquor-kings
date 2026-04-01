@@ -3,7 +3,12 @@
   "private": true,
   "type": "module",
   "description": "Liquor Kings monorepo — root scripts for diagnostics",
+  "workspaces": [
+    "apps/admin"
+  ],
   "scripts": {
+    "dev:admin": "npm run dev -w lk-admin",
+    "build:admin": "npm run build -w lk-admin",
     "audit:lk": "node scripts/lk-audit/run-full-audit.mjs",
     "audit:lk:repo": "node scripts/lk-audit/audit-repo.mjs",
     "audit:lk:supabase": "node scripts/lk-audit/audit-supabase.mjs",
