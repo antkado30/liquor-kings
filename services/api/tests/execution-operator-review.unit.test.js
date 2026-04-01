@@ -229,6 +229,8 @@ describe("execution operator review list contract", () => {
     expect(res.body.data).toHaveLength(2);
     expect(res.body.data[0].run_id).toBe(RUN_2);
     expect(res.body.data[1].run_id).toBe(RUN_1);
+    expect(res.body.data[0].stored_attempt_count).toBe(0);
+    expect(res.body.data[0].repeated_same_stored_failure).toBe(false);
     expect(res.body.data[0]).toHaveProperty("operator_status");
     expect(res.body.data[0]).toHaveProperty("latest_operator_action");
     expect(res.body.data[0]).toHaveProperty("pending_manual_review");

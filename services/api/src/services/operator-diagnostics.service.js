@@ -1,5 +1,9 @@
 import { DIAGNOSTIC_KIND } from "./diagnostics.service.js";
 import { isRetryableFailureType } from "./execution-failure.service.js";
+import {
+  computeAttemptHistoryWindowInsights,
+  fetchAttemptsByRunIdsGrouped,
+} from "./execution-attempt-aggregate.service.js";
 
 const DEFAULT_RUN_WINDOW_DAYS = 7;
 const DEFAULT_DIAG_LIMIT = 120;
@@ -323,7 +327,7 @@ export async function getOperatorDiagnosticsOverview(
   const [runsRes, diagRes, trendRunsRes, manualRes, activeHealthRes] = await Promise.all([
     supabase
       .from("execution_runs")
-      .select("status, failure_type, retry_count, max_retries, created_at")
+      .select("id, status, failure_type, retry_count, max_retries, created_at")
       .eq("store_id", storeId)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
@@ -456,6 +460,25 @@ export async function getOperatorDiagnosticsOverview(
 
   const queueHealth = computeQueueHealth(activeHealthRes.data ?? [], Date.now());
 
+  const runIdsForAttempts = runs.map((r) => r.id).filter(Boolean);
+  const { byRunId: attemptsByRunId, error: attemptsAggError } =
+    await fetchAttemptsByRunIdsGrouped(supabase, storeId, runIdsForAttempts);
+
+  if (attemptsAggError) {
+    return {
+      statusCode: 500,
+      body: {
+        error: attemptsAggError,
+        code: "diagnostics_execution_run_attempts_query_failed",
+      },
+    };
+  }
+
+  const attemptHistoryInsights = computeAttemptHistoryWindowInsights(
+    runs,
+    attemptsByRunId,
+  );
+
   return {
     statusCode: 200,
     body: {
@@ -473,6 +496,7 @@ export async function getOperatorDiagnosticsOverview(
             "System diagnostics include this store and rows with store_id null (global). Operator session rows are a subset of payload.kind = operator_session.",
             "Trends (below) use a separate capped query over the last 30 days; summary cards above still use the execution_runs_window_days setting.",
             "Queue health uses a live snapshot of queued+running runs (capped); see queue_health.thresholds_applied and interpretation_notes.",
+            "attempt_history_insights use execution_run_attempts for the same run sample (joined by run id); see attempt_history_insights.interpretation_notes.",
           ],
         },
         execution_runs: {
@@ -481,6 +505,7 @@ export async function getOperatorDiagnosticsOverview(
           failed_retryable_count: failedRetryable,
           failed_non_retryable_count: failedNonRetryable,
         },
+        attempt_history_insights: attemptHistoryInsights,
         queue_health: queueHealth,
         trends,
         recent_system_diagnostics: recentRows,

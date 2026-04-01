@@ -24,6 +24,11 @@ export type RunSummaryRow = {
   has_evidence?: boolean;
   progress_stage?: string | null;
   timestamps?: RunSummaryTimestamps | null;
+  /** From stored execution_run_attempts for this run (0 if none). */
+  stored_attempt_count?: number;
+  has_multiple_stored_attempts?: boolean;
+  /** True only when two+ failed attempts share identical stored type+message. */
+  repeated_same_stored_failure?: boolean;
 };
 
 export type Summary = Record<string, unknown>;

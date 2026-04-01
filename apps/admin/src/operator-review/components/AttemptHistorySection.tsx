@@ -1,3 +1,4 @@
+import { deriveRunAttemptInsight, hasRepeatedSameStoredFailure } from "../attemptInsightUtils";
 import { FailureBadge } from "./Badges";
 import type { ExecutionAttemptRow } from "../types";
 
@@ -27,9 +28,10 @@ function formatDelta(prev: ExecutionAttemptRow, cur: ExecutionAttemptRow): strin
 
 type Props = {
   attempts: ExecutionAttemptRow[];
+  runStatus?: string;
 };
 
-export function AttemptHistorySection({ attempts }: Props) {
+export function AttemptHistorySection({ attempts, runStatus = "" }: Props) {
   if (attempts.length === 0) {
     return (
       <div className="attempt-history-block">
@@ -43,9 +45,37 @@ export function AttemptHistorySection({ attempts }: Props) {
 
   const failedRecorded = attempts.filter((a) => a.status === "failed");
   const showRepeatNote = failedRecorded.length >= 2;
+  const repeatedSame = hasRepeatedSameStoredFailure(failedRecorded);
+  const insight = deriveRunAttemptInsight(attempts, runStatus);
 
   return (
     <div className="attempt-history-block">
+      {attempts.length > 0 && runStatus ? (
+        <p className="attempt-insight-banner" style={{ fontSize: 13, marginBottom: 10 }}>
+          {insight.first_attempt_only_success ? (
+            <>
+              <strong>Recorded:</strong> single successful attempt — matches first-attempt success when history is complete.
+            </>
+          ) : insight.recovered_after_failure ? (
+            <>
+              <strong>Recorded:</strong> run succeeded after at least one failed attempt (recovery).
+            </>
+          ) : (
+            <>
+              <strong>Stored attempts:</strong> {attempts.length}.{" "}
+              {repeatedSame ? (
+                <span className="attempt-same-failure">
+                  Repeated identical stored failure (failure_type + failure_message) on multiple attempts.
+                </span>
+              ) : showRepeatNote ? (
+                <span className="attempt-changed-failure">
+                  Multiple failures recorded; compare rows below — same vs changed uses stored fields only.
+                </span>
+              ) : null}
+            </>
+          )}
+        </p>
+      ) : null}
       {showRepeatNote ? (
         <p className="attempt-repeat-note">
           <strong>{failedRecorded.length}</strong> failed attempt(s) recorded in history (see below).{" "}

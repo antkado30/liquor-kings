@@ -142,7 +142,10 @@ export function RunDetailPanel({
               One row per queue claim: initial run, automatic retries, and operator-triggered retries each
               create a new attempt when recorded.
             </p>
-            <AttemptHistorySection attempts={attemptHistoryItems} />
+            <AttemptHistorySection
+              attempts={attemptHistoryItems}
+              runStatus={summary.status != null ? String(summary.status) : ""}
+            />
 
             {(summary.status === "failed" || summary.failure_message || summary.failure_type) && (
               <>

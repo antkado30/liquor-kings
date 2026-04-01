@@ -75,6 +75,23 @@ type QueueHealthData = {
   warnings: HealthWarning[];
 };
 
+export type AttemptHistoryInsights = {
+  interpretation_notes: string[];
+  runs_in_window: number;
+  runs_with_attempt_rows: number;
+  total_stored_attempt_rows: number;
+  avg_attempts_per_run_with_history: number | null;
+  runs_with_more_than_one_attempt: number;
+  runs_with_two_or_more_failed_attempts: number;
+  runs_with_repeated_same_stored_failure: number;
+  multi_attempt_runs_terminal_succeeded: number;
+  multi_attempt_runs_terminal_failed: number;
+  multi_attempt_runs_non_terminal: number;
+  multi_attempt_success_rate: number | null;
+  first_attempt_only_success_runs: number;
+  eventual_success_after_failed_attempt_runs: number;
+};
+
 export type OverviewData = {
   meta: {
     store_id: string;
@@ -91,6 +108,7 @@ export type OverviewData = {
     failed_retryable_count: number;
     failed_non_retryable_count: number;
   };
+  attempt_history_insights?: AttemptHistoryInsights;
   queue_health?: QueueHealthData;
   trends?: TrendsData;
   recent_system_diagnostics: DiagRow[];
@@ -494,6 +512,74 @@ export function DiagnosticsPage() {
               Trend series not available from API (upgrade API to get 24h / 7d / 30d buckets).
             </div>
           )}
+
+          {data.attempt_history_insights ? (
+            <div className="card" style={{ marginTop: 12 }}>
+              <h3 className="section-title">Stored attempt history (same window as run sample)</h3>
+              <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+                Derived only from <code>execution_run_attempts</code> joined to runs in the capped window.
+                Rates exclude queued/running/canceled where noted.
+              </p>
+              <ul className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+                {data.attempt_history_insights.interpretation_notes.slice(0, 3).map((n, i) => (
+                  <li key={i} style={{ marginBottom: 4 }}>
+                    {n}
+                  </li>
+                ))}
+              </ul>
+              <div className="diag-cards">
+                <div className="card diag-card">
+                  <div className="diag-card-label">Avg attempts / run (with history)</div>
+                  <div className="diag-card-value">
+                    {data.attempt_history_insights.avg_attempts_per_run_with_history != null
+                      ? data.attempt_history_insights.avg_attempts_per_run_with_history.toFixed(2)
+                      : "—"}
+                  </div>
+                </div>
+                <div className="card diag-card">
+                  <div className="diag-card-label">Runs with 2+ attempts</div>
+                  <div className="diag-card-value">
+                    {data.attempt_history_insights.runs_with_more_than_one_attempt}
+                  </div>
+                </div>
+                <div className="card diag-card">
+                  <div className="diag-card-label">2+ failed attempts (stored)</div>
+                  <div className="diag-card-value">
+                    {data.attempt_history_insights.runs_with_two_or_more_failed_attempts}
+                  </div>
+                </div>
+                <div className="card diag-card">
+                  <div className="diag-card-label">Repeated same stored failure</div>
+                  <div className="diag-card-value">
+                    {data.attempt_history_insights.runs_with_repeated_same_stored_failure}
+                  </div>
+                </div>
+                <div className="card diag-card">
+                  <div className="diag-card-label">Multi-attempt success rate</div>
+                  <div className="diag-card-value">
+                    {data.attempt_history_insights.multi_attempt_success_rate != null
+                      ? `${(data.attempt_history_insights.multi_attempt_success_rate * 100).toFixed(1)}%`
+                      : "—"}
+                  </div>
+                  <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+                    succeeded / (succeeded+failed) for runs with 2+ attempts
+                  </p>
+                </div>
+                <div className="card diag-card">
+                  <div className="diag-card-label">First-attempt-only success</div>
+                  <div className="diag-card-value">
+                    {data.attempt_history_insights.first_attempt_only_success_runs}
+                  </div>
+                </div>
+                <div className="card diag-card">
+                  <div className="diag-card-label">Succeeded after failed attempt</div>
+                  <div className="diag-card-value">
+                    {data.attempt_history_insights.eventual_success_after_failed_attempt_runs}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="diag-cards">
             <div className="card diag-card">

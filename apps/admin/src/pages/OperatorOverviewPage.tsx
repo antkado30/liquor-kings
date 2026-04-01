@@ -7,6 +7,44 @@ import { useOperatorSession } from "../session/OperatorSessionContext";
 import type { FlashKind } from "../operator-review/types";
 import type { OverviewData } from "./DiagnosticsPage";
 
+function AttemptInsightCards({ ah }: { ah: NonNullable<OverviewData["attempt_history_insights"]> }) {
+  return (
+    <div className="diag-cards" style={{ marginTop: 12 }}>
+      <div className="card diag-card">
+        <div className="diag-card-label">Avg attempts (with history)</div>
+        <div className="diag-card-value">
+          {ah.avg_attempts_per_run_with_history != null ? ah.avg_attempts_per_run_with_history.toFixed(2) : "—"}
+        </div>
+        <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+          Window sample · stored rows only
+        </p>
+      </div>
+      <div className="card diag-card">
+        <div className="diag-card-label">Runs with 2+ attempts</div>
+        <div className="diag-card-value">{ah.runs_with_more_than_one_attempt}</div>
+      </div>
+      <div className="card diag-card">
+        <div className="diag-card-label">Repeated same stored failure</div>
+        <div className="diag-card-value">{ah.runs_with_repeated_same_stored_failure}</div>
+        <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+          Same failure_type + message on 2+ failed attempts
+        </p>
+      </div>
+      <div className="card diag-card">
+        <div className="diag-card-label">Multi-attempt success rate</div>
+        <div className="diag-card-value">
+          {ah.multi_attempt_success_rate != null
+            ? `${(ah.multi_attempt_success_rate * 100).toFixed(1)}%`
+            : "—"}
+        </div>
+        <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+          Terminal succeeded vs failed (2+ attempts)
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Landing overview: combines diagnostics overview (queue health, retryable failed counts in window,
  * session events) with a single list API call for global pending-manual queue size (total_count).
@@ -159,6 +197,10 @@ export function OperatorOverviewPage() {
               <div className="diag-card-label">Failed — not retryable (window)</div>
               <div className="diag-card-value">{data.execution_runs.failed_non_retryable_count}</div>
             </div>
+            {data.attempt_history_insights ? (
+              <AttemptInsightCards ah={data.attempt_history_insights} />
+            ) : null}
+
             {qh ? (
               <>
                 <div className="card diag-card">

@@ -916,6 +916,20 @@ pre,
   padding: 6px;
   border-radius: 4px;
 }
+.attempt-insight-banner {
+  padding: 8px 10px;
+  background: #f9fafb;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+.attempt-same-failure {
+  color: #991b1b;
+  font-weight: 600;
+}
+.attempt-changed-failure {
+  color: #92400e;
+}
+
 .attempt-history-block {
   margin-top: 8px;
 }

@@ -496,6 +496,15 @@ function RunQueuePanelInner({
                     </div>
                     <div className="ids mono">Run {row.run_id}</div>
                     <div className="ids mono">Cart {row.cart_id ?? "—"}</div>
+                    {(row.stored_attempt_count ?? 0) > 0 ? (
+                      <div className="ids mono" style={{ fontSize: 12 }}>
+                        Stored attempts: {row.stored_attempt_count}
+                        {row.has_multiple_stored_attempts ? " · multiple" : ""}
+                        {row.repeated_same_stored_failure
+                          ? " · repeated same stored failure (type+message)"
+                          : ""}
+                      </div>
+                    ) : null}
                     {hint ? <div className="hint">{hint}</div> : null}
                   </div>
                   <div style={{ textAlign: "right", fontSize: 11, color: "#6b7280" }}>

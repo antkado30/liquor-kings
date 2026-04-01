@@ -1,6 +1,10 @@
 import { buildExecutionPayloadForSubmittedCart } from "./cart-execution-payload.service.js";
 import { verifyCartItemsBeforeExecution } from "./bottle-identity.service.js";
 import {
+  fetchAttemptsByRunIdsGrouped,
+  listItemAttemptFields,
+} from "./execution-attempt-aggregate.service.js";
+import {
   classifyFailureType,
   isRetryableFailureType,
 } from "./execution-failure.service.js";
@@ -294,24 +298,33 @@ const getRunOperatorActions = async (supabase, runId, storeId) => {
   return { data: data ?? [], error: null };
 };
 
-const buildOperatorReviewListItem = (summary) => ({
-  run_id: summary.run_id,
-  store_id: summary.store_id,
-  cart_id: summary.cart_id,
-  status: summary.status,
-  failure_type: summary.failure_type,
-  failure_message: summary.failure_message,
-  retry_count: summary.retry_count,
-  retry_allowed: summary.retry_allowed,
-  progress_stage: summary.progress_stage,
-  has_evidence: summary.has_evidence,
-  operator_status: summary.operator_status,
-  latest_operator_action: summary.latest_operator_action,
-  pending_manual_review: summary.pending_manual_review,
-  actionable_next_step: summary.actionable_next_step,
-  manual_review_recommended: summary.manual_review_recommended,
-  timestamps: summary.timestamps,
-});
+const buildOperatorReviewListItem = (summary, attemptFields = null) => {
+  const base = {
+    run_id: summary.run_id,
+    store_id: summary.store_id,
+    cart_id: summary.cart_id,
+    status: summary.status,
+    failure_type: summary.failure_type,
+    failure_message: summary.failure_message,
+    retry_count: summary.retry_count,
+    retry_allowed: summary.retry_allowed,
+    progress_stage: summary.progress_stage,
+    has_evidence: summary.has_evidence,
+    operator_status: summary.operator_status,
+    latest_operator_action: summary.latest_operator_action,
+    pending_manual_review: summary.pending_manual_review,
+    actionable_next_step: summary.actionable_next_step,
+    manual_review_recommended: summary.manual_review_recommended,
+    timestamps: summary.timestamps,
+  };
+  const af = attemptFields ?? listItemAttemptFields(null);
+  return {
+    ...base,
+    stored_attempt_count: af.stored_attempt_count,
+    has_multiple_stored_attempts: af.has_multiple_stored_attempts,
+    repeated_same_stored_failure: af.repeated_same_stored_failure,
+  };
+};
 
 const mapLatestActionsByRunId = (rows) => {
   const latestByRun = new Map();
@@ -703,6 +716,7 @@ export const listExecutionRunsForOperatorReview = async (
   const runIds = rows.map((row) => row.id).filter(Boolean);
 
   let actionsByRunId = new Map();
+  let attemptsByRunId = new Map();
   if (runIds.length > 0) {
     const { data: actionRows, error: actionErr } = await supabase
       .from("execution_run_operator_actions")
@@ -712,12 +726,21 @@ export const listExecutionRunsForOperatorReview = async (
       .order("created_at", { ascending: false });
     if (actionErr) return serverError(actionErr.message);
     actionsByRunId = mapLatestActionsByRunId(actionRows);
+
+    const { byRunId, error: attErr } = await fetchAttemptsByRunIdsGrouped(
+      supabase,
+      storeId,
+      runIds,
+    );
+    if (attErr) return serverError(attErr);
+    attemptsByRunId = byRunId;
   }
 
   let items = rows.map((row) => {
     const latest = actionsByRunId.get(row.id);
     const summary = buildRunSummary(row, latest ? [latest] : []);
-    return buildOperatorReviewListItem(summary);
+    const attFields = listItemAttemptFields(attemptsByRunId.get(row.id));
+    return buildOperatorReviewListItem(summary, attFields);
   });
 
   if (pendingManualReview === true) {
