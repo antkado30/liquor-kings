@@ -12,8 +12,10 @@ import {
   parsePhase2fSafeOpenTextAllowSubstrings,
   parsePhase2gSentinelValue,
   parsePhase2hTestCode,
+  parsePhase2jTestQuantity,
   parseSafeOpenCandidateSelectors,
   PHASE_2G_TYPING_POLICY_VERSION,
+  PHASE_2J_QUANTITY_POLICY_VERSION,
   shouldBlockHttpRequest,
 } from "../src/workers/mlcc-browser-add-by-code-probe.js";
 
@@ -99,6 +101,28 @@ describe("parsePhase2hTestCode", () => {
     expect(parsePhase2hTestCode("").ok).toBe(false);
     expect(parsePhase2hTestCode("a".repeat(65)).ok).toBe(false);
     expect(parsePhase2hTestCode("a\nb").ok).toBe(false);
+  });
+});
+
+describe("parsePhase2jTestQuantity", () => {
+  it("accepts positive integer strings without leading zeros", () => {
+    expect(parsePhase2jTestQuantity("  7  ").ok).toBe(true);
+    expect(parsePhase2jTestQuantity("  7  ").value).toBe("7");
+    expect(parsePhase2jTestQuantity("12345678").ok).toBe(true);
+  });
+
+  it("rejects empty, zero, leading zero, non-numeric, too long", () => {
+    expect(parsePhase2jTestQuantity("").ok).toBe(false);
+    expect(parsePhase2jTestQuantity("0").ok).toBe(false);
+    expect(parsePhase2jTestQuantity("01").ok).toBe(false);
+    expect(parsePhase2jTestQuantity("12a").ok).toBe(false);
+    expect(parsePhase2jTestQuantity("123456789").ok).toBe(false);
+  });
+});
+
+describe("PHASE_2J_QUANTITY_POLICY_VERSION", () => {
+  it("exports a stable policy version string", () => {
+    expect(PHASE_2J_QUANTITY_POLICY_VERSION).toMatch(/^lk-rpa-2j-/);
   });
 });
 

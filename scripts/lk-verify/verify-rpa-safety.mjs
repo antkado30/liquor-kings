@@ -119,6 +119,24 @@ if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2H_APPROVED")) {
   checks.push("mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2H_APPROVED (Phase 2h)");
 }
 
+if (!probe.includes("runAddByCodePhase2jQuantityTypingRehearsal")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must define runAddByCodePhase2jQuantityTypingRehearsal (Phase 2j)",
+  );
+}
+
+if (!probe.includes("export const PHASE_2J_QUANTITY_POLICY_VERSION")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export PHASE_2J_QUANTITY_POLICY_VERSION (Phase 2j)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2J_APPROVED")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2J_APPROVED (Phase 2j)",
+  );
+}
+
 if (!phase2iPolicy.includes("export const PHASE_2I_POLICY_VERSION")) {
   checks.push("mlcc-phase-2i-policy.js must export PHASE_2I_POLICY_VERSION (Phase 2i)");
 }
@@ -141,6 +159,10 @@ if (!phasesDoc.includes("Phase 2i")) {
   checks.push("rpa-rebuild-phases.md must document Phase 2i");
 }
 
+if (!phasesDoc.includes("Phase 2j")) {
+  checks.push("rpa-rebuild-phases.md must document Phase 2j");
+}
+
 if (!/planning[- ]only/i.test(phasesDoc)) {
   checks.push("rpa-rebuild-phases.md must state Phase 2i is planning-only");
 }
@@ -149,7 +171,7 @@ if (!phasesDoc.includes("mlcc-phase-2i-policy.js")) {
   checks.push("rpa-rebuild-phases.md must reference mlcc-phase-2i-policy.js");
 }
 
-// Phase 2b/2c: no product .fill in probe; Phase 2g sentinel; Phase 2h gated real code + clear.
+// Phase 2b/2c: no product .fill in probe; Phase 2g sentinel; Phase 2h gated real code + clear; Phase 2j qty + clear.
 if (/\b\.fill\s*\(/u.test(probe)) {
   const onlyPhase2gSentinel =
     probe.includes("runAddByCodePhase2gTypingPolicyAndRehearsal") &&
@@ -159,9 +181,13 @@ if (/\b\.fill\s*\(/u.test(probe)) {
     probe.includes("runAddByCodePhase2hRealCodeTypingRehearsal") &&
     probe.includes("fill(testCode") &&
     probe.includes('fill("",');
-  if (!onlyPhase2gSentinel && !phase2hRealCode) {
+  const phase2jQuantity =
+    probe.includes("runAddByCodePhase2jQuantityTypingRehearsal") &&
+    probe.includes("fill(testQuantity") &&
+    probe.includes('fill("",');
+  if (!onlyPhase2gSentinel && !phase2hRealCode && !phase2jQuantity) {
     checks.push(
-      "mlcc-browser-add-by-code-probe.js: .fill( allowed only for Phase 2g sentinel or Phase 2h gated real code + clear",
+      "mlcc-browser-add-by-code-probe.js: .fill( allowed only for Phase 2g sentinel, Phase 2h gated real code + clear, or Phase 2j quantity + clear",
     );
   }
 }

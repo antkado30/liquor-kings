@@ -1,18 +1,20 @@
 /**
- * Phase 2i — planning-only repo truth for future quantity and post-quantity ladder.
- * Not imported by mlcc-browser-worker or mlcc-browser-add-by-code-probe (no runtime execution).
+ * Phase 2i — planning repo truth for quantity gates and post-quantity ladder.
+ * Imported by mlcc-browser-add-by-code-probe for Phase 2j evidence echo only (not executed here).
  * Bump version when criteria or ladder semantics change.
  */
 
-export const PHASE_2I_POLICY_VERSION = "lk-rpa-2i-1";
+export const PHASE_2I_POLICY_VERSION = "lk-rpa-2i-2";
 
 /**
- * Future quantity-phase approval model (machine-readable). Implementation is out of scope until Phase 2j+.
+ * Future quantity-phase approval model (machine-readable). Phase 2j implements a bounded,
+ * env-gated subset at runtime (quantity field fill/clear only); this manifest remains the checklist.
  */
 export function buildPhase2iQuantityFutureGateManifest() {
   return {
     version: PHASE_2I_POLICY_VERSION,
-    phase_intent: "planning_only_no_quantity_execution_in_worker",
+    phase_intent:
+      "planning_only_gates_phase_2j_runtime_quantity_rehearsal_is_separately_env_gated",
     evidence_prerequisites_before_quantity_considered: [
       "operator_has_documented_successful_phase_2h_style_code_rehearsal_or_equivalent_tenant_evidence_where_applicable",
       "tenant_mlcc_add_by_code_code_field_selector_behavior_understood_not_heuristic_only_for_production_paths",
@@ -65,6 +67,8 @@ export function buildPhase2iBroaderInteractionLadder() {
         id: "quantity_rehearsal",
         label: "Gated quantity field rehearsal (fill/clear pattern analogous to 2h)",
         status: "out_of_scope_until_separate_approval",
+        implementation_note:
+          "bounded_subset_implemented_as_runAddByCodePhase2jQuantityTypingRehearsal_when_MLCC_ADD_BY_CODE_PHASE_2J_and_2J_APPROVED",
         forbids_until_approved: [
           "add_to_cart",
           "validate",

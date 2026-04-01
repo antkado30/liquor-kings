@@ -62,6 +62,10 @@ describe("buildMlccBrowserConfig", () => {
       addByCodePhase2h: false,
       addByCodePhase2hApproved: false,
       addByCodePhase2hTestCode: null,
+      addByCodePhase2j: false,
+      addByCodePhase2jApproved: false,
+      addByCodePhase2jTestQuantity: null,
+      addByCodePhase2jAllowBlur: false,
     });
   });
 
@@ -326,6 +330,63 @@ describe("buildMlccBrowserConfig", () => {
     expect(out.ready).toBe(false);
     expect(
       out.errors.some((e) => /CODE_FIELD_SELECTOR/.test(e.message)),
+    ).toBe(true);
+  });
+
+  it("rejects Phase 2j without approval flag", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#qty",
+      MLCC_ADD_BY_CODE_PHASE_2J: "true",
+      MLCC_ADD_BY_CODE_PHASE_2J_TEST_QUANTITY: "2",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors.some((e) => /2J_APPROVED/.test(e.message))).toBe(true);
+  });
+
+  it("accepts Phase 2j when approved with tenant qty selector and test quantity", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "  #qty  ",
+      MLCC_ADD_BY_CODE_PHASE_2J: "true",
+      MLCC_ADD_BY_CODE_PHASE_2J_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2J_TEST_QUANTITY: "  42  ",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2j).toBe(true);
+    expect(out.config.addByCodePhase2jApproved).toBe(true);
+    expect(out.config.addByCodePhase2jTestQuantity).toBe("42");
+    expect(out.config.addByCodeQtyFieldSelector).toBe("#qty");
+  });
+
+  it("rejects Phase 2j without tenant quantity field selector", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2J: "true",
+      MLCC_ADD_BY_CODE_PHASE_2J_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2J_TEST_QUANTITY: "1",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) => /QTY_FIELD_SELECTOR/.test(e.message)),
     ).toBe(true);
   });
 

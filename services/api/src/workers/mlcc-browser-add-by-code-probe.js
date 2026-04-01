@@ -4,6 +4,11 @@
  * Layer 2: network guards. Layer 3: blocked UI text before any probe click.
  */
 
+import {
+  PHASE_2I_POLICY_VERSION,
+  buildPhase2iQuantityFutureGateManifest,
+} from "./mlcc-phase-2i-policy.js";
+
 /** Clicks matching these labels are never performed during the probe. */
 export const MLCC_PROBE_UNSAFE_UI_TEXT = [
   /add\s*to\s*cart/i,
@@ -1786,6 +1791,35 @@ export function parsePhase2hTestCode(raw) {
   return { ok: true, value: v };
 }
 
+export const PHASE_2J_QUANTITY_POLICY_VERSION = "lk-rpa-2j-1";
+
+const PHASE_2J_TEST_QUANTITY_RE = /^[1-9]\d{0,7}$/;
+
+/**
+ * Strict env test quantity for Phase 2j: 1–8 digit positive integer string (no leading zeros).
+ */
+export function parsePhase2jTestQuantity(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return {
+      ok: false,
+      value: null,
+      reason: "empty_or_missing",
+    };
+  }
+
+  const v = String(raw).trim();
+
+  if (!PHASE_2J_TEST_QUANTITY_RE.test(v)) {
+    return {
+      ok: false,
+      value: null,
+      reason: "must_be_1_to_8_digit_positive_integer_no_leading_zero",
+    };
+  }
+
+  return { ok: true, value: v };
+}
+
 /**
  * Phase 2h: one tenant code field only; real test value from env; no Enter, no qty, no clicks.
  * Hard-fails if Layer 2 guard count increases during type. Clears field only when type caused no new aborts.
@@ -2208,6 +2242,651 @@ export async function runAddByCodePhase2hRealCodeTypingRehearsal({
     network_guard_delta_during_clear,
     mutation_risk_checks_used,
     mutation_risk,
+  };
+}
+
+function phase2jQuantityDomSnapshotAllowed(snap) {
+  if (!snap || snap.unsupported) {
+    return { ok: false, reason: "unsupported_or_missing_snapshot" };
+  }
+
+  const t = String(snap.type || "").toLowerCase();
+
+  if (t === "select") {
+    return { ok: false, reason: "select_element_not_allowed_phase_2j" };
+  }
+
+  if (!["number", "text", "search", "tel", "textarea"].includes(t)) {
+    return {
+      ok: false,
+      reason: `input_type_${t}_not_on_phase_2j_quantity_allowlist`,
+    };
+  }
+
+  return { ok: true };
+}
+
+async function readCodeFieldValueLengthParity(page, codeSel) {
+  if (!codeSel || typeof codeSel !== "string" || codeSel.trim() === "") {
+    return {
+      observed: false,
+      reason: "tenant_code_selector_not_configured",
+    };
+  }
+
+  const sel = codeSel.trim();
+  const loc = page.locator(sel).first();
+  const n = await loc.count().catch(() => 0);
+
+  if (n === 0) {
+    return {
+      observed: false,
+      reason: "code_locator_zero_matches",
+      selector_used: sel,
+    };
+  }
+
+  const vis = await loc.isVisible().catch(() => false);
+
+  if (!vis) {
+    return {
+      observed: false,
+      reason: "code_field_not_visible",
+      selector_used: sel,
+    };
+  }
+
+  const snap = await readFieldDomSnapshot(loc);
+
+  if (snap.unsupported || String(snap.type || "").toLowerCase() === "select") {
+    return {
+      observed: false,
+      reason: "code_snapshot_unsupported",
+      selector_used: sel,
+    };
+  }
+
+  return {
+    observed: true,
+    selector_used: sel,
+    value_length: snap.value_length ?? 0,
+    has_value: Boolean(snap.has_value),
+  };
+}
+
+/**
+ * Phase 2j: one tenant quantity field only; test digits from env; no code field interaction, no Enter, no clicks.
+ * Optional blur only when config.addByCodePhase2jAllowBlur === true. Same Layer 2 delta hard-fail as 2h.
+ */
+export async function runAddByCodePhase2jQuantityTypingRehearsal({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  buildStepEvidence,
+}) {
+  const gateManifest = buildPhase2iQuantityFutureGateManifest();
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2j_quantity_start",
+    progressMessage:
+      "Phase 2j: gated quantity-field-only rehearsal (no code; no submit)",
+  });
+
+  const testQuantity = config.addByCodePhase2jTestQuantity;
+  const qtySel = config.addByCodeQtyFieldSelector;
+  const allowBlur = config.addByCodePhase2jAllowBlur === true;
+
+  const mutation_risk_checks_used = [
+    "phase_2i_quantity_future_gate_manifest_echoed_in_evidence",
+    `phase_2i_policy_version_${PHASE_2I_POLICY_VERSION}`,
+    "computePhase2gExtendedMutationRisk_on_quantity_locator",
+    "layer_2_network_abort_counter_guardStats_blockedRequestCount",
+    "layer_2_shouldBlockHttpRequest_patterns_active_on_context",
+    "no_enter_playwright_fill_only",
+    "code_field_never_filled_or_focused_in_phase_2j",
+    allowBlur
+      ? "optional_blur_explicitly_enabled_via_MLCC_ADD_BY_CODE_PHASE_2J_ALLOW_BLUR"
+      : "no_blur_unless_MLCC_ADD_BY_CODE_PHASE_2J_ALLOW_BLUR_true",
+    "quantity_surface_allowlist_number_text_search_tel_textarea_only",
+    "optional_code_field_value_length_parity_when_tenant_code_selector_configured_and_visible",
+  ];
+
+  if (!qtySel || typeof qtySel !== "string" || qtySel.trim() === "") {
+    const err =
+      "Phase 2j requires MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR (tenant quantity field only; no heuristic target)";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_blocked",
+        message: err,
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+          phase_2i_quantity_gate_manifest: gateManifest,
+          quantity_typing_performed: false,
+          code_field_touched: false,
+          block_reason: "missing_tenant_quantity_field_selector",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const loc = page.locator(qtySel.trim()).first();
+  const n = await loc.count().catch(() => 0);
+
+  if (n === 0) {
+    const err = "Phase 2j: quantity field selector matched no elements";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_blocked",
+        message: err,
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+          phase_2i_quantity_gate_manifest: gateManifest,
+          selector_used: qtySel.trim(),
+          quantity_typing_performed: false,
+          code_field_touched: false,
+          block_reason: "selector_zero_matches",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const visible = await loc.isVisible().catch(() => false);
+
+  if (!visible) {
+    const err = "Phase 2j: quantity field not visible";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_blocked",
+        message: err,
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+          phase_2i_quantity_gate_manifest: gateManifest,
+          selector_used: qtySel.trim(),
+          quantity_typing_performed: false,
+          code_field_touched: false,
+          block_reason: "field_not_visible",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const snapBefore = await readFieldDomSnapshot(loc);
+  const surfaceOk = phase2jQuantityDomSnapshotAllowed(snapBefore);
+
+  if (!surfaceOk.ok) {
+    const err = `Phase 2j: quantity field surface rejected (${surfaceOk.reason})`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_blocked",
+        message: err,
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+          phase_2i_quantity_gate_manifest: gateManifest,
+          selector_used: qtySel.trim(),
+          dom_snapshot_before: snapBefore,
+          quantity_typing_performed: false,
+          code_field_touched: false,
+          block_reason: surfaceOk.reason,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (snapBefore.disabled || snapBefore.readOnly) {
+    const err = "Phase 2j: quantity field disabled or read-only";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_blocked",
+        message: err,
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+          phase_2i_quantity_gate_manifest: gateManifest,
+          selector_used: qtySel.trim(),
+          dom_snapshot_before: snapBefore,
+          quantity_typing_performed: false,
+          code_field_touched: false,
+          block_reason: "disabled_or_readonly",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const rawPayload = await collectPhase2gRiskPayloadFromLocator(loc);
+  const mutation_risk = computePhase2gExtendedMutationRisk(rawPayload);
+
+  if (mutation_risk.rehearsal_blocked) {
+    const err = `Phase 2j: extended mutation risk blocked: ${mutation_risk.block_reasons.join("|")}`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_blocked",
+        message: err,
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+          phase_2i_quantity_gate_manifest: gateManifest,
+          selector_used: qtySel.trim(),
+          dom_snapshot_before: snapBefore,
+          mutation_risk,
+          quantity_typing_performed: false,
+          code_field_touched: false,
+          block_reason: "extended_mutation_risk",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const codeParityBefore = await readCodeFieldValueLengthParity(
+    page,
+    config.addByCodeCodeFieldSelector,
+  );
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2j_pre_type_snapshot",
+        message:
+          "Phase 2j checkpoint before quantity fill (no code interaction; no Enter)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2j_pre_type_evidence",
+      message:
+        "Phase 2j pre-typing evidence (quantity locator verified; Phase 2i gates echoed; non-mutating intent)",
+      attributes: {
+        phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+        phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+        phase_2i_quantity_gate_manifest: gateManifest,
+        selector_used: qtySel.trim(),
+        dom_snapshot_before: snapBefore,
+        mutation_risk,
+        mutation_risk_checks_used,
+        code_field_parity_before: codeParityBefore,
+        run_non_mutating_intent:
+          "no_submit_validate_checkout_add_to_cart_no_code_field_interaction",
+        quantity_test_value_redacted: "[length_only_in_post_findings]",
+      },
+    }),
+  );
+
+  const blockedBefore =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  try {
+    await loc.fill(testQuantity, { timeout: 8000 });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_blocked",
+        message: `Phase 2j: fill failed: ${m}`,
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+          phase_2i_quantity_gate_manifest: gateManifest,
+          selector_used: qtySel.trim(),
+          dom_snapshot_before: snapBefore,
+          mutation_risk,
+          quantity_typing_performed: false,
+          code_field_touched: false,
+          block_reason: `fill_error:${m}`,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(`Phase 2j quantity fill failed: ${m}`);
+  }
+
+  await new Promise((r) => setTimeout(r, 250));
+
+  if (allowBlur) {
+    try {
+      if (typeof loc.blur === "function") {
+        await loc.blur({ timeout: 3000 });
+      } else {
+        await loc.evaluate((el) => {
+          if (el instanceof HTMLElement) {
+            el.blur();
+          }
+        });
+      }
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+
+      evidenceCollected.push(
+        buildEvidence({
+          kind: "mlcc_add_by_code_probe",
+          stage: "mlcc_phase_2j_quantity_blocked",
+          message: `Phase 2j: blur failed: ${m}`,
+          attributes: {
+            phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+            selector_used: qtySel.trim(),
+            quantity_typing_performed: true,
+            code_field_touched: false,
+            block_reason: `blur_error:${m}`,
+            mutation_risk_checks_used,
+          },
+        }),
+      );
+
+      throw new Error(`Phase 2j blur failed: ${m}`);
+    }
+
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  const blockedAfterType =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_during_type =
+    blockedBefore != null && blockedAfterType != null
+      ? blockedAfterType - blockedBefore
+      : null;
+
+  const snapAfterType = await readFieldDomSnapshot(loc);
+
+  let field_cleared_after = false;
+  let network_guard_delta_during_clear = null;
+  let run_remained_fully_non_mutating = true;
+
+  const codeParityAfterType = await readCodeFieldValueLengthParity(
+    page,
+    config.addByCodeCodeFieldSelector,
+  );
+
+  if (
+    codeParityBefore.observed &&
+    codeParityAfterType.observed &&
+    codeParityBefore.value_length !== codeParityAfterType.value_length
+  ) {
+    run_remained_fully_non_mutating = false;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_blocked",
+        message:
+          "Phase 2j stopped: tenant code field value length changed without code interaction",
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          phase_2i_quantity_gate_manifest: gateManifest,
+          selector_used: qtySel.trim(),
+          code_field_parity_before: codeParityBefore,
+          code_field_parity_after_type: codeParityAfterType,
+          quantity_typing_performed: true,
+          code_field_touched: false,
+          block_reason: "code_field_value_length_drift_observed",
+          mutation_risk_checks_used,
+          test_quantity_length: testQuantity.length,
+          test_quantity_redacted: "[length_only_not_value]",
+        },
+      }),
+    );
+
+    throw new Error(
+      "Phase 2j: code field value length changed during quantity rehearsal (stop; capture evidence)",
+    );
+  }
+
+  if (
+    network_guard_delta_during_type != null &&
+    network_guard_delta_during_type > 0
+  ) {
+    run_remained_fully_non_mutating = false;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_findings",
+        message:
+          "Phase 2j stopped: network guard saw new blocked requests during quantity typing; field not cleared",
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+          phase_2i_quantity_gate_manifest: gateManifest,
+          selector_used: qtySel.trim(),
+          test_quantity_length: testQuantity.length,
+          test_quantity_redacted: "[length_only_not_value]",
+          dom_snapshot_before: snapBefore,
+          dom_snapshot_after_type: snapAfterType,
+          mutation_risk,
+          mutation_risk_checks_used,
+          quantity_typing_performed: true,
+          code_field_touched: false,
+          code_field_parity_before: codeParityBefore,
+          code_field_parity_after_type: codeParityAfterType,
+          network_guard_blocked_before: blockedBefore,
+          network_guard_blocked_after_type: blockedAfterType,
+          network_guard_delta_during_type,
+          field_cleared_after: false,
+          blur_used: allowBlur,
+          clear_skipped_reason:
+            "network_abort_during_type_clearing_would_be_ambiguous_stop_hard_fail",
+          run_remained_fully_non_mutating: false,
+          disclaimer:
+            "single_run_observation_does_not_generalize_quantity_safety_no_code_plus_quantity_combined_interaction_no_cart_state_proof",
+        },
+      }),
+    );
+
+    throw new Error(
+      "Phase 2j quantity rehearsal: network guard triggered during typing (cart/order mutation URL pattern aborted)",
+    );
+  }
+
+  const blockedBeforeClear = blockedAfterType;
+
+  try {
+    await loc.fill("", { timeout: 8000 });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_findings",
+        message: `Phase 2j: clear fill failed: ${m}`,
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          selector_used: qtySel.trim(),
+          test_quantity_length: testQuantity.length,
+          dom_snapshot_after_type: snapAfterType,
+          quantity_typing_performed: true,
+          code_field_touched: false,
+          field_cleared_after: false,
+          blur_used: allowBlur,
+          clear_error: m,
+          run_remained_fully_non_mutating: false,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(`Phase 2j clear failed: ${m}`);
+  }
+
+  await new Promise((r) => setTimeout(r, 200));
+
+  const blockedAfterClear =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  network_guard_delta_during_clear =
+    blockedBeforeClear != null && blockedAfterClear != null
+      ? blockedAfterClear - blockedBeforeClear
+      : null;
+
+  field_cleared_after = true;
+
+  if (
+    network_guard_delta_during_clear != null &&
+    network_guard_delta_during_clear > 0
+  ) {
+    run_remained_fully_non_mutating = false;
+  }
+
+  const snapAfterClear = await readFieldDomSnapshot(loc);
+
+  const codeParityAfterClear = await readCodeFieldValueLengthParity(
+    page,
+    config.addByCodeCodeFieldSelector,
+  );
+
+  if (
+    codeParityBefore.observed &&
+    codeParityAfterClear.observed &&
+    codeParityBefore.value_length !== codeParityAfterClear.value_length
+  ) {
+    run_remained_fully_non_mutating = false;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2j_quantity_findings",
+        message:
+          "Phase 2j: code field value length changed after quantity clear (unexpected drift)",
+        attributes: {
+          phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+          selector_used: qtySel.trim(),
+          code_field_parity_before: codeParityBefore,
+          code_field_parity_after_clear: codeParityAfterClear,
+          quantity_typing_performed: true,
+          field_cleared_after,
+          run_remained_fully_non_mutating: false,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(
+      "Phase 2j: code field value length drift after quantity clear",
+    );
+  }
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2j_post_clear_snapshot",
+        message: "Phase 2j checkpoint after quantity clear fill",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2j_quantity_findings",
+      message:
+        "Phase 2j quantity typing rehearsal complete (code field not interacted; truthful single-run bounds)",
+      attributes: {
+        phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+        phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+        phase_2i_quantity_gate_manifest: gateManifest,
+        selector_used: qtySel.trim(),
+        test_quantity_length: testQuantity.length,
+        test_quantity_redacted: "[length_only_not_value]",
+        dom_snapshot_before: snapBefore,
+        dom_snapshot_after_type: snapAfterType,
+        dom_snapshot_after_clear: snapAfterClear,
+        mutation_risk,
+        mutation_risk_checks_used,
+        quantity_typing_performed: true,
+        code_field_touched: false,
+        code_field_policy: "never_interacted_in_phase_2j",
+        code_field_parity_before: codeParityBefore,
+        code_field_parity_after_clear: codeParityAfterClear,
+        network_guard_blocked_before: blockedBefore,
+        network_guard_blocked_after_type: blockedAfterType,
+        network_guard_delta_during_type,
+        network_guard_blocked_after_clear: blockedAfterClear,
+        network_guard_delta_during_clear,
+        field_cleared_after,
+        blur_used: allowBlur,
+        run_remained_fully_non_mutating,
+        interaction_method: allowBlur
+          ? "playwright_locator_fill_optional_blur_no_enter_no_clicks"
+          : "playwright_locator_fill_no_enter_no_blur_no_clicks",
+        disclaimer:
+          "observed_no_new_layer2_aborts_during_quantity_type_and_clear_on_this_run_only_does_not_prove_general_quantity_safety_or_server_cart_state_no_code_plus_quantity_combined_phase",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2j_quantity_complete",
+    progressMessage:
+      "Phase 2j complete (quantity only; no validate/add-to-cart/checkout/submit)",
+  });
+
+  return {
+    phase_2j_policy_version: PHASE_2J_QUANTITY_POLICY_VERSION,
+    phase_2i_policy_version: PHASE_2I_POLICY_VERSION,
+    quantity_typing_performed: true,
+    code_field_touched: false,
+    field_cleared_after,
+    run_remained_fully_non_mutating,
+    network_guard_delta_during_type,
+    network_guard_delta_during_clear,
+    mutation_risk_checks_used,
+    mutation_risk,
+    blur_used: allowBlur,
   };
 }
 
