@@ -11,7 +11,8 @@ The maintainable UI lives in `apps/admin` and is served by this API on the **sam
 | `GET /operator-review/app/assets/*` | Hashed static assets from Vite. |
 | `GET/POST/PATCH/DELETE /operator-review/session` | Session (unchanged). |
 | `PATCH /operator-review/session/store` | Store switch (unchanged). |
-| `GET/POST /operator-review/api/...` | Operator API (unchanged). |
+| `GET/POST /operator-review/api/...` | Operator queue, bundle, actions (unchanged). |
+| `GET /operator-review/api/diagnostics/overview` | Operator session required. Store-scoped execution aggregates + recent `lk_system_diagnostics` (this store + `store_id` null). Optional query: `days`, `diag_limit`, `run_limit`. |
 
 There is no path collision: the SPA is under `/operator-review/app`, APIs under `/operator-review/session` and `/operator-review/api`.
 

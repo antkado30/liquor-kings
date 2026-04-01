@@ -66,3 +66,12 @@ export async function postRunAction(
     body: JSON.stringify(body),
   });
 }
+
+/** Operator session required. Query: days, diag_limit, run_limit (optional). */
+export async function getDiagnosticsOverview(query?: string): Promise<Response> {
+  const q = query && query.length > 0 ? `?${query}` : "";
+  return fetch(`${BASE}/api/diagnostics/overview${q}`, {
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+  });
+}

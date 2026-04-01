@@ -6,6 +6,7 @@ import {
   getExecutionRunOperatorReviewBundleById,
   listExecutionRunsForOperatorReview,
 } from "../services/execution-run.service.js";
+import { getOperatorDiagnosticsOverview } from "../services/operator-diagnostics.service.js";
 import { logSystemDiagnostic, DIAGNOSTIC_KIND } from "../services/diagnostics.service.js";
 
 const router = express.Router();
@@ -309,6 +310,26 @@ router.post("/api/runs/:runId/actions", requireOperatorSession, async (req, res)
       reason,
       note,
       actorId: req.operatorSession.userId,
+    },
+  );
+  return res.status(statusCode).json(body);
+});
+
+router.get("/api/diagnostics/overview", requireOperatorSession, async (req, res) => {
+  const daysRaw = Number.parseInt(String(req.query.days ?? "7"), 10);
+  const days = Number.isNaN(daysRaw) ? 7 : Math.min(90, Math.max(1, daysRaw));
+  const diagRaw = Number.parseInt(String(req.query.diag_limit ?? "120"), 10);
+  const diagLimit = Number.isNaN(diagRaw) ? 120 : Math.min(500, Math.max(10, diagRaw));
+  const runsCapRaw = Number.parseInt(String(req.query.run_limit ?? "5000"), 10);
+  const maxRunRows = Number.isNaN(runsCapRaw) ? 5000 : Math.min(20000, Math.max(100, runsCapRaw));
+
+  const { statusCode, body } = await getOperatorDiagnosticsOverview(
+    supabase,
+    req.operatorSession.storeId,
+    {
+      runWindowDays: days,
+      diagLimit,
+      maxRunRows,
     },
   );
   return res.status(statusCode).json(body);

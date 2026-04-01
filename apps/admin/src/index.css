@@ -146,6 +146,93 @@ a.admin-nav-link.active {
 .back-link:hover {
   text-decoration: underline;
 }
+.diagnostics-page .diag-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.diag-card {
+  padding: 10px 12px;
+}
+.diag-card-label {
+  font-size: 11px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.diag-card-value {
+  font-size: 22px;
+  font-weight: 700;
+  margin-top: 4px;
+}
+.diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.diag-table th,
+.diag-table td {
+  border-bottom: 1px solid #e5e7eb;
+  padding: 6px 8px;
+  text-align: left;
+}
+.diag-table th {
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 12px;
+}
+.diag-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.diag-list-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: #fafafa;
+  font-size: 12px;
+}
+.diag-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.scope-pill {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.scope-pill.store {
+  background: #dbeafe;
+  color: #1e40af;
+}
+.scope-pill.global {
+  background: #f3f4f6;
+  color: #374151;
+}
+.diag-pre {
+  margin: 6px 0 0;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  font-size: 11px;
+  overflow: auto;
+  max-height: 120px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diag-meta {
+  margin-top: 12px;
+  padding: 12px;
+}
 .bootstrap-wait {
   margin: 16px auto;
   max-width: 480px;
