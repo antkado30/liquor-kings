@@ -6,6 +6,7 @@ import {
   buildPlaywrightSelectorFromHint,
   classifyMutationBoundaryControl,
   computePhase2gExtendedMutationRisk,
+  diffPhase2oObservationSnapshots,
   evaluatePhase2fOpenCandidateEligibility,
   evaluatePhase2nAddApplyCandidateEligibility,
   isProbeUiTextUnsafe,
@@ -16,6 +17,7 @@ import {
   parsePhase2jTestQuantity,
   parsePhase2lFieldOrder,
   parsePhase2nAddApplyCandidateSelectors,
+  parsePhase2oSettleMs,
   parseSafeOpenCandidateSelectors,
   PHASE_2G_TYPING_POLICY_VERSION,
   PHASE_2J_QUANTITY_POLICY_VERSION,
@@ -261,6 +263,47 @@ describe("evaluatePhase2fOpenCandidateEligibility", () => {
       [],
     );
     expect(r.eligible).toBe(false);
+  });
+});
+
+describe("parsePhase2oSettleMs", () => {
+  it("defaults to 500 when blank", () => {
+    expect(parsePhase2oSettleMs(null).ok).toBe(true);
+    expect(parsePhase2oSettleMs(null).value).toBe(500);
+    expect(parsePhase2oSettleMs("  ").value).toBe(500);
+  });
+
+  it("caps at 5000", () => {
+    expect(parsePhase2oSettleMs("99999").value).toBe(5000);
+  });
+
+  it("rejects negative", () => {
+    expect(parsePhase2oSettleMs("-1").ok).toBe(false);
+  });
+});
+
+describe("diffPhase2oObservationSnapshots", () => {
+  it("detects url change", () => {
+    const d = diffPhase2oObservationSnapshots({ url: "a" }, { url: "b" });
+    expect(d.url_changed).toBe(true);
+    expect(d.any_heuristic_dom_or_signal_delta).toBe(true);
+  });
+
+  it("reports no delta when key fields match", () => {
+    const snap = {
+      url: "u",
+      title: "t",
+      ui_open_signals: { open_signal: true },
+      visible_input_field_summary: { code_field_detected: true },
+      tenant_code_field_state: { visible: true },
+      tenant_quantity_field_state: { visible: false },
+      body_text_digest: { char_length: 10, head_snippet: "hello" },
+      status_alert_and_live_region_samples: [],
+      inferred_cart_or_line_text_clues: { regex_hits_visible_text_only: [] },
+      add_apply_selector_states: [],
+    };
+    const d = diffPhase2oObservationSnapshots(snap, { ...snap });
+    expect(d.any_heuristic_dom_or_signal_delta).toBe(false);
   });
 });
 

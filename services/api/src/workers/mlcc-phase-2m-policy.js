@@ -1,11 +1,11 @@
 /**
  * Phase 2m — canonical add-line / apply-line (pre-cart commit) approval model and post-add/apply ladder.
- * Imported by mlcc-browser-add-by-code-probe.js only (Phase 2n echoes this manifest in evidence).
+ * Imported by mlcc-browser-add-by-code-probe.js only (Phases 2n/2o echo manifest and ladder in evidence).
  * mlcc-browser-worker.js must not import this module (verify:lk:rpa-safety).
  * Bump version when add/apply-line criteria or ladder semantics change.
  */
 
-export const PHASE_2M_POLICY_VERSION = "lk-rpa-2m-2";
+export const PHASE_2M_POLICY_VERSION = "lk-rpa-2m-3";
 
 /**
  * Approval model for Phase 2n: **one** bounded add-line / apply / equivalent control click when env-gated.
@@ -63,7 +63,7 @@ export function buildPhase2mAddApplyLineFutureGateManifest() {
 }
 
 /**
- * Ordered ladder from add/apply-line onward; each step after 2n stays out of scope until repo + verify + operator approval.
+ * Ordered ladder from add/apply-line onward; steps after 2o stay out of scope until repo + verify + operator approval.
  */
 export function buildPhase2mPostAddApplyLadder() {
   return {
@@ -90,7 +90,9 @@ export function buildPhase2mPostAddApplyLadder() {
         id: "post_add_apply_observation",
         label:
           "Read-only observation after add/apply (DOM signals, optional network guard tally, no further mutation clicks)",
-        status: "out_of_scope_until_separate_approval",
+        status: "implemented_as_phase_2o_when_env_gated",
+        implementation_note:
+          "runtime_mlcc_browser_add_by_code_probe_runAddByCodePhase2oPostAddApplyObservation",
         forbids_until_approved: [
           "validate",
           "checkout",

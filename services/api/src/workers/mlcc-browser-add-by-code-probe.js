@@ -2003,6 +2003,101 @@ export const PHASE_2L_COMBINED_POLICY_VERSION = "lk-rpa-2l-1";
 /** Phase 2n: one bounded add/apply-line click; aligns with mlcc-phase-2m-policy.js gate manifest. */
 export const PHASE_2N_ADD_APPLY_POLICY_VERSION = "lk-rpa-2n-1";
 
+/** Phase 2o: read-only DOM / status observation after Phase 2n; no clicks, no validate/checkout/submit. */
+export const PHASE_2O_OBSERVATION_POLICY_VERSION = "lk-rpa-2o-1";
+
+/**
+ * Bounded settle wait between Phase 2o pre/post read-only scrapes (ms). Default 500; max 5000.
+ */
+export function parsePhase2oSettleMs(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return { ok: true, value: 500 };
+  }
+
+  const n = Number.parseInt(String(raw).trim(), 10);
+
+  if (!Number.isFinite(n) || n < 0) {
+    return {
+      ok: false,
+      value: null,
+      reason: "must_be_non_negative_integer_ms",
+    };
+  }
+
+  return { ok: true, value: Math.min(n, 5000) };
+}
+
+/**
+ * Compare two Phase 2o observation payloads (truthful: visible DOM heuristic only, not server cart).
+ */
+export function diffPhase2oObservationSnapshots(pre, post) {
+  const preUrl = pre?.url ?? "";
+  const postUrl = post?.url ?? "";
+  const preTitle = pre?.title ?? "";
+  const postTitle = post?.title ?? "";
+  const preOpen = Boolean(pre?.ui_open_signals?.open_signal);
+  const postOpen = Boolean(post?.ui_open_signals?.open_signal);
+  const preCodeDet = Boolean(pre?.visible_input_field_summary?.code_field_detected);
+  const postCodeDet = Boolean(post?.visible_input_field_summary?.code_field_detected);
+  const preQtyDet = Boolean(pre?.visible_input_field_summary?.quantity_field_detected);
+  const postQtyDet = Boolean(post?.visible_input_field_summary?.quantity_field_detected);
+  const preCodeVis = Boolean(pre?.tenant_code_field_state?.visible);
+  const postCodeVis = Boolean(post?.tenant_code_field_state?.visible);
+  const preQtyVis = Boolean(pre?.tenant_quantity_field_state?.visible);
+  const postQtyVis = Boolean(post?.tenant_quantity_field_state?.visible);
+  const preBodyLen = pre?.body_text_digest?.char_length ?? -1;
+  const postBodyLen = post?.body_text_digest?.char_length ?? -1;
+  const preHead = pre?.body_text_digest?.head_snippet ?? "";
+  const postHead = post?.body_text_digest?.head_snippet ?? "";
+  const preStatusN = Array.isArray(pre?.status_alert_and_live_region_samples)
+    ? pre.status_alert_and_live_region_samples.length
+    : 0;
+  const postStatusN = Array.isArray(post?.status_alert_and_live_region_samples)
+    ? post.status_alert_and_live_region_samples.length
+    : 0;
+  const preHits = JSON.stringify(
+    pre?.inferred_cart_or_line_text_clues?.regex_hits_visible_text_only ?? [],
+  );
+  const postHits = JSON.stringify(
+    post?.inferred_cart_or_line_text_clues?.regex_hits_visible_text_only ?? [],
+  );
+
+  const addApplyPre = JSON.stringify(pre?.add_apply_selector_states ?? []);
+  const addApplyPost = JSON.stringify(post?.add_apply_selector_states ?? []);
+
+  const any_heuristic_delta =
+    preUrl !== postUrl ||
+    preTitle !== postTitle ||
+    preOpen !== postOpen ||
+    preCodeDet !== postCodeDet ||
+    preQtyDet !== postQtyDet ||
+    preCodeVis !== postCodeVis ||
+    preQtyVis !== postQtyVis ||
+    preBodyLen !== postBodyLen ||
+    preHead !== postHead ||
+    preStatusN !== postStatusN ||
+    preHits !== postHits ||
+    addApplyPre !== addApplyPost;
+
+  return {
+    url_changed: preUrl !== postUrl,
+    title_changed: preTitle !== postTitle,
+    open_signal_changed: preOpen !== postOpen,
+    visible_input_code_field_detected_changed: preCodeDet !== postCodeDet,
+    visible_input_quantity_field_detected_changed: preQtyDet !== postQtyDet,
+    tenant_code_field_visible_changed: preCodeVis !== postCodeVis,
+    tenant_quantity_field_visible_changed: preQtyVis !== postQtyVis,
+    body_char_length_changed: preBodyLen !== postBodyLen,
+    body_head_snippet_changed: preHead !== postHead,
+    status_or_live_region_sample_count_changed: preStatusN !== postStatusN,
+    inferred_regex_hits_changed: preHits !== postHits,
+    add_apply_selector_states_changed: addApplyPre !== addApplyPost,
+    any_heuristic_dom_or_signal_delta: any_heuristic_delta,
+    labeling:
+      "client_visible_text_and_dom_summary_diff_only_not_inventory_or_server_cart_proof",
+  };
+}
+
 /**
  * Tenant-documented fill order for Phase 2l (code first vs quantity first).
  */
@@ -4151,6 +4246,487 @@ export async function runAddByCodePhase2nAddApplyLineSingleClick({
         ? null
         : network_guard_delta_during_click === 0,
     phase_2m_gate_manifest_version: gateManifest.version,
+  };
+}
+
+async function summarizePhase2oTenantFieldState(page, selector) {
+  if (!selector || typeof selector !== "string" || !selector.trim()) {
+    return { configured: false, observed: false };
+  }
+
+  const sel = selector.trim();
+  const loc = page.locator(sel).first();
+  const n = await loc.count().catch(() => 0);
+
+  if (n === 0) {
+    return {
+      configured: true,
+      selector_used: sel,
+      observed: true,
+      visible: false,
+      match_count: 0,
+    };
+  }
+
+  const visible = await loc.isVisible().catch(() => false);
+
+  if (!visible) {
+    return {
+      configured: true,
+      selector_used: sel,
+      observed: true,
+      visible: false,
+      match_count: n,
+    };
+  }
+
+  const dom_snapshot = await readFieldDomSnapshot(loc);
+
+  return {
+    configured: true,
+    selector_used: sel,
+    observed: true,
+    visible: true,
+    match_count: n,
+    dom_snapshot,
+  };
+}
+
+/**
+ * Single read-only scrape for Phase 2o (no clicks). Exported for unit tests of diff helper inputs.
+ */
+export async function collectPhase2oReadOnlyObservationSnapshot(page, config) {
+  const url = page.url();
+  let title = null;
+
+  try {
+    const t = await page.title();
+
+    title = t || null;
+  } catch {
+    title = null;
+  }
+
+  const ui_open_signals = await measureAddByCodeUiOpenSignals(page, config);
+  const visibleInputs = await collectVisibleInputs(page);
+  const visible_input_field_summary = classifyCodeAndQtyFields(visibleInputs);
+
+  const tenant_code_field_state = await summarizePhase2oTenantFieldState(
+    page,
+    config.addByCodeCodeFieldSelector,
+  );
+  const tenant_quantity_field_state = await summarizePhase2oTenantFieldState(
+    page,
+    config.addByCodeQtyFieldSelector,
+  );
+
+  const add_apply_selector_states = [];
+  const candidates = config.addByCodePhase2nAddApplyCandidateSelectors ?? [];
+
+  for (const s of candidates) {
+    const loc = page.locator(s).first();
+    const n = await loc.count().catch(() => 0);
+    const vis = n > 0 && (await loc.isVisible().catch(() => false));
+    const dis = n > 0 ? await loc.isDisabled().catch(() => false) : null;
+    const row = {
+      selector: s,
+      match_count: n,
+      visible: vis,
+      disabled: dis,
+    };
+
+    if (n > 0) {
+      const r = await extractMutationBoundaryRowFromLocator(loc);
+
+      row.text_sample = (r.text ?? "").slice(0, 200);
+      row.tag = r.tag;
+    }
+
+    add_apply_selector_states.push(row);
+  }
+
+  const status_alert_and_live_region_samples = await page.evaluate(() => {
+    const isVis = (el) => {
+      if (!(el instanceof HTMLElement)) {
+        return false;
+      }
+
+      const st = window.getComputedStyle(el);
+
+      if (
+        st.display === "none" ||
+        st.visibility === "hidden" ||
+        Number(st.opacity) === 0
+      ) {
+        return false;
+      }
+
+      const r = el.getBoundingClientRect();
+
+      return r.width >= 2 && r.height >= 2;
+    };
+
+    const out = [];
+    const seen = new Set();
+
+    const push = (channel, el) => {
+      const txt = (el.innerText || el.textContent || "").trim().slice(0, 400);
+
+      if (!txt) {
+        return;
+      }
+
+      const key = `${channel}|${txt.slice(0, 100)}`;
+
+      if (seen.has(key)) {
+        return;
+      }
+
+      seen.add(key);
+      out.push({ channel, text_sample: txt });
+    };
+
+    document
+      .querySelectorAll("[role=\"alert\"]")
+      .forEach((el) => push("role=alert", el));
+    document
+      .querySelectorAll("[aria-live=\"polite\"], [aria-live=\"assertive\"]")
+      .forEach((el) => push("aria-live", el));
+
+    for (const cls of [
+      ".toast",
+      ".Toast",
+      ".notification",
+      ".Notification",
+      ".alert",
+      ".Alert",
+      ".snackbar",
+      ".Snackbar",
+    ]) {
+      try {
+        document.querySelectorAll(cls).forEach((el) => push(`class:${cls}`, el));
+      } catch {
+        /* ignore invalid selector environments */
+      }
+    }
+
+    return out.slice(0, 24);
+  });
+
+  const body_text_digest = await page.evaluate(() => {
+    const raw = document.body
+      ? (document.body.innerText || "").replace(/\s+/g, " ").trim()
+      : "";
+
+    return {
+      char_length: raw.length,
+      head_snippet: raw.slice(0, 1200),
+    };
+  });
+
+  const inferred_cart_or_line_text_clues = await page.evaluate(() => {
+    const t = document.body
+      ? (document.body.innerText || "").slice(0, 25_000)
+      : "";
+    const hits = [];
+    const patterns = [
+      /\d+\s*(lines?|line\s+items?|items?)\b/gi,
+      /\(\s*\d+\s*\)\s*items?/gi,
+      /items?\s+in\s+(your\s+)?cart/gi,
+      /cart:\s*\d+/gi,
+      /subtotal/gi,
+    ];
+
+    for (const re of patterns) {
+      re.lastIndex = 0;
+      let m;
+
+      while ((m = re.exec(t)) && hits.length < 14) {
+        hits.push(String(m[0]).slice(0, 120));
+      }
+    }
+
+    return {
+      regex_hits_visible_text_only: hits,
+      heuristic_inference_not_inventory_or_server_cart_truth: true,
+    };
+  });
+
+  return {
+    captured_at: "read_only_phase_2o_snapshot",
+    url,
+    title,
+    ui_open_signals,
+    visible_input_field_summary,
+    tenant_code_field_state,
+    tenant_quantity_field_state,
+    add_apply_selector_states,
+    status_alert_and_live_region_samples,
+    body_text_digest,
+    inferred_cart_or_line_text_clues,
+  };
+}
+
+/**
+ * Phase 2o: read-only observation after Phase 2n click. No further clicks, validate, checkout, or submit.
+ */
+export async function runAddByCodePhase2oPostAddApplyObservation({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  buildStepEvidence,
+  phase2nResult,
+}) {
+  const gateManifest = buildPhase2mAddApplyLineFutureGateManifest();
+  const postApplyLadder = buildPhase2mPostAddApplyLadder();
+  const settleMs = config.addByCodePhase2oSettleMs ?? 500;
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2o_observation_start",
+    progressMessage:
+      "Phase 2o: read-only post-add/apply observation (no clicks; no validate/checkout/submit)",
+  });
+
+  const mutation_risk_checks_used = [
+    `phase_2m_policy_version_${PHASE_2M_POLICY_VERSION}`,
+    `phase_2o_policy_version_${PHASE_2O_OBSERVATION_POLICY_VERSION}`,
+    "read_only_no_mutation_clicks_no_second_add_apply",
+    "layer_2_guardstats_blockedrequestcount_delta_zero_required_across_observation_window",
+    "phase_2n_prerequisite_add_apply_click_performed_true",
+    "post_add_apply_ladder_step_echoed_from_phase_2m",
+  ];
+
+  if (!phase2nResult || phase2nResult.add_apply_click_performed !== true) {
+    const err =
+      "Phase 2o requires Phase 2n to have completed with add_apply_click_performed=true in the same run";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2o_observation_blocked",
+        message: err,
+        attributes: {
+          phase_2o_policy_version: PHASE_2O_OBSERVATION_POLICY_VERSION,
+          phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+          phase_2m_post_add_apply_ladder: postApplyLadder,
+          observation_performed: false,
+          block_reason: "phase_2n_prerequisite_missing_or_no_click",
+          phase_2n_snapshot_for_gate: phase2nResult
+            ? {
+                add_apply_click_performed:
+                  phase2nResult.add_apply_click_performed ?? null,
+              }
+            : null,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const blocked_at_observation_start =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2o_pre_observation_snapshot",
+        message:
+          "Phase 2o pre-observation page snapshot (read-only; before settle window)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  const observation_pre = await collectPhase2oReadOnlyObservationSnapshot(
+    page,
+    config,
+  );
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2o_pre_observation_evidence",
+      message:
+        "Phase 2o pre-settle read-only DOM/status scrape (no clicks; not server cart truth)",
+      attributes: {
+        phase_2o_policy_version: PHASE_2O_OBSERVATION_POLICY_VERSION,
+        phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+        phase_2m_add_apply_gate_manifest: gateManifest,
+        ladder_step_post_add_apply_observation: postApplyLadder.steps?.[1] ?? null,
+        settle_ms_configured: settleMs,
+        observation_pre,
+        network_guard_blocked_request_count_at_window_start:
+          blocked_at_observation_start,
+        mutation_risk_checks_used,
+        disclaimer_dom_observation_only:
+          "visible_text_and_field_snapshots_do_not_prove_server_cart_line_count_or_inventory_outcome",
+        disclaimer_no_validate_readiness:
+          "this_phase_does_not_assess_readiness_for_validate_checkout_or_submit",
+      },
+    }),
+  );
+
+  await new Promise((r) => setTimeout(r, settleMs));
+
+  const blocked_after_settle =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_during_pre_scrape =
+    blocked_at_observation_start != null && blocked_after_settle != null
+      ? blocked_after_settle - blocked_at_observation_start
+      : null;
+
+  if (
+    network_guard_delta_during_pre_scrape != null &&
+    network_guard_delta_during_pre_scrape !== 0
+  ) {
+    const err = `Phase 2o: Layer 2 blocked request counter increased during observation window (delta=${network_guard_delta_during_pre_scrape} after pre-scrape/settle)`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2o_observation_blocked",
+        message: err,
+        attributes: {
+          phase_2o_policy_version: PHASE_2O_OBSERVATION_POLICY_VERSION,
+          observation_performed: false,
+          observation_pre,
+          block_reason: "positive_layer2_abort_delta_during_observation",
+          network_guard_blocked_at_window_start: blocked_at_observation_start,
+          network_guard_blocked_after_settle: blocked_after_settle,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2o_post_observation_snapshot",
+        message:
+          "Phase 2o post-settle snapshot (read-only; no further UI actions)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  const observation_post = await collectPhase2oReadOnlyObservationSnapshot(
+    page,
+    config,
+  );
+
+  const blocked_at_observation_end =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_full_observation_window =
+    blocked_at_observation_start != null && blocked_at_observation_end != null
+      ? blocked_at_observation_end - blocked_at_observation_start
+      : null;
+
+  if (
+    network_guard_delta_full_observation_window != null &&
+    network_guard_delta_full_observation_window !== 0
+  ) {
+    const err = `Phase 2o: Layer 2 blocked request counter increased during full observation window (delta=${network_guard_delta_full_observation_window})`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2o_observation_blocked",
+        message: err,
+        attributes: {
+          phase_2o_policy_version: PHASE_2O_OBSERVATION_POLICY_VERSION,
+          observation_performed: false,
+          observation_pre,
+          observation_post,
+          block_reason: "positive_layer2_abort_delta_full_observation_window",
+          network_guard_blocked_at_window_start: blocked_at_observation_start,
+          network_guard_blocked_at_window_end: blocked_at_observation_end,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const observation_diff = diffPhase2oObservationSnapshots(
+    observation_pre,
+    observation_post,
+  );
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2o_observation_findings",
+      message:
+        "Phase 2o read-only observation complete (no validate/checkout/submit; no additional add/apply)",
+      attributes: {
+        phase_2o_policy_version: PHASE_2O_OBSERVATION_POLICY_VERSION,
+        phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+        phase_2m_post_add_apply_ladder: postApplyLadder,
+        settle_ms_used: settleMs,
+        observation_pre,
+        observation_post,
+        observation_diff,
+        clicks_performed_this_phase: 0,
+        network_guard_blocked_at_window_start: blocked_at_observation_start,
+        network_guard_blocked_at_window_end: blocked_at_observation_end,
+        network_guard_delta_full_observation_window,
+        no_new_blocked_downstream_requests_observed:
+          network_guard_delta_full_observation_window === null
+            ? null
+            : network_guard_delta_full_observation_window === 0,
+        page_appears_changed_visible_dom_heuristic:
+          observation_diff.any_heuristic_dom_or_signal_delta === true,
+        mutation_risk_checks_used,
+        disclaimer_observation_not_server_cart:
+          "browser_visible_signals_do_not_prove_server_cart_or_line_items",
+        disclaimer_regex_hits_are_inference_only:
+          "inferred_cart_or_line_text_clues_are_heuristic_pattern_hits_on_visible_text_not_inventory_proof",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2o_observation_complete",
+    progressMessage:
+      "Phase 2o complete (read-only observation only; downstream validate/checkout/submit out of scope)",
+  });
+
+  return {
+    phase_2o_policy_version: PHASE_2O_OBSERVATION_POLICY_VERSION,
+    phase_2m_policy_version: PHASE_2M_POLICY_VERSION,
+    observation_performed: true,
+    settle_ms_used: settleMs,
+    observation_diff,
+    network_guard_delta_full_observation_window,
+    no_new_blocked_downstream_requests_observed:
+      network_guard_delta_full_observation_window === null
+        ? null
+        : network_guard_delta_full_observation_window === 0,
+    page_appears_changed_visible_dom_heuristic:
+      observation_diff.any_heuristic_dom_or_signal_delta === true,
   };
 }
 
