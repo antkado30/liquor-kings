@@ -12,7 +12,7 @@ The maintainable UI lives in `apps/admin` and is served by this API on the **sam
 | `GET/POST/PATCH/DELETE /operator-review/session` | Session (unchanged). |
 | `PATCH /operator-review/session/store` | Store switch (unchanged). |
 | `GET/POST /operator-review/api/...` | Operator queue, bundle, actions (unchanged). |
-| `GET /operator-review/api/diagnostics/overview` | Operator session required. Store-scoped execution aggregates + recent `lk_system_diagnostics` (this store + `store_id` null). Optional query: `days`, `diag_limit`, `run_limit`. |
+| `GET /operator-review/api/diagnostics/overview` | Operator session required. Store-scoped execution aggregates + recent `lk_system_diagnostics` (this store + `store_id` null) + **`trends`** (24h hourly / 7d & 30d daily UTC series: runs, failures, retryable vs non-retryable fails, manual-review action counts). Optional query: `days`, `diag_limit`, `run_limit`. |
 
 There is no path collision: the SPA is under `/operator-review/app`, APIs under `/operator-review/session` and `/operator-review/api`.
 

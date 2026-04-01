@@ -15,6 +15,34 @@ type DiagRow = {
   payload_preview: string | null;
 };
 
+type TrendPoint = {
+  label: string;
+  runs: number;
+  failures: number;
+  retryable_failures: number;
+  non_retryable_failures: number;
+  manual_review_marks: number;
+};
+
+type TrendWindow = {
+  granularity: string;
+  bucket_count: number;
+  window_start_utc: string;
+  points: TrendPoint[];
+};
+
+type TrendsData = {
+  notes: string[];
+  runs_row_cap: number;
+  runs_rows_used: number;
+  runs_cap_hit: boolean;
+  manual_actions_row_cap: number;
+  manual_actions_rows_used: number;
+  manual_actions_cap_hit: boolean;
+  lookback_days: number;
+  windows: Record<"24h" | "7d" | "30d", TrendWindow>;
+};
+
 type OverviewData = {
   meta: {
     store_id: string;
@@ -31,9 +59,68 @@ type OverviewData = {
     failed_retryable_count: number;
     failed_non_retryable_count: number;
   };
+  trends?: TrendsData;
   recent_system_diagnostics: DiagRow[];
   operator_session_events: DiagRow[];
 };
+
+const TREND_WINDOWS: ("24h" | "7d" | "30d")[] = ["24h", "7d", "30d"];
+
+function maxInSeries(points: TrendPoint[], key: keyof TrendPoint): number {
+  if (!points.length) return 1;
+  const n = Math.max(
+    1,
+    ...points.map((p) => (typeof p[key] === "number" ? (p[key] as number) : 0)),
+  );
+  return n;
+}
+
+function TrendBars({
+  points,
+  field,
+  label,
+}: {
+  points: TrendPoint[];
+  field: keyof TrendPoint;
+  label: string;
+}) {
+  const max = maxInSeries(points, field);
+  const total = points.reduce((s, p) => s + (typeof p[field] === "number" ? (p[field] as number) : 0), 0);
+  if (total === 0) {
+    return (
+      <div className="trend-metric">
+        <div className="trend-metric-label">
+          {label} <span className="muted">— all buckets 0</span>
+        </div>
+        <div className="trend-bars" style={{ opacity: 0.35 }} aria-hidden>
+          {points.map((_, i) => (
+            <div key={i} className="trend-bar-col">
+              <div className="trend-bar-fill" style={{ height: 0 }} />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="trend-metric">
+      <div className="trend-metric-label">
+        {label} <span className="muted">(max {max} / bucket)</span>
+      </div>
+      <div className="trend-bars" role="img" aria-label={`${label} by bucket`}>
+        {points.map((p, i) => {
+          const v = typeof p[field] === "number" ? (p[field] as number) : 0;
+          const pct = max > 0 ? Math.round((v / max) * 100) : 0;
+          return (
+            <div key={i} className="trend-bar-col" title={`${p.label}: ${v}`}>
+              <div className="trend-bar-fill" style={{ height: `${Math.max(pct, v > 0 ? 8 : 0)}%` }} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function sumValues(o: Record<string, number>): number {
   return Object.values(o).reduce((a, b) => a + b, 0);
@@ -48,6 +135,7 @@ export function DiagnosticsPage() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<OverviewData | null>(null);
   const [msg, setMsg] = useState<{ type: FlashKind; text: string }>({ type: "", text: "" });
+  const [trendWindow, setTrendWindow] = useState<"24h" | "7d" | "30d">("7d");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -124,6 +212,120 @@ export function DiagnosticsPage() {
               {data.meta.system_diagnostics_row_cap}
             </p>
           </div>
+
+          {data.trends ? (
+            <div className="card" style={{ marginTop: 12 }}>
+              <h3 className="section-title">Execution trends (this store)</h3>
+              <p className="muted" style={{ marginTop: 0 }}>
+                UTC buckets from the last {data.trends.lookback_days} days of data (capped). Compare
+                recent buckets to see load and failure drift. Manual marks are{" "}
+                <code>mark_for_manual_review</code> actions (by action time).
+              </p>
+              <ul className="muted" style={{ margin: "0 0 12px", paddingLeft: 18, fontSize: 12 }}>
+                {data.trends.notes.map((n, i) => (
+                  <li key={i}>{n}</li>
+                ))}
+              </ul>
+              {(data.trends.runs_cap_hit || data.trends.manual_actions_cap_hit) && (
+                <div className="msg warn" style={{ marginBottom: 12 }}>
+                  Trend source data hit a row cap
+                  {data.trends.runs_cap_hit ? " (runs)" : ""}
+                  {data.trends.runs_cap_hit && data.trends.manual_actions_cap_hit ? " and" : ""}
+                  {data.trends.manual_actions_cap_hit ? " (manual actions)" : ""} — older events may be
+                  missing. Totals may undercount busy stores.
+                </div>
+              )}
+              <p className="mono muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+                trend runs: {data.trends.runs_rows_used} / cap {data.trends.runs_row_cap} · manual
+                actions: {data.trends.manual_actions_rows_used} / cap {data.trends.manual_actions_row_cap}
+              </p>
+              <div className="row" style={{ marginBottom: 12 }}>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Window:
+                </span>
+                {TREND_WINDOWS.map((w) => (
+                  <button
+                    key={w}
+                    type="button"
+                    className={trendWindow === w ? undefined : "secondary"}
+                    onClick={() => setTrendWindow(w)}
+                  >
+                    {w === "24h" ? "Last 24h" : w === "7d" ? "Last 7d" : "Last 30d"}
+                  </button>
+                ))}
+              </div>
+              {(() => {
+                const tw = data.trends.windows[trendWindow];
+                if (!tw?.points?.length) {
+                  return <p className="muted">No trend buckets for this window.</p>;
+                }
+                const sumRuns = tw.points.reduce((s, p) => s + p.runs, 0);
+                if (sumRuns === 0 && tw.points.every((p) => p.manual_review_marks === 0)) {
+                  return (
+                    <p className="muted">
+                      No runs or manual-review marks in this window (UTC). Try a longer window or
+                      refresh after activity.
+                    </p>
+                  );
+                }
+                return (
+                  <>
+                    <p className="muted" style={{ fontSize: 12 }}>
+                      Granularity: <strong>{tw.granularity}</strong> · buckets: {tw.bucket_count} ·
+                      window start (UTC): <span className="mono">{tw.window_start_utc}</span>
+                    </p>
+                    <div className="trend-spark-block">
+                      <TrendBars points={tw.points} field="runs" label="Runs" />
+                      <TrendBars points={tw.points} field="failures" label="Failures" />
+                      <TrendBars points={tw.points} field="retryable_failures" label="Retryable fails" />
+                      <TrendBars
+                        points={tw.points}
+                        field="non_retryable_failures"
+                        label="Non-retryable fails"
+                      />
+                      <TrendBars
+                        points={tw.points}
+                        field="manual_review_marks"
+                        label="Manual review marks"
+                      />
+                    </div>
+                    <div style={{ overflowX: "auto", marginTop: 12 }}>
+                      <table className="diag-table trend-table">
+                        <thead>
+                          <tr>
+                            <th>Bucket (UTC)</th>
+                            <th>Runs</th>
+                            <th>Failures</th>
+                            <th>Retryable</th>
+                            <th>Non-retry</th>
+                            <th>Manual marks</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tw.points.map((p, i) => (
+                            <tr key={i}>
+                              <td className="mono" style={{ whiteSpace: "nowrap" }}>
+                                {p.label}
+                              </td>
+                              <td>{p.runs}</td>
+                              <td>{p.failures}</td>
+                              <td>{p.retryable_failures}</td>
+                              <td>{p.non_retryable_failures}</td>
+                              <td>{p.manual_review_marks}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          ) : (
+            <div className="card msg warn" style={{ marginTop: 12 }}>
+              Trend series not available from API (upgrade API to get 24h / 7d / 30d buckets).
+            </div>
+          )}
 
           <div className="diag-cards">
             <div className="card diag-card">

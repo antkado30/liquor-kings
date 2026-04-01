@@ -233,6 +233,57 @@ a.admin-nav-link.active {
   margin-top: 12px;
   padding: 12px;
 }
+.trend-spark-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 8px;
+}
+.trend-metric-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 4px;
+}
+.trend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 56px;
+  padding: 4px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+.trend-bar-col {
+  flex: 1;
+  min-width: 3px;
+  max-width: 24px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.trend-bar-fill {
+  width: 100%;
+  min-height: 0;
+  background: #3b82f6;
+  border-radius: 2px 2px 0 0;
+}
+.trend-spark-block .trend-metric:nth-child(2) .trend-bar-fill {
+  background: #b91c1c;
+}
+.trend-spark-block .trend-metric:nth-child(3) .trend-bar-fill {
+  background: #ca8a04;
+}
+.trend-spark-block .trend-metric:nth-child(4) .trend-bar-fill {
+  background: #7c3aed;
+}
+.trend-spark-block .trend-metric:nth-child(5) .trend-bar-fill {
+  background: #ea580c;
+}
+.trend-table td,
+.trend-table th {
+  font-size: 12px;
+}
 .bootstrap-wait {
   margin: 16px auto;
   max-width: 480px;
