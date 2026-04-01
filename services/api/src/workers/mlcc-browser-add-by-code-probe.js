@@ -240,6 +240,223 @@ export function applyTenantAdvisoryForUncertain(row, classification, hints) {
 }
 
 /**
+ * Phase 2f: JSON array of CSS selectors (priority order) for tenant-approved open candidates.
+ */
+export function parseSafeOpenCandidateSelectors(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS is empty (required when Phase 2f is enabled)",
+    );
+  }
+
+  const j = JSON.parse(String(raw));
+
+  if (!Array.isArray(j) || j.length === 0) {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS must be a non-empty JSON array of strings",
+    );
+  }
+
+  const out = [];
+
+  for (const x of j) {
+    if (typeof x === "string" && x.trim() !== "") {
+      out.push(x.trim());
+    }
+  }
+
+  if (out.length === 0) {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS must contain at least one non-empty selector string",
+    );
+  }
+
+  return out;
+}
+
+/**
+ * Optional JSON array of substrings; extends which uncertain labels may open add-by-code (Phase 2f only).
+ */
+export function parsePhase2fSafeOpenTextAllowSubstrings(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return [];
+  }
+
+  const j = JSON.parse(String(raw));
+
+  if (!Array.isArray(j)) {
+    throw new Error(
+      "MLCC_ADD_BY_CODE_SAFE_OPEN_TEXT_ALLOW_SUBSTRINGS must be a JSON array of strings",
+    );
+  }
+
+  return j
+    .filter((x) => typeof x === "string" && x.trim() !== "")
+    .map((x) => x.trim());
+}
+
+const PHASE_2F_DEFAULT_OPEN_INTENT_RES = [
+  /add\s*by\s*code/i,
+  /enter\s*code/i,
+  /product\s*code/i,
+  /item\s*code/i,
+  /^sku\b/i,
+  /lookup\b.*\bcode/i,
+];
+
+function textMatchesDefaultSafeOpenIntent(text) {
+  const t = String(text ?? "").trim();
+
+  return PHASE_2F_DEFAULT_OPEN_INTENT_RES.some((re) => re.test(t));
+}
+
+function textMatchesTenantOpenSubstrings(text, substrings) {
+  if (!Array.isArray(substrings) || substrings.length === 0) {
+    return false;
+  }
+
+  const low = String(text ?? "").toLowerCase();
+
+  return substrings.some((s) => low.includes(String(s).toLowerCase()));
+}
+
+/**
+ * Phase 2f eligibility: Layer 3 pass; reject unsafe_mutation_likely; allow safe_informational
+ * or uncertain only when open-intent patterns / tenant substring allowlist match.
+ */
+export function evaluatePhase2fOpenCandidateEligibility(row, textAllowSubstrings) {
+  const text = String(row.text ?? "").trim();
+  const layer3 = isProbeUiTextUnsafe(text);
+
+  if (layer3.unsafe) {
+    return {
+      eligible: false,
+      reason: `rejected_layer3_ui_guard:${layer3.matched}`,
+    };
+  }
+
+  const classified = classifyMutationBoundaryControl(row);
+
+  if (classified.classification === "unsafe_mutation_likely") {
+    return {
+      eligible: false,
+      reason: `rejected_mutation_boundary:${classified.rationale}`,
+      classification: classified.classification,
+    };
+  }
+
+  if (classified.classification === "safe_informational") {
+    return {
+      eligible: true,
+      reason: "accepted_safe_informational_heuristic",
+      classification: classified.classification,
+    };
+  }
+
+  if (classified.classification === "uncertain") {
+    const subOk = textMatchesTenantOpenSubstrings(text, textAllowSubstrings);
+    const defOk = textMatchesDefaultSafeOpenIntent(text);
+
+    if (defOk || subOk) {
+      return {
+        eligible: true,
+        reason: subOk
+          ? "accepted_uncertain_tenant_text_allowlist"
+          : "accepted_uncertain_default_open_intent_pattern",
+        classification: classified.classification,
+        uncertain_detail: classified.uncertain_detail,
+      };
+    }
+
+    return {
+      eligible: false,
+      reason: "rejected_uncertain_without_open_intent_match",
+      classification: classified.classification,
+      uncertain_detail: classified.uncertain_detail,
+    };
+  }
+
+  return {
+    eligible: false,
+    reason: "rejected_unexpected_classification_state",
+    classification: classified.classification,
+  };
+}
+
+async function extractMutationBoundaryRowFromLocator(locator) {
+  return locator.evaluate((el) => {
+    if (!(el instanceof HTMLElement)) {
+      return {
+        tag: "",
+        text: "",
+        href: "",
+        type: null,
+        id: null,
+      };
+    }
+
+    const tag = el.tagName.toLowerCase();
+    let href = "";
+
+    if (el instanceof HTMLAnchorElement) {
+      href = el.href || "";
+    } else {
+      const h = el.getAttribute("href");
+
+      href = h || "";
+    }
+
+    const text = (el.innerText || el.textContent || "").trim().slice(0, 300);
+
+    return {
+      tag,
+      text,
+      href,
+      type: el.getAttribute("type"),
+      id: el.id || null,
+    };
+  });
+}
+
+async function measureAddByCodeUiOpenSignals(page, config) {
+  const visibleInputs = await collectVisibleInputs(page);
+  const fieldInfo = classifyCodeAndQtyFields(visibleInputs);
+
+  let tenant_code_field_visible = false;
+
+  if (config.addByCodeCodeFieldSelector) {
+    const loc = page.locator(config.addByCodeCodeFieldSelector).first();
+    const n = await loc.count().catch(() => 0);
+
+    tenant_code_field_visible =
+      n > 0 && (await loc.isVisible().catch(() => false));
+  }
+
+  let scoped_root_visible = false;
+
+  if (config.mutationBoundaryRootSelector) {
+    const rloc = page.locator(config.mutationBoundaryRootSelector).first();
+    const n = await rloc.count().catch(() => 0);
+
+    scoped_root_visible =
+      n > 0 && (await rloc.isVisible().catch(() => false));
+  }
+
+  const open_signal =
+    fieldInfo.code_field_detected ||
+    tenant_code_field_visible ||
+    scoped_root_visible;
+
+  return {
+    open_signal,
+    code_field_detected: fieldInfo.code_field_detected,
+    tenant_code_field_visible,
+    scoped_root_visible,
+    fieldInfo,
+  };
+}
+
+/**
  * Install route handler on browser context (call after newContext, before newPage).
  * @param {import('playwright').BrowserContext} context
  * @param {{ blockedRequestCount?: number } | null} [statsRef] — optional; increments when a request is aborted
@@ -444,6 +661,8 @@ export async function runAddByCodeProbePhase({
   let stopReason = null;
   let entrySelectorNotFound = false;
 
+  const skipEntryNav = config.addByCodeProbeSkipEntryNav === true;
+
   const tryOpenFromConfiguredSelector = async () => {
     const sel = config.addByCodeEntrySelector;
 
@@ -528,7 +747,7 @@ export async function runAddByCodeProbePhase({
     return false;
   };
 
-  if (!addByCodeUiReached) {
+  if (!addByCodeUiReached && !skipEntryNav) {
     await tryOpenFromConfiguredSelector();
 
     visibleInputs = await collectVisibleInputs(page);
@@ -536,7 +755,7 @@ export async function runAddByCodeProbePhase({
     addByCodeUiReached = fieldInfo.code_field_detected;
   }
 
-  if (!addByCodeUiReached && !stopReason) {
+  if (!addByCodeUiReached && !stopReason && !skipEntryNav) {
     const usedText = await tryOpenFromSafeTextControl();
 
     visibleInputs = await collectVisibleInputs(page);
@@ -548,6 +767,10 @@ export async function runAddByCodeProbePhase({
         ? "entry_selector_not_found_and_no_safe_text_control"
         : "no_safe_entry_path_found_without_dangerous_controls";
     }
+  }
+
+  if (skipEntryNav && !addByCodeUiReached && !stopReason) {
+    stopReason = "entry_navigation_deferred_probe_skip_entry_nav_enabled";
   }
 
   if (!addByCodeUiReached && !stopReason) {
@@ -589,6 +812,7 @@ export async function runAddByCodeProbePhase({
           "phase_2b_no_keystrokes_avoid_implicit_submit_or_cart_mutation",
         stop_reason: stopReason,
         entry_selector_not_found: entrySelectorNotFound,
+        probe_skip_entry_nav: skipEntryNav,
         network_and_ui_guards: "active",
       },
     }),
@@ -1356,5 +1580,223 @@ export async function runAddByCodePhase2eMutationBoundaryMap({
     scoped_root_matched_visible,
     fallback_to_broad_scan,
     scope_status,
+  };
+}
+
+/**
+ * Phase 2f: at most one bounded click on a tenant-listed candidate that passes Layer 3 + boundary gates.
+ * Verifies add-by-code UI signals post-click; no typing, no validate/checkout/submit/cart mutation paths added.
+ */
+export async function runAddByCodePhase2fSafeOpenConfirm({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  buildStepEvidence,
+}) {
+  await heartbeat({
+    progressStage: "mlcc_phase_2f_safe_open_start",
+    progressMessage:
+      "Phase 2f: bounded safe-open confirmation (tenant candidates; max one click)",
+  });
+
+  const allowSubs = config.addByCodeSafeOpenTextAllowSubstrings ?? [];
+  const candidates = config.addByCodeSafeOpenCandidateSelectors ?? [];
+
+  const blocked_before =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const before = await measureAddByCodeUiOpenSignals(page, config);
+
+  const scoped_root_reused_for_verification = Boolean(
+    config.mutationBoundaryRootSelector,
+  );
+
+  const evaluations = [];
+
+  for (const sel of candidates) {
+    const loc = page.locator(sel).first();
+    const n = await loc.count().catch(() => 0);
+
+    if (n === 0) {
+      evaluations.push({
+        selector: sel,
+        eligible: false,
+        reason: "rejected_selector_no_match",
+      });
+      continue;
+    }
+
+    const vis = await loc.isVisible().catch(() => false);
+
+    if (!vis) {
+      evaluations.push({
+        selector: sel,
+        eligible: false,
+        reason: "rejected_not_visible",
+      });
+      continue;
+    }
+
+    const row = await extractMutationBoundaryRowFromLocator(loc);
+    const elig = evaluatePhase2fOpenCandidateEligibility(row, allowSubs);
+
+    evaluations.push({
+      selector: sel,
+      visible: true,
+      tag: row.tag,
+      text_sample: (row.text ?? "").slice(0, 200),
+      href_sample: String(row.href ?? "").slice(0, 200),
+      ...elig,
+    });
+  }
+
+  let click_performed = false;
+  let selector_clicked = null;
+  let skip_click_reason = null;
+
+  if (before.open_signal) {
+    skip_click_reason = "ui_open_signals_already_present_before_phase_2f";
+  } else {
+    const firstEligible = evaluations.find((e) => e.eligible === true);
+
+    if (!firstEligible) {
+      skip_click_reason = "no_eligible_candidate_all_rejected_or_ineligible";
+    } else {
+      const loc = page.locator(firstEligible.selector).first();
+
+      await loc.click({ timeout: 12_000 });
+      click_performed = true;
+      selector_clicked = firstEligible.selector;
+      await page
+        .waitForLoadState("domcontentloaded", { timeout: 45_000 })
+        .catch(() => {});
+      await new Promise((r) => setTimeout(r, 600));
+    }
+  }
+
+  if (typeof buildStepEvidence === "function" && click_performed) {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2f_after_safe_open_click",
+        message:
+          "Phase 2f checkpoint after at-most-one bounded safe-open click (no typing)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  const blocked_after =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const after = await measureAddByCodeUiOpenSignals(page, config);
+
+  const network_guard_delta =
+    blocked_before != null && blocked_after != null
+      ? blocked_after - blocked_before
+      : null;
+
+  const no_new_network_blocks =
+    network_guard_delta === null || network_guard_delta === 0;
+
+  const ui_open_success = after.open_signal === true;
+
+  let recommend_tenant_safe_open_selector = null;
+  let recommendation_strength = "none";
+
+  if (ui_open_success && no_new_network_blocks) {
+    if (click_performed && selector_clicked) {
+      recommend_tenant_safe_open_selector = selector_clicked;
+      recommendation_strength = "strong";
+    } else if (before.open_signal) {
+      recommendation_strength =
+        "observational_ui_already_open_no_phase_2f_click_to_confirm_selector";
+    }
+  } else if (click_performed && ui_open_success && !no_new_network_blocks) {
+    recommendation_strength = "weak_opened_but_network_guard_blocked_requests";
+  }
+
+  const tenant_safe_open_confirmed =
+    click_performed && ui_open_success && no_new_network_blocks;
+
+  const expected_ui_state_after_phase_2f =
+    ui_open_success && no_new_network_blocks;
+
+  const ui_was_already_open_before_phase_2f = before.open_signal === true;
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2f_safe_open_findings",
+      message:
+        "Phase 2f safe-open confirmation (bounded click; no cart mutation)",
+      attributes: {
+        candidate_selectors_configured: candidates,
+        candidate_evaluations: evaluations,
+        click_performed,
+        selector_clicked,
+        skip_click_reason,
+        ui_signals_before: {
+          open_signal: before.open_signal,
+          code_field_detected: before.code_field_detected,
+          tenant_code_field_visible: before.tenant_code_field_visible,
+          scoped_root_visible: before.scoped_root_visible,
+        },
+        ui_signals_after: {
+          open_signal: after.open_signal,
+          code_field_detected: after.code_field_detected,
+          tenant_code_field_visible: after.tenant_code_field_visible,
+          scoped_root_visible: after.scoped_root_visible,
+        },
+        scoped_root_reused_for_verification: scoped_root_reused_for_verification,
+        scoped_root_selector: config.mutationBoundaryRootSelector ?? null,
+        network_guard_blocked_before: blocked_before,
+        network_guard_blocked_after: blocked_after,
+        network_guard_delta,
+        no_new_blocked_requests_during_phase:
+          network_guard_delta === null ? null : network_guard_delta === 0,
+        tenant_safe_open_confirmed,
+        expected_ui_state_after_phase_2f,
+        ui_was_already_open_before_phase_2f,
+        recommend_tenant_safe_open_selector,
+        recommendation_strength,
+        text_allow_substrings_configured: allowSubs,
+        typing_policy_phase_2f: "no_product_code_or_quantity_typing",
+        cart_mutation: "none",
+        disclaimer:
+          "confirmation_uses_visible_dom_signals_and_client_network_abort_counts_not_proof_of_server_cart_state",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2f_safe_open_complete",
+    progressMessage:
+      "Phase 2f complete (no validate/add-to-cart/checkout/submit)",
+  });
+
+  return {
+    tenant_safe_open_confirmed,
+    expected_ui_state_after_phase_2f,
+    ui_was_already_open_before_phase_2f,
+    click_performed,
+    selector_clicked,
+    skip_click_reason,
+    recommendation_strength,
+    recommend_tenant_safe_open_selector,
+    candidate_evaluations: evaluations,
+    scoped_root_reused_for_verification,
+    ui_open_success,
+    no_new_network_blocks,
+    network_guard_delta,
   };
 }

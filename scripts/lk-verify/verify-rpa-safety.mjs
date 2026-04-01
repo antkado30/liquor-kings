@@ -71,6 +71,22 @@ if (!worker.includes("MLCC_MUTATION_BOUNDARY_ROOT_SELECTOR")) {
   checks.push("mlcc-browser-worker.js must document MLCC_MUTATION_BOUNDARY_ROOT_SELECTOR");
 }
 
+if (!probe.includes("runAddByCodePhase2fSafeOpenConfirm")) {
+  checks.push("mlcc-browser-add-by-code-probe.js must define runAddByCodePhase2fSafeOpenConfirm (Phase 2f)");
+}
+
+if (!probe.includes("export function parseSafeOpenCandidateSelectors")) {
+  checks.push("mlcc-browser-add-by-code-probe.js must export parseSafeOpenCandidateSelectors");
+}
+
+if (!probe.includes("export function evaluatePhase2fOpenCandidateEligibility")) {
+  checks.push("mlcc-browser-add-by-code-probe.js must export evaluatePhase2fOpenCandidateEligibility");
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2F")) {
+  checks.push("mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2F (Phase 2f)");
+}
+
 // Phase 2b/2c rebuild path must not type into product fields in probe module (login is in worker only).
 if (/\b\.fill\s*\(/u.test(probe)) {
   checks.push("mlcc-browser-add-by-code-probe.js must not use .fill( — typing belongs only in controlled phases; probe is read-only");

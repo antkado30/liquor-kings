@@ -51,6 +51,10 @@ describe("buildMlccBrowserConfig", () => {
       addByCodePhase2e: false,
       mutationBoundaryRootSelector: null,
       mutationBoundaryUncertainHints: [],
+      addByCodePhase2f: false,
+      addByCodeSafeOpenCandidateSelectors: [],
+      addByCodeSafeOpenTextAllowSubstrings: [],
+      addByCodeProbeSkipEntryNav: false,
     });
   });
 
@@ -260,6 +264,70 @@ describe("buildMlccBrowserConfig", () => {
     expect(out.config.mutationBoundaryUncertainHints).toEqual([
       { contains: "sku", advisory_label: "Likely product lookup (advisory)" },
     ]);
+  });
+
+  it("rejects Phase 2f without Phase 2b probe", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PHASE_2F: "true",
+      MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS: '["button.x"]',
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors.some((e) => /MLCC_ADD_BY_CODE_PROBE/.test(e.message))).toBe(
+      true,
+    );
+  });
+
+  it("parses Phase 2f candidate selectors and optional text allowlist", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2F: "true",
+      MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS:
+        '["#open-abc", "button.add-by-code"]',
+      MLCC_ADD_BY_CODE_SAFE_OPEN_TEXT_ALLOW_SUBSTRINGS: '["special open"]',
+      MLCC_ADD_BY_CODE_PROBE_SKIP_ENTRY_NAV: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2f).toBe(true);
+    expect(out.config.addByCodeSafeOpenCandidateSelectors).toEqual([
+      "#open-abc",
+      "button.add-by-code",
+    ]);
+    expect(out.config.addByCodeSafeOpenTextAllowSubstrings).toEqual([
+      "special open",
+    ]);
+    expect(out.config.addByCodeProbeSkipEntryNav).toBe(true);
+  });
+
+  it("fails config when MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS is invalid for Phase 2f", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2F: "true",
+      MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS: "[]",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS/.test(e.message),
+      ),
+    ).toBe(true);
   });
 
   it("fails config when MLCC_MUTATION_BOUNDARY_UNCERTAIN_HINTS is not a JSON array", () => {

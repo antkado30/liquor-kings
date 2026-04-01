@@ -4,8 +4,11 @@ import {
   applyTenantAdvisoryForUncertain,
   buildPlaywrightSelectorFromHint,
   classifyMutationBoundaryControl,
+  evaluatePhase2fOpenCandidateEligibility,
   isProbeUiTextUnsafe,
   parseMutationBoundaryUncertainHints,
+  parsePhase2fSafeOpenTextAllowSubstrings,
+  parseSafeOpenCandidateSelectors,
   shouldBlockHttpRequest,
 } from "../src/workers/mlcc-browser-add-by-code-probe.js";
 
@@ -77,6 +80,62 @@ describe("parseMutationBoundaryUncertainHints", () => {
     expect(() => parseMutationBoundaryUncertainHints('{"x":1}')).toThrow(
       /must be a JSON array/,
     );
+  });
+});
+
+describe("parseSafeOpenCandidateSelectors", () => {
+  it("parses non-empty selector array", () => {
+    expect(parseSafeOpenCandidateSelectors('["a", " b "]')).toEqual(["a", "b"]);
+  });
+
+  it("throws when empty", () => {
+    expect(() => parseSafeOpenCandidateSelectors("[]")).toThrow(/non-empty/);
+  });
+});
+
+describe("parsePhase2fSafeOpenTextAllowSubstrings", () => {
+  it("returns empty for blank", () => {
+    expect(parsePhase2fSafeOpenTextAllowSubstrings(null)).toEqual([]);
+  });
+
+  it("parses string array", () => {
+    expect(parsePhase2fSafeOpenTextAllowSubstrings('["x"]')).toEqual(["x"]);
+  });
+});
+
+describe("evaluatePhase2fOpenCandidateEligibility", () => {
+  it("rejects add-to-cart via layer3", () => {
+    const r = evaluatePhase2fOpenCandidateEligibility(
+      { tag: "button", text: "Add to cart" },
+      [],
+    );
+    expect(r.eligible).toBe(false);
+    expect(r.reason).toMatch(/layer3/);
+  });
+
+  it("accepts add-by-code uncertain label via default intent", () => {
+    const r = evaluatePhase2fOpenCandidateEligibility(
+      { tag: "button", text: "Add by code" },
+      [],
+    );
+    expect(r.eligible).toBe(true);
+  });
+
+  it("accepts uncertain when tenant substring matches", () => {
+    const r = evaluatePhase2fOpenCandidateEligibility(
+      { tag: "button", text: "Open special panel" },
+      ["special"],
+    );
+    expect(r.eligible).toBe(true);
+    expect(r.reason).toMatch(/tenant/);
+  });
+
+  it("rejects Continue without allowlist match", () => {
+    const r = evaluatePhase2fOpenCandidateEligibility(
+      { tag: "button", text: "Continue" },
+      [],
+    );
+    expect(r.eligible).toBe(false);
   });
 });
 
