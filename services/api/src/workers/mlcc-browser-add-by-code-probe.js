@@ -1,5 +1,6 @@
 /**
  * Phase 2b: non-mutating add-by-code UI mapping. No typing, validate, checkout, or submit.
+ * Phase 2c: tenant selector hardening + read-only field inspection; optional guarded focus/blur (no code/qty typing).
  * Layer 2: network guards. Layer 3: blocked UI text before any probe click.
  */
 
@@ -95,6 +96,28 @@ export async function installMlccSafetyNetworkGuards(context) {
 
     return route.continue();
   });
+}
+
+/**
+ * Build a single Playwright CSS selector from heuristic hint (id or name only).
+ * @param {{ id?: string | null, name?: string | null }} hint
+ */
+export function buildPlaywrightSelectorFromHint(hint) {
+  if (!hint || typeof hint !== "object") {
+    return null;
+  }
+
+  if (hint.id && typeof hint.id === "string" && /^[A-Za-z][A-Za-z0-9_-]*$/.test(hint.id)) {
+    return `#${hint.id}`;
+  }
+
+  if (hint.name && typeof hint.name === "string" && hint.name.trim() !== "") {
+    const escaped = hint.name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+
+    return `[name="${escaped}"]`;
+  }
+
+  return null;
 }
 
 function classifyCodeAndQtyFields(visibleInputs) {
@@ -398,7 +421,6 @@ export async function runAddByCodeProbePhase({
         typing_policy:
           "phase_2b_no_keystrokes_avoid_implicit_submit_or_cart_mutation",
         stop_reason: stopReason,
-        opened_via: openedVia,
         entry_selector_not_found: entrySelectorNotFound,
         network_and_ui_guards: "active",
       },
@@ -424,5 +446,275 @@ export async function runAddByCodeProbePhase({
     quantity_field_detected: fieldInfo.quantity_field_detected,
     stop_reason: stopReason,
     opened_via: openedVia,
+    field_info: fieldInfo,
+  };
+}
+
+async function readFieldDomSnapshot(locator) {
+  return locator.evaluate((el) => {
+    const tag = el.tagName.toLowerCase();
+
+    if (el instanceof HTMLSelectElement) {
+      const val = el.value || "";
+
+      return {
+        tagName: tag,
+        type: "select",
+        readOnly: false,
+        disabled: el.disabled,
+        value_length: val.length,
+        has_value: val.length > 0,
+      };
+    }
+
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      const type = (el.type || "text").toLowerCase();
+      const val = el.value || "";
+
+      return {
+        tagName: tag,
+        type,
+        readOnly: !!el.readOnly,
+        disabled: !!el.disabled,
+        value_length: val.length,
+        has_value: val.length > 0,
+        autocomplete: el.getAttribute("autocomplete"),
+        inputmode: el.getAttribute("inputmode"),
+      };
+    }
+
+    return { tagName: tag, unsupported: true };
+  });
+}
+
+async function resolveFieldLocator(page, envSelector, hints) {
+  if (envSelector && typeof envSelector === "string") {
+    const loc = page.locator(envSelector).first();
+    const n = await loc.count().catch(() => 0);
+    const vis =
+      n > 0 && (await loc.isVisible().catch(() => false));
+
+    return {
+      locator: n > 0 ? loc : null,
+      source: "tenant_env",
+      selector_used: envSelector,
+      matched: vis,
+    };
+  }
+
+  const hint = hints?.[0];
+  const sel = buildPlaywrightSelectorFromHint(hint);
+
+  if (!sel) {
+    return {
+      locator: null,
+      source: "heuristic_fallback",
+      selector_used: null,
+      matched: false,
+      advisory: true,
+    };
+  }
+
+  const loc = page.locator(sel).first();
+  const n = await loc.count().catch(() => 0);
+  const vis = n > 0 && (await loc.isVisible().catch(() => false));
+
+  return {
+    locator: n > 0 ? loc : null,
+    source: "heuristic_fallback",
+    selector_used: sel,
+    matched: vis,
+    advisory: true,
+  };
+}
+
+/**
+ * Phase 2c: prefer tenant env selectors; heuristic fallback is advisory only.
+ * No product code or quantity typing. Optional focus/blur only when safe and env allows.
+ */
+export async function runAddByCodePhase2cFieldHardening({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  phase2bFieldInfo,
+}) {
+  await heartbeat({
+    progressStage: "mlcc_add_by_code_phase_2c_start",
+    progressMessage:
+      "Phase 2c: selector hardening + read-only field inspection (no typing; no cart mutation)",
+  });
+
+  const visibleInputs = await collectVisibleInputs(page);
+  const fieldInfo =
+    phase2bFieldInfo ?? classifyCodeAndQtyFields(visibleInputs);
+
+  const tenantEnv = {
+    code_field: Boolean(config.addByCodeCodeFieldSelector),
+    quantity_field: Boolean(config.addByCodeQtyFieldSelector),
+    entry: Boolean(config.addByCodeEntrySelector),
+  };
+
+  const codeRes = await resolveFieldLocator(
+    page,
+    config.addByCodeCodeFieldSelector,
+    fieldInfo.code_field_hints,
+  );
+
+  const qtyRes = await resolveFieldLocator(
+    page,
+    config.addByCodeQtyFieldSelector,
+    fieldInfo.quantity_field_hints,
+  );
+
+  const inspectOne = async (label, resolved) => {
+    if (!resolved.locator || !resolved.matched) {
+      return {
+        field: label,
+        resolved: false,
+        source: resolved.source,
+        selector_used: resolved.selector_used,
+        tenant_env_used: resolved.source === "tenant_env",
+        heuristic_advisory: resolved.advisory === true,
+        interaction: "skipped",
+        skip_reason:
+          resolved.source === "tenant_env" && !resolved.matched
+            ? "tenant_selector_no_match_or_not_visible"
+            : "field_not_resolved",
+        non_mutating_interaction_possible: false,
+      };
+    }
+
+    const snap = await readFieldDomSnapshot(resolved.locator);
+
+    const risk = await resolved.locator.evaluate((el) => {
+      if (el instanceof HTMLSelectElement) {
+        return { risky: true, reason: "select_element" };
+      }
+
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        const t = (el.type || "text").toLowerCase();
+
+        if (
+          ["submit", "button", "image", "reset", "checkbox", "radio"].includes(
+            t,
+          )
+        ) {
+          return { risky: true, reason: `input_type_${t}` };
+        }
+
+        const form = el.form;
+
+        if (form && form.action) {
+          const a = String(form.action).toLowerCase();
+
+          if (
+            /(checkout|cart\/add|order\/submit|place-order|validate|finalize)/i.test(
+              a,
+            )
+          ) {
+            return { risky: true, reason: "form_action_heuristic_suspicious" };
+          }
+        }
+
+        return { risky: false };
+      }
+
+      return { risky: true, reason: "unsupported_element" };
+    });
+
+    const visible = await resolved.locator.isVisible().catch(() => false);
+
+    let interaction = "readonly_dom_inspection_only";
+    let focusBlur = "skipped";
+    let nonMut = false;
+
+    if (risk.risky) {
+      focusBlur = `skipped_risk:${risk.reason}`;
+      interaction = "skipped_mutation_risk";
+    } else if (!config.addByCodeSafeFocusBlur) {
+      focusBlur =
+        "skipped_env_MLCC_ADD_BY_CODE_SAFE_FOCUS_BLUR_not_true";
+    } else if (snap.disabled || snap.readOnly) {
+      focusBlur = "skipped_disabled_or_readonly";
+    } else {
+      try {
+        await resolved.locator.focus({ timeout: 3000 });
+
+        if (typeof resolved.locator.blur === "function") {
+          await resolved.locator.blur({ timeout: 3000 });
+        } else {
+          await resolved.locator.evaluate((el) => {
+            if (el instanceof HTMLElement) {
+              el.blur();
+            }
+          });
+        }
+
+        focusBlur = "focus_blur_performed";
+        interaction = "readonly_dom_inspection_plus_focus_blur";
+        nonMut = true;
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e);
+
+        focusBlur = `skipped_focus_error:${m}`;
+      }
+    }
+
+    return {
+      field: label,
+      resolved: true,
+      source: resolved.source,
+      selector_used: resolved.selector_used,
+      tenant_env_used: resolved.source === "tenant_env",
+      heuristic_advisory: resolved.advisory === true,
+      visible,
+      enabled_editable_reported: {
+        disabled: snap.disabled,
+        readOnly: snap.readOnly,
+      },
+      dom_snapshot: snap,
+      focus_blur_risk: risk,
+      focus_blur: focusBlur,
+      interaction,
+      non_mutating_interaction_possible: nonMut,
+      disclaimer:
+        "field_present_and_inspected_does_not_imply_safe_for_product_typing_later",
+    };
+  };
+
+  const codeInspect = await inspectOne("code", codeRes);
+  const qtyInspect = await inspectOne("quantity", qtyRes);
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_add_by_code_phase_2c_findings",
+      message:
+        "Phase 2c selector hardening (tenant env preferred; heuristic advisory only)",
+      attributes: {
+        tenant_env_selectors_provided: tenantEnv,
+        tenant_selectors_note:
+          "explicit_env_selectors_recommended_when_heuristic_is_advisory_only",
+        code_field: codeInspect,
+        quantity_field: qtyInspect,
+        typing_policy_phase_2c:
+          "no_product_code_or_quantity_typing_inspection_and_optional_focus_blur_only",
+        cart_mutation: "none",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_add_by_code_phase_2c_complete",
+    progressMessage:
+      "Phase 2c complete (no validate/add-to-cart/checkout/submit)",
+  });
+
+  return {
+    code_field: codeInspect,
+    quantity_field: qtyInspect,
+    tenant_env_selectors_provided: tenantEnv,
   };
 }

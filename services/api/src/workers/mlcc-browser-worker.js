@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   installMlccSafetyNetworkGuards,
+  runAddByCodePhase2cFieldHardening,
   runAddByCodeProbePhase,
 } from "./mlcc-browser-add-by-code-probe.js";
 import {
@@ -43,6 +44,11 @@ export const MLCC_BROWSER_DRY_RUN_SAFE_MODE = true;
  * Phase 2b (add-by-code probe, non-mutating):
  * - MLCC_ADD_BY_CODE_PROBE — "true" to run detection-only probe after ordering-ready (no typing; guards on)
  * - MLCC_ADD_BY_CODE_ENTRY_SELECTOR — optional CSS for a single safe open action (blocked if label matches submit/cart patterns)
+ * Phase 2c (selector hardening; still no cart mutation, no validate):
+ * - MLCC_ADD_BY_CODE_PHASE_2C — "true" requires MLCC_ADD_BY_CODE_PROBE=true; tenant field selectors + read-only inspection
+ * - MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR — optional CSS for product/code input (preferred over heuristic)
+ * - MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR — optional CSS for quantity input
+ * - MLCC_ADD_BY_CODE_SAFE_FOCUS_BLUR — "true" to allow guarded focus/blur only when risk check passes (still no typing)
  */
 export function buildMlccBrowserConfig({ payload, env }) {
   if (!payload) {
@@ -193,6 +199,33 @@ export function buildMlccBrowserConfig({ payload, env }) {
       ? addByCodeEntryRaw.trim()
       : null;
 
+  const addByCodePhase2c = env?.MLCC_ADD_BY_CODE_PHASE_2C === "true";
+
+  const addByCodeCodeFieldRaw = env?.MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR;
+  const addByCodeCodeFieldSelector =
+    typeof addByCodeCodeFieldRaw === "string" &&
+    addByCodeCodeFieldRaw.trim() !== ""
+      ? addByCodeCodeFieldRaw.trim()
+      : null;
+
+  const addByCodeQtyFieldRaw = env?.MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR;
+  const addByCodeQtyFieldSelector =
+    typeof addByCodeQtyFieldRaw === "string" &&
+    addByCodeQtyFieldRaw.trim() !== ""
+      ? addByCodeQtyFieldRaw.trim()
+      : null;
+
+  const addByCodeSafeFocusBlur =
+    env?.MLCC_ADD_BY_CODE_SAFE_FOCUS_BLUR === "true";
+
+  if (addByCodePhase2c && !addByCodeProbe) {
+    errors.push({
+      type: "config",
+      message:
+        "MLCC_ADD_BY_CODE_PHASE_2C=true requires MLCC_ADD_BY_CODE_PROBE=true",
+    });
+  }
+
   if (errors.length > 0) {
     return {
       ready: false,
@@ -222,6 +255,10 @@ export function buildMlccBrowserConfig({ payload, env }) {
       licenseStoreWaitMs,
       addByCodeProbe,
       addByCodeEntrySelector,
+      addByCodePhase2c,
+      addByCodeCodeFieldSelector,
+      addByCodeQtyFieldSelector,
+      addByCodeSafeFocusBlur,
     },
     errors: [],
   };
@@ -897,6 +934,7 @@ export async function processOneMlccBrowserDryRun({
     );
 
     let phase2bResult = null;
+    let phase2cResult = null;
 
     if (config.addByCodeProbe) {
       phase2bResult = await runAddByCodeProbePhase({
@@ -907,6 +945,23 @@ export async function processOneMlccBrowserDryRun({
         buildEvidence,
         evidenceCollected,
       });
+
+      if (config.addByCodePhase2c) {
+        try {
+          phase2cResult = await runAddByCodePhase2cFieldHardening({
+            page,
+            config,
+            heartbeat: async (args) => heartbeat(args),
+            buildEvidence,
+            evidenceCollected,
+            phase2bFieldInfo: phase2bResult?.field_info ?? null,
+          });
+        } catch (e) {
+          const m = e instanceof Error ? e.message : String(e);
+
+          throw new Error(`MLCC add-by-code phase 2c failed: ${m}`);
+        }
+      }
     } else {
       await heartbeat({
         progressStage: "mlcc_add_by_code_probe_skipped",
@@ -932,7 +987,7 @@ export async function processOneMlccBrowserDryRun({
         page,
         stage: "mlcc_ordering_ready_landing",
         message:
-          "Final ordering-ready checkpoint after Phase 2b decision (no validate/checkout/submit)",
+          "Final ordering-ready checkpoint after Phase 2b/2c (no validate/checkout/submit/cart mutation)",
         kind: "mlcc_step_snapshot",
         buildEvidence,
         config,
@@ -956,6 +1011,7 @@ export async function processOneMlccBrowserDryRun({
       title,
       ordering_ready_heuristic: orderingReadyHeuristic,
       phase_2b_add_by_code: phase2bResult,
+      phase_2c_field_hardening: phase2cResult,
     };
 
     await finalizeRun({
@@ -967,7 +1023,8 @@ export async function processOneMlccBrowserDryRun({
         "MLCC browser dry run completed successfully; no cart mutations or submit actions were performed. " +
         `dry_run_safe_mode=${MLCC_BROWSER_DRY_RUN_SAFE_MODE} submission_armed=${config.submissionArmed} ` +
         `license_store_automation=${config.licenseStoreAutomation} ` +
-        `add_by_code_probe=${config.addByCodeProbe}`,
+        `add_by_code_probe=${config.addByCodeProbe} ` +
+        `add_by_code_phase_2c=${config.addByCodePhase2c}`,
       errorMessage: undefined,
       evidence: [
         ...evidenceCollected,
@@ -975,7 +1032,7 @@ export async function processOneMlccBrowserDryRun({
           kind: "worker_log",
           stage: "completed",
           message:
-            "MLCC browser dry-run completed (Phase 2a/2b checkpoints; no cart mutation)",
+            "MLCC browser dry-run completed (Phase 2a/2b/2c checkpoints; no cart mutation)",
           attributes: {
             finalUrl,
             title,
@@ -996,6 +1053,18 @@ export async function processOneMlccBrowserDryRun({
             phase_2b_quantity_field_detected:
               phase2bResult?.quantity_field_detected ?? null,
             phase_2b_stop_reason: phase2bResult?.stop_reason ?? null,
+            phase_2c_enabled: config.addByCodePhase2c,
+            phase_2c_code_non_mutating:
+              phase2cResult?.code_field?.non_mutating_interaction_possible ??
+              null,
+            phase_2c_qty_non_mutating:
+              phase2cResult?.quantity_field?.non_mutating_interaction_possible ??
+              null,
+            phase_2c_tenant_env_code:
+              phase2cResult?.tenant_env_selectors_provided?.code_field ?? null,
+            phase_2c_tenant_env_qty:
+              phase2cResult?.tenant_env_selectors_provided?.quantity_field ??
+              null,
           },
         }),
       ],
@@ -1012,7 +1081,9 @@ export async function processOneMlccBrowserDryRun({
     const lower = msg.toLowerCase();
     const isLogin = lower.includes("mlcc login failed");
     const isLicenseStore = lower.includes("mlcc license/store step failed");
-    const isAddByCodeProbe = lower.includes("mlcc add-by-code probe failed");
+    const isAddByCodeProbe =
+      lower.includes("mlcc add-by-code probe failed") ||
+      lower.includes("mlcc add-by-code phase 2c failed");
     const classified = classifyFailureType({ errorMessage: msg, explicitType: undefined });
     const looksTransport =
       /timeout|econn|network|fetch failed|502|503|enotfound|etimedout/i.test(msg);
@@ -1058,7 +1129,7 @@ export async function processOneMlccBrowserDryRun({
           stage: isLicenseStore
             ? "mlcc_license_store"
             : isAddByCodeProbe
-              ? "mlcc_add_by_code_probe"
+              ? "mlcc_add_by_code_probe_or_phase_2c"
               : "browser_runtime",
           mlcc_signal: mlccSignal,
           classified_type: classified,

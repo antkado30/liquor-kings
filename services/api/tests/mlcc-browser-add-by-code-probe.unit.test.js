@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  buildPlaywrightSelectorFromHint,
   isProbeUiTextUnsafe,
   shouldBlockHttpRequest,
 } from "../src/workers/mlcc-browser-add-by-code-probe.js";
@@ -17,6 +18,24 @@ describe("shouldBlockHttpRequest", () => {
   it("allows GET navigation to generic pages", () => {
     const b = shouldBlockHttpRequest("https://vendor.example/home", "GET");
     expect(b.block).toBe(false);
+  });
+});
+
+describe("buildPlaywrightSelectorFromHint", () => {
+  it("prefers id when valid", () => {
+    expect(buildPlaywrightSelectorFromHint({ id: "skuInput", name: "x" })).toBe(
+      "#skuInput",
+    );
+  });
+
+  it("falls back to name when id missing", () => {
+    expect(buildPlaywrightSelectorFromHint({ id: null, name: "mlcc_code" })).toBe(
+      '[name="mlcc_code"]',
+    );
+  });
+
+  it("returns null when not constructible", () => {
+    expect(buildPlaywrightSelectorFromHint({})).toBe(null);
   });
 });
 

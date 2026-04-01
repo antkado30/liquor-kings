@@ -43,6 +43,10 @@ describe("buildMlccBrowserConfig", () => {
       licenseStoreWaitMs: 2000,
       addByCodeProbe: false,
       addByCodeEntrySelector: null,
+      addByCodePhase2c: false,
+      addByCodeCodeFieldSelector: null,
+      addByCodeQtyFieldSelector: null,
+      addByCodeSafeFocusBlur: false,
     });
   });
 
@@ -182,6 +186,41 @@ describe("buildMlccBrowserConfig", () => {
 
     const h2 = inferLicenseStoreHeuristic("https://portal.example.com/home", "Home");
     expect(h2.hint).toBe("no_keyword_match");
+  });
+
+  it("rejects Phase 2c without Phase 2b probe", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PHASE_2C: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors[0].message).toMatch(/MLCC_ADD_BY_CODE_PROBE/);
+  });
+
+  it("parses Phase 2c field selectors and focus/blur flag", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2C: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#product-code",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "input[name=qty]",
+      MLCC_ADD_BY_CODE_SAFE_FOCUS_BLUR: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2c).toBe(true);
+    expect(out.config.addByCodeCodeFieldSelector).toBe("#product-code");
+    expect(out.config.addByCodeQtyFieldSelector).toBe("input[name=qty]");
+    expect(out.config.addByCodeSafeFocusBlur).toBe(true);
   });
 
   it("assertMlccSubmissionAllowed throws when not armed", () => {
