@@ -7,6 +7,7 @@
 - Cart **validate** (MLCC “validate order” style actions)
 - **Add-to-cart** or other **cart/order mutation**
 - **Quantity** field entry except **Phase 2j** when **both** `MLCC_ADD_BY_CODE_PHASE_2J` and `MLCC_ADD_BY_CODE_PHASE_2J_APPROVED` are true and tenant quantity selector + valid test quantity are configured (quantity field **only**; no code interaction in that phase)
+- **Combined** code+quantity interaction (filling **both** fields in one rehearsal phase / session) — **forbidden** until a separately documented **execution** phase (e.g. **2l**) with its own env gates and approvals. **Phase 2k** is **planning-only** and adds **no** runtime path.
 
 Violations are a **product incident**, not a documentation gap.
 
@@ -35,7 +36,14 @@ Phase **2i** is **planning-only** as a standalone phase (no `PHASE_2I` env): it 
 - **Ladder:** after **2j**, remaining steps (add/apply, validate, checkout/submit, etc.) stay **`out_of_scope_until_separate_approval`** until explicitly documented and verified.
 - **Non-negotiables:** outside **2j**’s env-gated quantity fill/clear, quantity entry and cart/order mutation paths remain forbidden as documented in each phase row.
 
+## Combined interaction planning (Phase 2k)
+
+Phase **2k** is **planning-only**: [`services/api/src/workers/mlcc-phase-2k-policy.js`](../../../services/api/src/workers/mlcc-phase-2k-policy.js) exports `buildPhase2kCombinedInteractionFutureGateManifest` and `buildPhase2kPostCombinedInteractionLadder`. It **does not** run in the browser; worker and probe **must not** import it until a future execution phase is approved (verify enforces this).
+
+- **Criteria:** documented **2h** and **2j** evidence, both tenant selectors, **tenant-documented field order**, extended mutation-risk on **both** fields, Layer 2 deltas zero per step, Layer 3 no mutation clicks, hard-fail parity with **2h**/**2j** guard policy, and truthful disclaimers (no inference of combined safety from separate **2h**+**2j** runs).
+- **Ladder after combined rehearsal:** combined clear/revert → add/apply line → validate → checkout/submit — each **`out_of_scope_until_separate_approval`** until explicitly documented.
+
 ## Drift enforcement
 
-- Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i** policy file and phases-doc markers).
+- Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i** and **2k** policy files, phases-doc markers, and a guard that worker/probe do not import **2k** policy prematurely).
 - See [DEVELOPER_ANTI_DRIFT.md](../DEVELOPER_ANTI_DRIFT.md).

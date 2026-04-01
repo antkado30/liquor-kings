@@ -16,6 +16,7 @@ function read(rel) {
 const workerPath = "services/api/src/workers/mlcc-browser-worker.js";
 const probePath = "services/api/src/workers/mlcc-browser-add-by-code-probe.js";
 const phase2iPolicyPath = "services/api/src/workers/mlcc-phase-2i-policy.js";
+const phase2kPolicyPath = "services/api/src/workers/mlcc-phase-2k-policy.js";
 const phasesDocPath = "docs/lk/architecture/rpa-rebuild-phases.md";
 
 const checks = [];
@@ -23,7 +24,14 @@ const checks = [];
 const worker = read(workerPath);
 const probe = read(probePath);
 const phase2iPolicy = read(phase2iPolicyPath);
+const phase2kPolicy = read(phase2kPolicyPath);
 const phasesDoc = read(phasesDocPath);
+
+if (worker.includes("mlcc-phase-2k-policy") || probe.includes("mlcc-phase-2k-policy")) {
+  checks.push(
+    "Phase 2k policy must not be imported by mlcc-browser-worker.js or mlcc-browser-add-by-code-probe.js until a future execution phase implements combined code+quantity interaction",
+  );
+}
 
 if (!worker.includes("export const MLCC_BROWSER_DRY_RUN_SAFE_MODE = true")) {
   checks.push("mlcc-browser-worker.js must export MLCC_BROWSER_DRY_RUN_SAFE_MODE = true");
@@ -169,6 +177,46 @@ if (!/planning[- ]only/i.test(phasesDoc)) {
 
 if (!phasesDoc.includes("mlcc-phase-2i-policy.js")) {
   checks.push("rpa-rebuild-phases.md must reference mlcc-phase-2i-policy.js");
+}
+
+if (!phase2kPolicy.includes("export const PHASE_2K_POLICY_VERSION")) {
+  checks.push("mlcc-phase-2k-policy.js must export PHASE_2K_POLICY_VERSION (Phase 2k)");
+}
+
+if (!phase2kPolicy.includes("export function buildPhase2kCombinedInteractionFutureGateManifest")) {
+  checks.push(
+    "mlcc-phase-2k-policy.js must export buildPhase2kCombinedInteractionFutureGateManifest",
+  );
+}
+
+if (!phase2kPolicy.includes("export function buildPhase2kPostCombinedInteractionLadder")) {
+  checks.push(
+    "mlcc-phase-2k-policy.js must export buildPhase2kPostCombinedInteractionLadder",
+  );
+}
+
+if (!phase2kPolicy.includes("out_of_scope_until_separate_approval")) {
+  checks.push(
+    "mlcc-phase-2k-policy.js must tag ladder steps with out_of_scope_until_separate_approval",
+  );
+}
+
+if (!phase2kPolicy.includes("combined_code_quantity_rehearsal")) {
+  checks.push(
+    "mlcc-phase-2k-policy.js must define combined_code_quantity_rehearsal ladder step",
+  );
+}
+
+if (!phase2kPolicy.includes("combined_clear_revert")) {
+  checks.push("mlcc-phase-2k-policy.js must define combined_clear_revert ladder step");
+}
+
+if (!phasesDoc.includes("Phase 2k")) {
+  checks.push("rpa-rebuild-phases.md must document Phase 2k");
+}
+
+if (!phasesDoc.includes("mlcc-phase-2k-policy.js")) {
+  checks.push("rpa-rebuild-phases.md must reference mlcc-phase-2k-policy.js");
 }
 
 // Phase 2b/2c: no product .fill in probe; Phase 2g sentinel; Phase 2h gated real code + clear; Phase 2j qty + clear.
