@@ -363,8 +363,10 @@
     <header>
       <strong>Liquor Kings Operator Review Console</strong>
       <div style="font-size:12px;font-weight:normal;opacity:0.9;margin-top:4px">
-        Maintainable app version (dev): run <code>npm run dev:admin</code> from repo root →
-        <code>http://127.0.0.1:5173</code> (see <code>apps/admin/README.md</code>). This page stays until the app is verified.
+        Prefer the SPA: same API host → <code>/operator-review/app/</code> (after <code>npm run build:admin</code>).
+        Local dev: <code>npm run dev:admin</code> → <code>http://127.0.0.1:5173/operator-review/app/</code>.
+        This legacy page is used when the built app is missing or when
+        <code>OPERATOR_REVIEW_SERVE_LEGACY_HTML=true</code> — see <code>services/api/OPERATOR_REVIEW.md</code>.
       </div>
     </header>
     <div id="sessionBanner" class="session-banner signed-out">

@@ -6,6 +6,7 @@ import react from "@vitejs/plugin-react";
  * Override target: VITE_PROXY_TARGET=http://127.0.0.1:4000 npm run dev
  */
 export default defineConfig({
+  base: "/operator-review/app/",
   plugins: [react()],
   server: {
     port: 5173,

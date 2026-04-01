@@ -2,6 +2,8 @@
 
 Minimal Vite + React surface for the operator review workflow. Uses the same backend routes as the legacy static page under `/operator-review/*` (session cookie, review list, bundle, actions).
 
+Production URL on the API host: **`/operator-review/app/`** (or open **`/operator-review`**, which redirects to the SPA when the built app is present). See **`services/api/OPERATOR_REVIEW.md`** for serving, env vars, and deploy.
+
 ## Development
 
 1. Start the API (default `http://127.0.0.1:4000`).
@@ -13,7 +15,7 @@ npm install
 npm run dev
 ```
 
-3. Open `http://127.0.0.1:5173`. The dev server proxies `/operator-review` to the API so the session cookie stays same-origin.
+3. Open **`http://127.0.0.1:5173/operator-review/app/`**. The dev server proxies `/operator-review` to the API so the session cookie stays same-origin.
 
 Optional proxy target:
 
@@ -23,12 +25,14 @@ VITE_PROXY_TARGET=http://127.0.0.1:4000 npm run dev
 
 ## Build
 
+From repo root:
+
 ```bash
-npm run build
+npm run build:admin
 ```
 
-Output: `dist/`. Serving `dist` in production must preserve same-origin access to `/operator-review` (or equivalent deployment) so cookies and credentials continue to work.
+Or in this package: `npm run build`. Output: **`dist/`** with `base: /operator-review/app/` so assets load when the API serves the folder under that path.
 
-## Legacy
+## Production
 
-The static HTML console remains at **`GET /operator-review`** on the API until this app is verified in your environment.
+The API serves `apps/admin/dist` at **`/operator-review/app`** after `build:admin` (or `OPERATOR_REVIEW_ADMIN_DIST`). No separate dev server or Vite proxy is required in production.
