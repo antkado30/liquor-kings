@@ -26,10 +26,16 @@ export const MLCC_BROWSER_DRY_RUN_SAFE_MODE = true;
 /**
  * Env (documented):
  * - MLCC_LOGIN_URL, MLCC_PASSWORD, MLCC_SAFE_TARGET_URL, MLCC_HEADLESS — existing
- * - MLCC_ORDERING_ENTRY_URL — optional; navigated after login, before safe target (when both differ)
+ * - MLCC_ORDERING_ENTRY_URL — optional; navigated after login/license step, before safe target (when both differ)
  * - MLCC_SUBMISSION_ARMED — must be "true" before any future submit step is allowed (no submit in this worker yet)
  * - MLCC_STEP_SCREENSHOTS — "true" to attach capped PNG base64 to step/failure evidence
  * - MLCC_STEP_SCREENSHOT_MAX_BYTES — default 200000
+ * Phase 2a (license/store, non-destructive):
+ * - MLCC_LICENSE_STORE_AUTOMATION — "true" to run bounded select+continue (requires both selectors below)
+ * - MLCC_LICENSE_STORE_SELECT_SELECTOR — Playwright CSS selector for store/license choice (single bounded click)
+ * - MLCC_LICENSE_STORE_CONTINUE_SELECTOR — selector for continue/next (navigation only; not checkout)
+ * - MLCC_LICENSE_STORE_URL_PATTERN — optional RegExp source; if set, automation runs only when URL matches
+ * - MLCC_LICENSE_STORE_WAIT_MS — wait between clicks (default 2000)
  */
 export function buildMlccBrowserConfig({ payload, env }) {
   if (!payload) {
@@ -133,6 +139,53 @@ export function buildMlccBrowserConfig({ payload, env }) {
     ? maxParsed
     : 200_000;
 
+  const licenseStoreAutomation =
+    env?.MLCC_LICENSE_STORE_AUTOMATION === "true";
+
+  const licenseStoreSelectRaw = env?.MLCC_LICENSE_STORE_SELECT_SELECTOR;
+  const licenseStoreSelectSelector =
+    typeof licenseStoreSelectRaw === "string"
+      ? licenseStoreSelectRaw.trim()
+      : "";
+
+  const licenseStoreContinueRaw = env?.MLCC_LICENSE_STORE_CONTINUE_SELECTOR;
+  const licenseStoreContinueSelector =
+    typeof licenseStoreContinueRaw === "string"
+      ? licenseStoreContinueRaw.trim()
+      : "";
+
+  const licenseStorePatternRaw = env?.MLCC_LICENSE_STORE_URL_PATTERN;
+  const licenseStoreUrlPattern =
+    typeof licenseStorePatternRaw === "string" &&
+    licenseStorePatternRaw.trim() !== ""
+      ? licenseStorePatternRaw.trim()
+      : null;
+
+  const licenseWaitParsed = env?.MLCC_LICENSE_STORE_WAIT_MS != null
+    ? Number.parseInt(String(env.MLCC_LICENSE_STORE_WAIT_MS), 10)
+    : NaN;
+  const licenseStoreWaitMs = Number.isFinite(licenseWaitParsed) && licenseWaitParsed >= 0
+    ? licenseWaitParsed
+    : 2000;
+
+  if (licenseStoreAutomation) {
+    if (!licenseStoreSelectSelector || !licenseStoreContinueSelector) {
+      errors.push({
+        type: "config",
+        message:
+          "MLCC_LICENSE_STORE_AUTOMATION=true requires MLCC_LICENSE_STORE_SELECT_SELECTOR and MLCC_LICENSE_STORE_CONTINUE_SELECTOR",
+      });
+    }
+  }
+
+  if (errors.length > 0) {
+    return {
+      ready: false,
+      config: null,
+      errors,
+    };
+  }
+
   return {
     ready: true,
     config: {
@@ -145,6 +198,13 @@ export function buildMlccBrowserConfig({ payload, env }) {
       submissionArmed,
       stepScreenshotsEnabled,
       stepScreenshotMaxBytes,
+      licenseStoreAutomation,
+      licenseStoreSelectSelector:
+        licenseStoreSelectSelector || null,
+      licenseStoreContinueSelector:
+        licenseStoreContinueSelector || null,
+      licenseStoreUrlPattern,
+      licenseStoreWaitMs,
     },
     errors: [],
   };
@@ -229,7 +289,7 @@ async function hasObviousLoginError(page) {
   return errorLoc.isVisible().catch(() => false);
 }
 
-export async function loginAndVerifyMlccLanding({ page, config }) {
+async function prepareMlccLoginPage(page, config) {
   await page.goto(config.loginUrl, { waitUntil: "domcontentloaded" });
 
   const userOk = await fillFirstVisible(
@@ -251,7 +311,9 @@ export async function loginAndVerifyMlccLanding({ page, config }) {
   if (!pwdOk) {
     throw new Error("MLCC login failed");
   }
+}
 
+async function commitMlccLogin(page) {
   const clicked = await clickFirstSubmit(page);
 
   if (!clicked) {
@@ -263,7 +325,9 @@ export async function loginAndVerifyMlccLanding({ page, config }) {
   );
 
   await new Promise((r) => setTimeout(r, 1500));
+}
 
+async function assertMlccLoginSucceeded(page) {
   if (await hasObviousLoginError(page)) {
     throw new Error("MLCC login failed");
   }
@@ -290,6 +354,41 @@ export async function loginAndVerifyMlccLanding({ page, config }) {
 }
 
 /**
+ * Advisory only: URL/title keyword match does not prove a license/store step is required.
+ */
+export function inferLicenseStoreHeuristic(url, title) {
+  const u = String(url ?? "").toLowerCase();
+  const t = String(title ?? "").toLowerCase();
+  const combined = `${u} ${t}`;
+  const keywords = [
+    "license",
+    "select store",
+    "choose store",
+    "store selection",
+    "location",
+    "retail",
+  ];
+  const matched = keywords.filter((k) => combined.includes(k));
+
+  return {
+    hint:
+      matched.length > 0
+        ? "possible_license_or_store_interstitial"
+        : "no_keyword_match",
+    matched_keywords: matched,
+    disclaimer:
+      "heuristic_only_url_title_keywords_not_proof_of_required_flow",
+  };
+}
+
+export async function loginAndVerifyMlccLanding({ page, config }) {
+  await prepareMlccLoginPage(page, config);
+  await commitMlccLogin(page);
+
+  return assertMlccLoginSucceeded(page);
+}
+
+/**
  * Future submit/checkout steps must call this and abort unless explicitly armed.
  */
 export function assertMlccSubmissionAllowed(config) {
@@ -302,7 +401,7 @@ export function assertMlccSubmissionAllowed(config) {
 
 /**
  * Post-login navigation only: optional ordering entry, then optional safe target.
- * Never submits orders. License/store selection and add-by-code are Phase 2.
+ * Never submits orders. Add-by-code is Phase 2b+.
  */
 export async function navigateMlccPostLoginSafeFlow({
   page,
@@ -342,6 +441,146 @@ export async function navigateMlccPostLoginSafeFlow({
         : "MLCC authenticated landing verified (no extra navigation URLs)",
     });
   }
+}
+
+/**
+ * Phase 2a: optional bounded license/store interaction (two clicks max) or observe-only evidence.
+ * Does not add lines, validate cart, or submit.
+ */
+export async function runLicenseStorePhase({
+  page,
+  config,
+  heartbeat,
+  buildStepEvidence,
+  buildEvidence,
+  evidenceCollected,
+}) {
+  const title = await page.title().catch(() => "");
+  const heuristic = inferLicenseStoreHeuristic(page.url(), title);
+
+  if (!config.licenseStoreAutomation) {
+    const snap = await buildPageSnapshotAttributes(page);
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_step_snapshot",
+        stage: "mlcc_license_store_checkpoint",
+        message:
+          "License/store: automation off; heuristic + snapshot for operator review only",
+        attributes: {
+          automation_enabled: false,
+          heuristic,
+          ...snap,
+        },
+      }),
+    );
+    await heartbeat({
+      progressStage: "mlcc_license_store_skipped",
+      progressMessage:
+        "License/store automation disabled; see evidence for URL/title heuristic",
+    });
+
+    return;
+  }
+
+  let urlPatternOk = true;
+
+  if (config.licenseStoreUrlPattern) {
+    try {
+      const re = new RegExp(config.licenseStoreUrlPattern);
+      urlPatternOk = re.test(page.url());
+    } catch {
+      throw new Error(
+        "MLCC license/store step failed: invalid MLCC_LICENSE_STORE_URL_PATTERN",
+      );
+    }
+  }
+
+  if (!urlPatternOk) {
+    const snap = await buildPageSnapshotAttributes(page);
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_step_snapshot",
+        stage: "mlcc_license_store_checkpoint",
+        message:
+          "License/store automation skipped: URL does not match MLCC_LICENSE_STORE_URL_PATTERN",
+        attributes: {
+          automation_enabled: true,
+          skipped: true,
+          skip_reason: "url_pattern_no_match",
+          pattern: config.licenseStoreUrlPattern,
+          heuristic,
+          ...snap,
+        },
+      }),
+    );
+    await heartbeat({
+      progressStage: "mlcc_license_store_skipped",
+      progressMessage:
+        "License/store step skipped (URL pattern mismatch); no interaction",
+    });
+
+    return;
+  }
+
+  await heartbeat({
+    progressStage: "mlcc_license_store_in_progress",
+    progressMessage:
+      "Running bounded license/store selection (select + continue only)",
+  });
+
+  evidenceCollected.push(
+    await buildStepEvidence({
+      page,
+      stage: "mlcc_license_store_before_interaction",
+      message: "Before license/store bounded interaction",
+      kind: "mlcc_step_snapshot",
+      buildEvidence,
+      config,
+    }),
+  );
+
+  try {
+    const selectSel = config.licenseStoreSelectSelector;
+    const continueSel = config.licenseStoreContinueSelector;
+    const selectLoc = page.locator(selectSel).first();
+
+    await selectLoc.waitFor({ state: "visible", timeout: 20_000 });
+    await selectLoc.click();
+    await new Promise((r) =>
+      setTimeout(r, config.licenseStoreWaitMs ?? 2000),
+    );
+    const continueLoc = page.locator(continueSel).first();
+
+    await continueLoc.waitFor({ state: "visible", timeout: 20_000 });
+    await continueLoc.click();
+    await page.waitForLoadState("domcontentloaded", { timeout: 60_000 }).catch(
+      () => {},
+    );
+    await new Promise((r) => setTimeout(r, 800));
+  } catch (err) {
+    const m = err instanceof Error ? err.message : String(err);
+
+    throw new Error(`MLCC license/store step failed: ${m}`);
+  }
+
+  evidenceCollected.push(
+    await buildStepEvidence({
+      page,
+      stage: "mlcc_license_store_after_interaction",
+      message: "After license/store bounded interaction",
+      kind: "mlcc_step_snapshot",
+      buildEvidence,
+      config,
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_license_store_complete",
+    progressMessage:
+      "License/store bounded step finished without cart mutation",
+  });
 }
 
 async function buildStepEvidence({
@@ -578,13 +817,27 @@ export async function processOneMlccBrowserDryRun({
       }),
     );
 
-    await loginAndVerifyMlccLanding({ page, config });
+    await prepareMlccLoginPage(page, config);
 
     evidenceCollected.push(
       await buildStepEvidence({
         page,
-        stage: "mlcc_post_login",
-        message: "Post-login landing",
+        stage: "mlcc_pre_login_submit",
+        message: "Credentials filled; checkpoint immediately before login submit",
+        kind: "mlcc_step_snapshot",
+        buildEvidence,
+        config,
+      }),
+    );
+
+    await commitMlccLogin(page);
+    await assertMlccLoginSucceeded(page);
+
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_post_login_landing",
+        message: "Post-login landing after successful auth check",
         kind: "mlcc_step_snapshot",
         buildEvidence,
         config,
@@ -596,6 +849,15 @@ export async function processOneMlccBrowserDryRun({
       progressMessage: "MLCC login succeeded",
     });
 
+    await runLicenseStorePhase({
+      page,
+      config,
+      heartbeat: async (args) => heartbeat(args),
+      buildStepEvidence,
+      buildEvidence,
+      evidenceCollected,
+    });
+
     await navigateMlccPostLoginSafeFlow({
       page,
       config,
@@ -605,8 +867,9 @@ export async function processOneMlccBrowserDryRun({
     evidenceCollected.push(
       await buildStepEvidence({
         page,
-        stage: "mlcc_flow_checkpoint",
-        message: "Post-navigation checkpoint (dry-run; no cart mutations)",
+        stage: "mlcc_ordering_ready_landing",
+        message:
+          "Safe ordering-ready checkpoint (dry-run; no cart mutations, no add-by-code)",
         kind: "mlcc_step_snapshot",
         buildEvidence,
         config,
@@ -624,7 +887,8 @@ export async function processOneMlccBrowserDryRun({
       title = null;
     }
 
-    const result = { finalUrl, title };
+    const orderingReadyHeuristic = inferLicenseStoreHeuristic(finalUrl, title);
+    const result = { finalUrl, title, ordering_ready_heuristic: orderingReadyHeuristic };
 
     await finalizeRun({
       apiBaseUrl,
@@ -633,14 +897,15 @@ export async function processOneMlccBrowserDryRun({
       status: "succeeded",
       workerNotes:
         "MLCC browser dry run completed successfully; no cart mutations or submit actions were performed. " +
-        `dry_run_safe_mode=${MLCC_BROWSER_DRY_RUN_SAFE_MODE} submission_armed=${config.submissionArmed}`,
+        `dry_run_safe_mode=${MLCC_BROWSER_DRY_RUN_SAFE_MODE} submission_armed=${config.submissionArmed} ` +
+        `license_store_automation=${config.licenseStoreAutomation}`,
       errorMessage: undefined,
       evidence: [
         ...evidenceCollected,
         buildEvidence({
           kind: "worker_log",
           stage: "completed",
-          message: "MLCC browser dry-run completed",
+          message: "MLCC browser dry-run completed (Phase 2a checkpoints)",
           attributes: {
             finalUrl,
             title,
@@ -648,6 +913,9 @@ export async function processOneMlccBrowserDryRun({
             submission_armed: config.submissionArmed,
             ordering_entry_configured: Boolean(config.orderingEntryUrl),
             safe_target_configured: Boolean(config.safeTargetUrl),
+            license_store_automation: config.licenseStoreAutomation,
+            ordering_ready_heuristic: orderingReadyHeuristic,
+            checkpoint_ordering_ready: "mlcc_ordering_ready_landing",
           },
         }),
       ],
@@ -663,19 +931,24 @@ export async function processOneMlccBrowserDryRun({
     const msg = err instanceof Error ? err.message : String(err);
     const lower = msg.toLowerCase();
     const isLogin = lower.includes("mlcc login failed");
+    const isLicenseStore = lower.includes("mlcc license/store step failed");
     const classified = classifyFailureType({ errorMessage: msg, explicitType: undefined });
     const looksTransport =
       /timeout|econn|network|fetch failed|502|503|enotfound|etimedout/i.test(msg);
     const failureType = isLogin
       ? FAILURE_TYPE.MLCC_UI_CHANGE
-      : looksTransport
-        ? FAILURE_TYPE.NETWORK_ERROR
-        : FAILURE_TYPE.MLCC_UI_CHANGE;
+      : isLicenseStore
+        ? FAILURE_TYPE.MLCC_UI_CHANGE
+        : looksTransport
+          ? FAILURE_TYPE.NETWORK_ERROR
+          : FAILURE_TYPE.MLCC_UI_CHANGE;
     const mlccSignal = isLogin
       ? MLCC_SIGNAL.LOGIN_AUTH
-      : looksTransport
-        ? MLCC_SIGNAL.NETWORK_TRANSPORT
-        : MLCC_SIGNAL.BROWSER_RUNTIME;
+      : isLicenseStore
+        ? MLCC_SIGNAL.SELECTOR_UI
+        : looksTransport
+          ? MLCC_SIGNAL.NETWORK_TRANSPORT
+          : MLCC_SIGNAL.BROWSER_RUNTIME;
 
     const failAttrs = await buildPageSnapshotAttributes(page);
     let failureEvidenceAttrs = { ...failAttrs, error: msg };
@@ -701,7 +974,7 @@ export async function processOneMlccBrowserDryRun({
         errorMessage: msg,
         failureType,
         failureDetails: {
-          stage: "browser_runtime",
+          stage: isLicenseStore ? "mlcc_license_store" : "browser_runtime",
           mlcc_signal: mlccSignal,
           classified_type: classified,
         },

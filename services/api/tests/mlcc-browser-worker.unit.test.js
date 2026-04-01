@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   assertMlccSubmissionAllowed,
   buildMlccBrowserConfig,
+  inferLicenseStoreHeuristic,
   loginAndVerifyMlccLanding,
 } from "../src/workers/mlcc-browser-worker.js";
 
@@ -35,6 +36,11 @@ describe("buildMlccBrowserConfig", () => {
       submissionArmed: false,
       stepScreenshotsEnabled: false,
       stepScreenshotMaxBytes: 200_000,
+      licenseStoreAutomation: false,
+      licenseStoreSelectSelector: null,
+      licenseStoreContinueSelector: null,
+      licenseStoreUrlPattern: null,
+      licenseStoreWaitMs: 2000,
     });
   });
 
@@ -124,6 +130,56 @@ describe("buildMlccBrowserConfig", () => {
     expect(out.config.submissionArmed).toBe(true);
     expect(out.config.stepScreenshotsEnabled).toBe(true);
     expect(out.config.stepScreenshotMaxBytes).toBe(100_000);
+    expect(out.config.licenseStoreAutomation).toBe(false);
+    expect(out.config.licenseStoreWaitMs).toBe(2000);
+  });
+
+  it("fails when license store automation is on without selectors", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_LICENSE_STORE_AUTOMATION: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors[0].message).toMatch(/MLCC_LICENSE_STORE_SELECT_SELECTOR/);
+  });
+
+  it("accepts license store automation with both selectors", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_LICENSE_STORE_AUTOMATION: "true",
+      MLCC_LICENSE_STORE_SELECT_SELECTOR: "button.pick",
+      MLCC_LICENSE_STORE_CONTINUE_SELECTOR: "a.next",
+      MLCC_LICENSE_STORE_URL_PATTERN: "store|license",
+      MLCC_LICENSE_STORE_WAIT_MS: "500",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.licenseStoreAutomation).toBe(true);
+    expect(out.config.licenseStoreSelectSelector).toBe("button.pick");
+    expect(out.config.licenseStoreContinueSelector).toBe("a.next");
+    expect(out.config.licenseStoreUrlPattern).toBe("store|license");
+    expect(out.config.licenseStoreWaitMs).toBe(500);
+  });
+
+  it("inferLicenseStoreHeuristic is advisory keyword match only", () => {
+    const h1 = inferLicenseStoreHeuristic(
+      "https://portal.example.com/select-store",
+      "Choose store for delivery",
+    );
+    expect(h1.hint).toBe("possible_license_or_store_interstitial");
+    expect(h1.matched_keywords.length).toBeGreaterThan(0);
+
+    const h2 = inferLicenseStoreHeuristic("https://portal.example.com/home", "Home");
+    expect(h2.hint).toBe("no_keyword_match");
   });
 
   it("assertMlccSubmissionAllowed throws when not armed", () => {
