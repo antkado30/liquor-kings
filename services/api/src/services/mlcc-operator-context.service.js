@@ -143,6 +143,37 @@ export function enrichFailureDetailsWithMlccSignal({
 const asEvidenceArray = (value) => (Array.isArray(value) ? value : []);
 
 /**
+ * Resolve mlcc_signal and whether it was stored explicitly on the row vs inferred by merge rules.
+ */
+export function resolveMlccSignalWithSource(run) {
+  const raw =
+    run?.failure_details && typeof run.failure_details === "object"
+      ? run.failure_details
+      : {};
+  const explicit =
+    typeof raw.mlcc_signal === "string" && String(raw.mlcc_signal).length > 0;
+  const merged = enrichFailureDetailsWithMlccSignal({
+    failureDetails: raw,
+    errorMessage: run?.error_message,
+    failureType: run?.failure_type,
+  });
+  const signal = merged.mlcc_signal ?? null;
+  if (!signal) {
+    return { signal: null, source: null };
+  }
+  return {
+    signal,
+    source: explicit ? "explicit" : "inferred",
+  };
+}
+
+/** Short label for diagnostics (same as operator context title). */
+export function getMlccSignalShortLabel(signal) {
+  if (!signal || !GUIDANCE[signal]) return signal ?? "";
+  return GUIDANCE[signal].label;
+}
+
+/**
  * Operator-facing MLCC context for API summaries. Null when no signal applies.
  */
 export function deriveMlccOperatorContext(run) {

@@ -7,6 +7,45 @@ import { useOperatorSession } from "../session/OperatorSessionContext";
 import type { FlashKind } from "../operator-review/types";
 import type { OverviewData } from "./DiagnosticsPage";
 
+function MlccDiagCards({ md }: { md: NonNullable<OverviewData["mlcc_diagnostics"]> }) {
+  const top = Object.entries(md.counts_by_mlcc_signal)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+  return (
+    <div className="diag-cards" style={{ marginTop: 12 }}>
+      <div className="card diag-card">
+        <div className="diag-card-label">MLCC failed (resolved signal)</div>
+        <div className="diag-card-value">{md.failed_runs_with_resolved_mlcc_signal}</div>
+        <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+          explicit {md.failed_runs_explicit_mlcc_signal} · inferred {md.failed_runs_inferred_mlcc_signal}
+        </p>
+      </div>
+      <div className="card diag-card">
+        <div className="diag-card-label">Top MLCC signal</div>
+        <div className="diag-card-value" style={{ fontSize: 16 }}>
+          {top[0] ? (
+            <span className="mono">{top[0][0]}</span>
+          ) : (
+            "—"
+          )}
+        </div>
+        <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+          {top[0] ? `${md.signal_labels[top[0][0]] ?? top[0][0]} (${top[0][1]})` : "No signals in window"}
+        </p>
+      </div>
+      <div className="card diag-card">
+        <div className="diag-card-label">Multi-fail attempts + MLCC</div>
+        <div className="diag-card-value">
+          {md.failed_runs_multi_failed_attempt_with_resolved_mlcc_signal}
+        </div>
+        <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+          Terminal failed run + 2+ failed attempts
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function AttemptInsightCards({ ah }: { ah: NonNullable<OverviewData["attempt_history_insights"]> }) {
   return (
     <div className="diag-cards" style={{ marginTop: 12 }}>
@@ -48,7 +87,7 @@ function AttemptInsightCards({ ah }: { ah: NonNullable<OverviewData["attempt_his
 /**
  * Landing overview: combines diagnostics overview (queue health, retryable failed counts in window,
  * session events) with a single list API call for global pending-manual queue size (total_count).
- * No new backend endpoints.
+ * Uses diagnostics overview API (including MLCC and attempt insights when available).
  */
 export function OperatorOverviewPage() {
   const { handleSessionFailure } = useOperatorSession();
@@ -199,6 +238,17 @@ export function OperatorOverviewPage() {
             </div>
             {data.attempt_history_insights ? (
               <AttemptInsightCards ah={data.attempt_history_insights} />
+            ) : null}
+
+            {data.mlcc_diagnostics ? (
+              <section className="card" style={{ marginTop: 12 }}>
+                <h3 className="section-title">MLCC failure signals (window)</h3>
+                <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+                  From stored <code>failure_details</code> + inference rules. See{" "}
+                  <Link to="/diagnostics">Diagnostics</Link> for full breakdown and trends.
+                </p>
+                <MlccDiagCards md={data.mlcc_diagnostics} />
+              </section>
             ) : null}
 
             {qh ? (

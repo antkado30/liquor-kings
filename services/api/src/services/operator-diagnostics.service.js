@@ -4,6 +4,11 @@ import {
   computeAttemptHistoryWindowInsights,
   fetchAttemptsByRunIdsGrouped,
 } from "./execution-attempt-aggregate.service.js";
+import {
+  MLCC_SIGNAL,
+  getMlccSignalShortLabel,
+  resolveMlccSignalWithSource,
+} from "./mlcc-operator-context.service.js";
 
 const DEFAULT_RUN_WINDOW_DAYS = 7;
 const DEFAULT_DIAG_LIMIT = 120;
@@ -215,6 +220,101 @@ function emptyBucket() {
   };
 }
 
+function aggregateMlccFailedSignalsByKey(runs, keys, keyFromRunIso, windowStartIso) {
+  const map = new Map(keys.map((k) => [k, {}]));
+  for (const r of runs) {
+    if (r.status !== "failed") continue;
+    const t = r.created_at;
+    if (!t || t < windowStartIso) continue;
+    const k = keyFromRunIso(t);
+    if (k == null || !map.has(k)) continue;
+    const { signal } = resolveMlccSignalWithSource(r);
+    if (!signal) continue;
+    const o = map.get(k);
+    o[signal] = (o[signal] ?? 0) + 1;
+  }
+  return keys.map((k) => map.get(k));
+}
+
+function rollupMlccFailedBySignalFromPoints(points) {
+  const out = {};
+  for (const p of points) {
+    const m = p.mlcc_failed_by_signal;
+    if (!m || typeof m !== "object") continue;
+    for (const [sig, n] of Object.entries(m)) {
+      const c = Number(n);
+      if (!Number.isFinite(c)) continue;
+      out[sig] = (out[sig] ?? 0) + c;
+    }
+  }
+  return out;
+}
+
+function computeMlccWindowDiagnostics(runs, attemptsByRunId) {
+  const failed = runs.filter((r) => r.status === "failed");
+  const bySignal = {};
+  let explicitRecorded = 0;
+  let inferredRecorded = 0;
+
+  for (const r of failed) {
+    const { signal, source } = resolveMlccSignalWithSource(r);
+    if (!signal) continue;
+    bySignal[signal] = (bySignal[signal] ?? 0) + 1;
+    if (source === "explicit") explicitRecorded += 1;
+    else if (source === "inferred") inferredRecorded += 1;
+  }
+
+  const failedWithSignal = explicitRecorded + inferredRecorded;
+
+  const recent = failed
+    .slice()
+    .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+    .slice(0, 20)
+    .map((r) => {
+      const { signal, source } = resolveMlccSignalWithSource(r);
+      if (!signal) return null;
+      return {
+        run_id: r.id,
+        created_at: r.created_at ?? null,
+        mlcc_signal: signal,
+        signal_source: source,
+        failure_type: r.failure_type ?? null,
+      };
+    })
+    .filter(Boolean);
+
+  let failedRunsMultiFailedAttemptWithResolvedMlcc = 0;
+  for (const r of failed) {
+    const attempts = attemptsByRunId.get(r.id) ?? [];
+    const failedAttempts = attempts.filter((a) => a.status === "failed");
+    if (failedAttempts.length < 2) continue;
+    const { signal } = resolveMlccSignalWithSource(r);
+    if (signal) failedRunsMultiFailedAttemptWithResolvedMlcc += 1;
+  }
+
+  const signalLabels = {};
+  for (const v of Object.values(MLCC_SIGNAL)) {
+    signalLabels[v] = getMlccSignalShortLabel(v);
+  }
+
+  return {
+    interpretation_notes: [
+      "mlcc_signal comes from failure_details.mlcc_signal when present, else is inferred using the same rules as operator review (message, stage, failure_type).",
+      "counts_by_mlcc_signal includes only failed runs in this execution_runs sample that resolve to a signal.",
+      "failed_runs_multi_failed_attempt_with_resolved_mlcc_signal: failed runs with 2+ stored failed attempts and a resolved mlcc_signal on the run row. Attempt rows do not store mlcc_signal per attempt.",
+      "Trend buckets (see trends.mlcc_failed_by_signal_rollup) count failed runs per time bucket that resolve to a signal; capped trend run query may omit older failures.",
+    ],
+    failed_runs_with_resolved_mlcc_signal: failedWithSignal,
+    failed_runs_explicit_mlcc_signal: explicitRecorded,
+    failed_runs_inferred_mlcc_signal: inferredRecorded,
+    counts_by_mlcc_signal: bySignal,
+    recent_failed_with_mlcc_signal: recent,
+    failed_runs_multi_failed_attempt_with_resolved_mlcc_signal:
+      failedRunsMultiFailedAttemptWithResolvedMlcc,
+    signal_labels: signalLabels,
+  };
+}
+
 function aggregateBuckets(runs, manualRows, keys, keyFromRunIso, windowStartIso) {
   const map = new Map(keys.map((k) => [k, emptyBucket()]));
   for (const r of runs) {
@@ -268,6 +368,7 @@ function buildTrendWindow(nowMs, runs, manualRows, hoursOrDays, mode) {
   }
 
   const buckets = aggregateBuckets(runs, manualRows, keys, keyFromRunIso, windowStartIso);
+  const mlccPerKey = aggregateMlccFailedSignalsByKey(runs, keys, keyFromRunIso, windowStartIso);
   const points = keys.map((_, i) => ({
     label: labels[i],
     runs: buckets[i].runs,
@@ -275,6 +376,7 @@ function buildTrendWindow(nowMs, runs, manualRows, hoursOrDays, mode) {
     retryable_failures: buckets[i].retryable_failures,
     non_retryable_failures: buckets[i].non_retryable_failures,
     manual_review_marks: buckets[i].manual_review_marks,
+    mlcc_failed_by_signal: mlccPerKey[i],
   }));
 
   return {
@@ -286,9 +388,14 @@ function buildTrendWindow(nowMs, runs, manualRows, hoursOrDays, mode) {
 }
 
 function buildTrendsForStore(runsForTrend, manualForTrend, runsCapHit, manualCapHit, nowMs = Date.now()) {
+  const w24 = buildTrendWindow(nowMs, runsForTrend, manualForTrend, 24, "hour");
+  const w7 = buildTrendWindow(nowMs, runsForTrend, manualForTrend, 7, "day");
+  const w30 = buildTrendWindow(nowMs, runsForTrend, manualForTrend, 30, "day");
+
   const notes = [
     `Trends use up to ${TREND_RUN_CAP} runs and ${TREND_MANUAL_CAP} manual-review actions in the last ${TREND_LOOKBACK_DAYS} days (UTC buckets). Caps may truncate older points in busy stores.`,
     "Runs are bucketed by execution_runs.created_at. Manual review marks are mark_for_manual_review actions bucketed by action created_at (not run creation).",
+    "Each point includes mlcc_failed_by_signal: counts of failed runs in that bucket that resolve to an mlcc_signal (explicit or inferred). Rollups sum those counts across buckets (not deduplicating runs across windows).",
   ];
 
   return {
@@ -300,10 +407,15 @@ function buildTrendsForStore(runsForTrend, manualForTrend, runsCapHit, manualCap
     manual_actions_rows_used: manualForTrend.length,
     manual_actions_cap_hit: manualCapHit,
     lookback_days: TREND_LOOKBACK_DAYS,
+    mlcc_failed_by_signal_rollup: {
+      "24h": rollupMlccFailedBySignalFromPoints(w24.points),
+      "7d": rollupMlccFailedBySignalFromPoints(w7.points),
+      "30d": rollupMlccFailedBySignalFromPoints(w30.points),
+    },
     windows: {
-      "24h": buildTrendWindow(nowMs, runsForTrend, manualForTrend, 24, "hour"),
-      "7d": buildTrendWindow(nowMs, runsForTrend, manualForTrend, 7, "day"),
-      "30d": buildTrendWindow(nowMs, runsForTrend, manualForTrend, 30, "day"),
+      "24h": w24,
+      "7d": w7,
+      "30d": w30,
     },
   };
 }
@@ -327,7 +439,9 @@ export async function getOperatorDiagnosticsOverview(
   const [runsRes, diagRes, trendRunsRes, manualRes, activeHealthRes] = await Promise.all([
     supabase
       .from("execution_runs")
-      .select("id, status, failure_type, retry_count, max_retries, created_at")
+      .select(
+        "id, status, failure_type, failure_details, error_message, retry_count, max_retries, created_at",
+      )
       .eq("store_id", storeId)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
@@ -340,7 +454,9 @@ export async function getOperatorDiagnosticsOverview(
       .limit(diagLimit),
     supabase
       .from("execution_runs")
-      .select("status, failure_type, retry_count, max_retries, created_at")
+      .select(
+        "id, status, failure_type, failure_details, error_message, retry_count, max_retries, created_at",
+      )
       .eq("store_id", storeId)
       .gte("created_at", trendSince)
       .order("created_at", { ascending: true })
@@ -497,8 +613,10 @@ export async function getOperatorDiagnosticsOverview(
             "Trends (below) use a separate capped query over the last 30 days; summary cards above still use the execution_runs_window_days setting.",
             "Queue health uses a live snapshot of queued+running runs (capped); see queue_health.thresholds_applied and interpretation_notes.",
             "attempt_history_insights use execution_run_attempts for the same run sample (joined by run id); see attempt_history_insights.interpretation_notes.",
+            "mlcc_diagnostics derive mlcc_signal from stored failure_details and fields on execution_runs; see mlcc_diagnostics.interpretation_notes.",
           ],
         },
+        mlcc_diagnostics: computeMlccWindowDiagnostics(runs, attemptsByRunId),
         execution_runs: {
           by_status: byStatus,
           failed_by_failure_type: failedByType,

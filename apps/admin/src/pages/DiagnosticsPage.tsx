@@ -22,6 +22,8 @@ type TrendPoint = {
   retryable_failures: number;
   non_retryable_failures: number;
   manual_review_marks: number;
+  /** Failed runs in bucket that resolved to an mlcc_signal (sparse object). */
+  mlcc_failed_by_signal?: Record<string, number>;
 };
 
 type TrendWindow = {
@@ -40,6 +42,8 @@ type TrendsData = {
   manual_actions_rows_used: number;
   manual_actions_cap_hit: boolean;
   lookback_days: number;
+  /** Sum of per-bucket mlcc_failed_by_signal counts per window (same caps as trends). */
+  mlcc_failed_by_signal_rollup?: Record<"24h" | "7d" | "30d", Record<string, number>>;
   windows: Record<"24h" | "7d" | "30d", TrendWindow>;
 };
 
@@ -73,6 +77,23 @@ type QueueHealthData = {
   active_runs_cap_hit: boolean;
   worker_snapshot: WorkerSnapshot;
   warnings: HealthWarning[];
+};
+
+export type MlccDiagnosticsWindow = {
+  interpretation_notes: string[];
+  failed_runs_with_resolved_mlcc_signal: number;
+  failed_runs_explicit_mlcc_signal: number;
+  failed_runs_inferred_mlcc_signal: number;
+  counts_by_mlcc_signal: Record<string, number>;
+  recent_failed_with_mlcc_signal: Array<{
+    run_id: string;
+    created_at: string | null;
+    mlcc_signal: string;
+    signal_source: "explicit" | "inferred";
+    failure_type: string | null;
+  }>;
+  failed_runs_multi_failed_attempt_with_resolved_mlcc_signal: number;
+  signal_labels: Record<string, string>;
 };
 
 export type AttemptHistoryInsights = {
@@ -109,6 +130,8 @@ export type OverviewData = {
     failed_non_retryable_count: number;
   };
   attempt_history_insights?: AttemptHistoryInsights;
+  /** MLCC signal breakdown for failed runs in the execution window sample. */
+  mlcc_diagnostics?: MlccDiagnosticsWindow;
   queue_health?: QueueHealthData;
   trends?: TrendsData;
   recent_system_diagnostics: DiagRow[];
@@ -503,6 +526,39 @@ export function DiagnosticsPage() {
                         </tbody>
                       </table>
                     </div>
+                    {data.trends.mlcc_failed_by_signal_rollup?.[trendWindow] &&
+                    Object.keys(data.trends.mlcc_failed_by_signal_rollup[trendWindow]).length > 0 ? (
+                      <div style={{ marginTop: 16 }}>
+                        <h4 style={{ margin: "0 0 8px", fontSize: 14 }}>
+                          MLCC signals in this trend window (failed runs with resolved signal)
+                        </h4>
+                        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+                          Rollup sums per-bucket counts from the table above. Same run is not counted
+                          across windows; cap may omit older runs.
+                        </p>
+                        <table className="diag-table" style={{ maxWidth: 560 }}>
+                          <thead>
+                            <tr>
+                              <th>mlcc_signal</th>
+                              <th>Count (rollup)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {entriesSorted(
+                              data.trends.mlcc_failed_by_signal_rollup[trendWindow] as Record<
+                                string,
+                                number
+                              >,
+                            ).map(([sig, c]) => (
+                              <tr key={sig}>
+                                <td className="mono">{sig}</td>
+                                <td>{c}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
                   </>
                 );
               })()}
@@ -512,6 +568,120 @@ export function DiagnosticsPage() {
               Trend series not available from API (upgrade API to get 24h / 7d / 30d buckets).
             </div>
           )}
+
+          {data.mlcc_diagnostics ? (
+            <div className="card" style={{ marginTop: 12 }}>
+              <h3 className="section-title">MLCC failure signals (execution window)</h3>
+              <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+                Uses <code>failure_details.mlcc_signal</code> when set by workers, otherwise the same
+                inference rules as operator review. Only <strong>failed</strong> runs that resolve to a
+                signal are counted.
+              </p>
+              <ul className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+                {data.mlcc_diagnostics.interpretation_notes.slice(0, 4).map((n, i) => (
+                  <li key={i} style={{ marginBottom: 4 }}>
+                    {n}
+                  </li>
+                ))}
+              </ul>
+              <div className="diag-cards">
+                <div className="card diag-card">
+                  <div className="diag-card-label">Failed runs w/ MLCC signal</div>
+                  <div className="diag-card-value">
+                    {data.mlcc_diagnostics.failed_runs_with_resolved_mlcc_signal}
+                  </div>
+                </div>
+                <div className="card diag-card">
+                  <div className="diag-card-label">Explicit signal on row</div>
+                  <div className="diag-card-value">
+                    {data.mlcc_diagnostics.failed_runs_explicit_mlcc_signal}
+                  </div>
+                  <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+                    Stored in <code>failure_details.mlcc_signal</code>
+                  </p>
+                </div>
+                <div className="card diag-card">
+                  <div className="diag-card-label">Inferred signal</div>
+                  <div className="diag-card-value">
+                    {data.mlcc_diagnostics.failed_runs_inferred_mlcc_signal}
+                  </div>
+                  <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+                    From message / stage / failure_type
+                  </p>
+                </div>
+                <div className="card diag-card">
+                  <div className="diag-card-label">Multi-failed-attempt + MLCC (terminal)</div>
+                  <div className="diag-card-value">
+                    {
+                      data.mlcc_diagnostics
+                        .failed_runs_multi_failed_attempt_with_resolved_mlcc_signal
+                    }
+                  </div>
+                  <p className="muted" style={{ fontSize: 10, margin: "6px 0 0" }}>
+                    Failed run row + 2+ failed attempts stored
+                  </p>
+                </div>
+              </div>
+              {entriesSorted(data.mlcc_diagnostics.counts_by_mlcc_signal).length === 0 ? (
+                <p className="muted">No failed runs in the window resolved to an mlcc_signal.</p>
+              ) : (
+                <div style={{ marginTop: 12 }}>
+                  <h4 style={{ margin: "0 0 8px", fontSize: 14 }}>Counts by mlcc_signal</h4>
+                  <table className="diag-table" style={{ maxWidth: 720 }}>
+                    <thead>
+                      <tr>
+                        <th>Signal</th>
+                        <th>Label</th>
+                        <th>Count</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {entriesSorted(data.mlcc_diagnostics.counts_by_mlcc_signal).map(
+                        ([sig, c]) => (
+                          <tr key={sig}>
+                            <td className="mono">{sig}</td>
+                            <td>
+                              {(data.mlcc_diagnostics?.signal_labels ?? {})[sig] ?? "—"}
+                            </td>
+                            <td>{c}</td>
+                          </tr>
+                        ),
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {data.mlcc_diagnostics.recent_failed_with_mlcc_signal.length > 0 ? (
+                <div style={{ marginTop: 16 }}>
+                  <h4 style={{ margin: "0 0 8px", fontSize: 14 }}>Recent failed runs (with signal)</h4>
+                  <table className="diag-table trend-table">
+                    <thead>
+                      <tr>
+                        <th>When (UTC)</th>
+                        <th>run_id</th>
+                        <th>signal</th>
+                        <th>source</th>
+                        <th>failure_type</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.mlcc_diagnostics.recent_failed_with_mlcc_signal.map((r) => (
+                        <tr key={r.run_id}>
+                          <td className="mono" style={{ whiteSpace: "nowrap" }}>
+                            {r.created_at ?? "—"}
+                          </td>
+                          <td className="mono">{r.run_id}</td>
+                          <td className="mono">{r.mlcc_signal}</td>
+                          <td>{r.signal_source}</td>
+                          <td className="mono">{r.failure_type ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {data.attempt_history_insights ? (
             <div className="card" style={{ marginTop: 12 }}>
