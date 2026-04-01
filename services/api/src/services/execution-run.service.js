@@ -8,6 +8,10 @@ import {
   classifyFailureType,
   isRetryableFailureType,
 } from "./execution-failure.service.js";
+import {
+  deriveMlccOperatorContext,
+  enrichFailureDetailsWithMlccSignal,
+} from "./mlcc-operator-context.service.js";
 import { isUuid } from "../utils/validation.js";
 
 const ACTIVE_STATUSES = ["queued", "running"];
@@ -258,6 +262,8 @@ const buildRunSummary = (run, operatorActions = []) => {
       failureType === "OUT_OF_STOCK" ||
       hasEvidence);
 
+  const mlccOperatorContext = deriveMlccOperatorContext(run);
+
   return {
     run_id: run?.id ?? null,
     store_id: run?.store_id ?? null,
@@ -267,6 +273,8 @@ const buildRunSummary = (run, operatorActions = []) => {
     max_retries: maxRetries,
     failure_type: failureType,
     failure_message: failureMessage,
+    failure_details: run?.failure_details ?? null,
+    mlcc_operator_context: mlccOperatorContext,
     progress_stage: run?.progress_stage ?? null,
     progress_message: run?.progress_message ?? null,
     timestamps: {
@@ -306,6 +314,7 @@ const buildOperatorReviewListItem = (summary, attemptFields = null) => {
     status: summary.status,
     failure_type: summary.failure_type,
     failure_message: summary.failure_message,
+    mlcc_operator_context: summary.mlcc_operator_context ?? null,
     retry_count: summary.retry_count,
     retry_allowed: summary.retry_allowed,
     progress_stage: summary.progress_stage,
@@ -967,14 +976,18 @@ export const updateExecutionRunStatus = async (
 
     patch.error_message = errorMessage ?? null;
     patch.failure_type = classifiedType;
-    patch.failure_details = {
-      ...(failureDetails && typeof failureDetails === "object" ? failureDetails : {}),
-      classified_type: classifiedType,
-      retryable,
-      retry_count_before: retryCount,
-      max_retries: maxRetries,
-      failed_at: nowIso,
-    };
+    patch.failure_details = enrichFailureDetailsWithMlccSignal({
+      failureDetails: {
+        ...(failureDetails && typeof failureDetails === "object" ? failureDetails : {}),
+        classified_type: classifiedType,
+        retryable,
+        retry_count_before: retryCount,
+        max_retries: maxRetries,
+        failed_at: nowIso,
+      },
+      errorMessage: patch.error_message,
+      failureType: classifiedType,
+    });
     patch.heartbeat_at = nowIso;
 
     if (shouldRetry) {

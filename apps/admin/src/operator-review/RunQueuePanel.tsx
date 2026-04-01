@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { failureGuidanceText } from "../lib/failureGuidance";
+import { formatMlccContextLine } from "./mlccOperatorContext";
 import {
   filterRunIdsFailedRetryable,
   filterRunIdsManualReviewCandidates,
@@ -450,6 +451,8 @@ function RunQueuePanelInner({
         ) : (
           displayRuns.map((row) => {
             const hint = failureGuidanceText(row.failure_type);
+            const mlccLine =
+              row.mlcc_operator_context && formatMlccContextLine(row.mlcc_operator_context);
             const band = runCardPriorityClass(row);
             const reason = priorityReason(row);
             return (
@@ -503,6 +506,11 @@ function RunQueuePanelInner({
                         {row.repeated_same_stored_failure
                           ? " · repeated same stored failure (type+message)"
                           : ""}
+                      </div>
+                    ) : null}
+                    {mlccLine ? (
+                      <div className="hint mlcc-queue-hint" style={{ fontSize: 12 }}>
+                        <strong>MLCC:</strong> {mlccLine}
                       </div>
                     ) : null}
                     {hint ? <div className="hint">{hint}</div> : null}

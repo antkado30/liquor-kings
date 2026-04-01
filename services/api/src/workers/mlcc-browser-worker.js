@@ -9,7 +9,11 @@ import {
   finalizeRun,
   heartbeatRun,
 } from "./execution-worker.js";
-import { FAILURE_TYPE } from "../services/execution-failure.service.js";
+import {
+  FAILURE_TYPE,
+  classifyFailureType,
+} from "../services/execution-failure.service.js";
+import { MLCC_SIGNAL } from "../services/mlcc-operator-context.service.js";
 
 export function buildMlccBrowserConfig({ payload, env }) {
   if (!payload) {
@@ -296,7 +300,11 @@ export async function processOneMlccBrowserDryRun({
       workerNotes: "MLCC browser dry run failed during payload preflight",
       errorMessage,
       failureType: FAILURE_TYPE.QUANTITY_RULE_VIOLATION,
-      failureDetails: { stage: "payload_preflight", errors: planResult.errors },
+      failureDetails: {
+        stage: "payload_preflight",
+        mlcc_signal: MLCC_SIGNAL.DRY_RUN_PREFLIGHT,
+        errors: planResult.errors,
+      },
       evidence: [
         buildEvidence({
           kind: "cart_verification_snapshot",
@@ -328,7 +336,11 @@ export async function processOneMlccBrowserDryRun({
       workerNotes: "MLCC browser dry run failed during browser config validation",
       errorMessage,
       failureType: FAILURE_TYPE.MLCC_UI_CHANGE,
-      failureDetails: { stage: "browser_config", errors: browserConfig.errors },
+      failureDetails: {
+        stage: "browser_config",
+        mlcc_signal: MLCC_SIGNAL.CONFIG_ENV,
+        errors: browserConfig.errors,
+      },
       evidence: [
         buildEvidence({
           kind: "mlcc_ui_diagnostics",
@@ -378,7 +390,16 @@ export async function processOneMlccBrowserDryRun({
         workerNotes: "deterministic assertion failed in MLCC browser worker",
         errorMessage: deterministic.message,
         failureType: deterministic.code ?? FAILURE_TYPE.UNKNOWN,
-        failureDetails: deterministic.details,
+        failureDetails: {
+          ...(deterministic.details && typeof deterministic.details === "object"
+            ? deterministic.details
+            : {}),
+          stage: "validate",
+          mlcc_signal:
+            deterministic.code === FAILURE_TYPE.CODE_MISMATCH
+              ? MLCC_SIGNAL.CART_IDENTITY
+              : MLCC_SIGNAL.QUANTITY_RULES,
+        },
         evidence: [
           buildEvidence({
             kind: "cart_verification_snapshot",
@@ -469,6 +490,21 @@ export async function processOneMlccBrowserDryRun({
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const lower = msg.toLowerCase();
+    const isLogin = lower.includes("mlcc login failed");
+    const classified = classifyFailureType({ errorMessage: msg, explicitType: undefined });
+    const looksTransport =
+      /timeout|econn|network|fetch failed|502|503|enotfound|etimedout/i.test(msg);
+    const failureType = isLogin
+      ? FAILURE_TYPE.MLCC_UI_CHANGE
+      : looksTransport
+        ? FAILURE_TYPE.NETWORK_ERROR
+        : FAILURE_TYPE.MLCC_UI_CHANGE;
+    const mlccSignal = isLogin
+      ? MLCC_SIGNAL.LOGIN_AUTH
+      : looksTransport
+        ? MLCC_SIGNAL.NETWORK_TRANSPORT
+        : MLCC_SIGNAL.BROWSER_RUNTIME;
 
     try {
       await finalizeRun({
@@ -478,8 +514,12 @@ export async function processOneMlccBrowserDryRun({
         status: "failed",
         workerNotes: "MLCC browser dry run failed",
         errorMessage: msg,
-        failureType: FAILURE_TYPE.NETWORK_ERROR,
-        failureDetails: { stage: "browser_runtime" },
+        failureType,
+        failureDetails: {
+          stage: "browser_runtime",
+          mlcc_signal: mlccSignal,
+          classified_type: classified,
+        },
         evidence: [
           buildEvidence({
             kind: "mlcc_ui_diagnostics",

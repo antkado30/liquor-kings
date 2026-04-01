@@ -23,6 +23,10 @@ export function classifyFailureType({ errorMessage, explicitType }) {
 
   const msg = String(errorMessage ?? "").toLowerCase();
 
+  if (msg.includes("mlcc login failed")) {
+    return FAILURE_TYPE.MLCC_UI_CHANGE;
+  }
+
   if (
     msg.includes("code_mismatch") ||
     msg.includes("mlcc_item_not_found") ||

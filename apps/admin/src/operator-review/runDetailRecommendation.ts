@@ -150,7 +150,7 @@ export function retryContextLines(summary: Summary): string[] {
 
   if (status === "failed" && ft) {
     lines.push(
-      `Current failure_type on this row: ${ft}. Per-attempt failure history is not included in this API response — only the latest classification is shown.`,
+      `Current failure_type on this row: ${ft}. Per-attempt rows appear under "Execution attempts (stored)" when the server recorded them.`,
     );
   } else if (rc > 0) {
     lines.push(

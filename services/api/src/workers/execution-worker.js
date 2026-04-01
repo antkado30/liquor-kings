@@ -347,7 +347,12 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
       workerNotes: "deterministic assertion failed in local execution worker",
       errorMessage: deterministic.message,
       failureType: deterministic.code,
-      failureDetails: deterministic.details,
+      failureDetails: {
+        ...(deterministic.details && typeof deterministic.details === "object"
+          ? deterministic.details
+          : {}),
+        stage: "validate",
+      },
       evidence: [
         buildEvidenceEntry({
           kind: "cart_verification_snapshot",

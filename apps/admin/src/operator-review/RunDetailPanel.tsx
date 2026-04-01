@@ -1,4 +1,4 @@
-import { failureGuidanceText } from "../lib/failureGuidance";
+import { combinedFailureGuidance } from "./mlccOperatorContext";
 import { FailureBadge, StatusBadge } from "./components/Badges";
 import { EvidenceBlock } from "./components/EvidenceBlock";
 import { Msg } from "./components/Msg";
@@ -9,7 +9,13 @@ import {
   retryContextLines,
   type OperatorRecommendation,
 } from "./runDetailRecommendation";
-import type { ExecutionAttemptRow, FlashMsg, OpAction, Summary } from "./types";
+import type {
+  ExecutionAttemptRow,
+  FlashMsg,
+  MlccOperatorContextRow,
+  OpAction,
+  Summary,
+} from "./types";
 
 const TIMESTAMP_ORDER = [
   "queued_at",
@@ -68,6 +74,13 @@ export function RunDetailPanel({
   const retryAllowed = Boolean(summary?.retry_allowed);
   const rec: OperatorRecommendation | null = summary ? getOperatorRecommendation(summary) : null;
   const sortedActions = sortOpActionsChronological(opActions);
+  const mlccCtx = summary?.mlcc_operator_context as MlccOperatorContextRow | null | undefined;
+  const guidance = summary
+    ? combinedFailureGuidance(
+        summary.failure_type as string | null | undefined,
+        mlccCtx ?? null,
+      )
+    : { primary: "" };
 
   const tsEntries = summary?.timestamps
     ? (() => {
@@ -155,6 +168,20 @@ export function RunDetailPanel({
                     <span className="muted">Type</span>{" "}
                     <FailureBadge ft={summary.failure_type as string | null} />
                   </div>
+                  {mlccCtx ? (
+                    <div className="mlcc-context-line" style={{ marginTop: 8 }}>
+                      <strong>MLCC context</strong>{" "}
+                      <span className="mono" style={{ fontSize: 12 }}>
+                        {mlccCtx.mlcc_signal}
+                      </span>
+                      <div style={{ marginTop: 4 }}>{mlccCtx.label}</div>
+                      {mlccCtx.evidence_kinds && mlccCtx.evidence_kinds.length > 0 ? (
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                          Evidence kinds: {mlccCtx.evidence_kinds.join(", ")}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {summary.failure_message ? (
                     <div className="failure-message">{String(summary.failure_message)}</div>
                   ) : (
@@ -164,7 +191,12 @@ export function RunDetailPanel({
                   )}
                   {summary.failure_type ? (
                     <div className="failure-guidance failure-guidance-inline">
-                      <strong>Triage hint</strong> {failureGuidanceText(String(summary.failure_type))}
+                      <strong>Triage hint</strong> {guidance.primary}
+                    </div>
+                  ) : null}
+                  {guidance.mlcc ? (
+                    <div className="failure-guidance failure-guidance-mlcc" style={{ marginTop: 8 }}>
+                      <strong>MLCC-specific guidance</strong> {guidance.mlcc}
                     </div>
                   ) : null}
                 </div>
@@ -206,7 +238,7 @@ export function RunDetailPanel({
       {summary?.failure_type && summary.status !== "failed" ? (
         <div className="failure-guidance">
           <strong>failure_type on row ({String(summary.failure_type)})</strong>{" "}
-          {failureGuidanceText(String(summary.failure_type))}
+          {combinedFailureGuidance(String(summary.failure_type), mlccCtx ?? null).primary}
         </div>
       ) : null}
 

@@ -9,12 +9,20 @@ export type RunSummaryTimestamps = {
   [key: string]: unknown;
 };
 
+export type MlccOperatorContextRow = {
+  mlcc_signal: string;
+  label: string;
+  guidance: string;
+  evidence_kinds?: string[];
+};
+
 export type RunSummaryRow = {
   run_id: string;
   cart_id?: string | null;
   status: string;
   failure_type?: string | null;
   failure_message?: string | null;
+  mlcc_operator_context?: MlccOperatorContextRow | null;
   retry_allowed?: boolean;
   retry_count?: number;
   operator_status?: string;

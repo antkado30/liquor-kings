@@ -6,9 +6,9 @@ const FAILURE_GUIDANCE: Record<string, string> = {
   QUANTITY_RULE_VIOLATION:
     "Fix quantity or rule configuration; retry is unlikely to succeed until data is corrected.",
   MLCC_UI_CHANGE:
-    "MLCC site or selectors may have changed — expect manual review; check automation evidence.",
+    "MLCC automation UI/login/page flow may not match expectations (includes login and selector issues). Use MLCC-specific context below when present; check evidence.",
   NETWORK_ERROR:
-    "Often transient — retry may be appropriate when the system shows retry_allowed.",
+    "Often transient — retry may be appropriate when the system shows retry_allowed. For MLCC browser workers, distinguish transport errors from login/runtime using context below.",
   UNKNOWN:
     "Investigate evidence and logs; treat as manual review until root cause is clear.",
 };
