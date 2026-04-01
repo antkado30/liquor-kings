@@ -87,9 +87,31 @@ if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2F")) {
   checks.push("mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2F (Phase 2f)");
 }
 
-// Phase 2b/2c rebuild path must not type into product fields in probe module (login is in worker only).
+if (!probe.includes("runAddByCodePhase2gTypingPolicyAndRehearsal")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must define runAddByCodePhase2gTypingPolicyAndRehearsal (Phase 2g)",
+  );
+}
+
+if (!probe.includes("export const PHASE_2G_TYPING_POLICY_VERSION")) {
+  checks.push("mlcc-browser-add-by-code-probe.js must export PHASE_2G_TYPING_POLICY_VERSION");
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2G")) {
+  checks.push("mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2G (Phase 2g)");
+}
+
+// Phase 2b/2c: no product .fill in probe; Phase 2g may use exactly sentinel fill+clear (synthetic only).
 if (/\b\.fill\s*\(/u.test(probe)) {
-  checks.push("mlcc-browser-add-by-code-probe.js must not use .fill( — typing belongs only in controlled phases; probe is read-only");
+  const onlyPhase2gSentinel =
+    probe.includes("runAddByCodePhase2gTypingPolicyAndRehearsal") &&
+    probe.includes("fill(sentinelVal") &&
+    probe.includes('fill("",');
+  if (!onlyPhase2gSentinel) {
+    checks.push(
+      "mlcc-browser-add-by-code-probe.js: .fill( allowed only for Phase 2g synthetic sentinel rehearsal (fill sentinel + clear)",
+    );
+  }
 }
 
 // Submission guard must not be invoked in processOneMlccBrowserDryRun body (only defined for future use).

@@ -1110,6 +1110,645 @@ export async function runAddByCodePhase2cFieldHardening({
   };
 }
 
+/** Bump when Phase 2g policy semantics change (anti-drift / operator docs). */
+export const PHASE_2G_TYPING_POLICY_VERSION = "lk-rpa-2g-1";
+
+export function buildPhase2gTypingPolicyManifest() {
+  return {
+    version: PHASE_2G_TYPING_POLICY_VERSION,
+    phase_intent: "pre_mutation_typing_policy_and_bounded_rehearsal_only",
+    default_behavior: "read_only_field_and_risk_analysis_no_product_value_entry",
+    cart_mutation_in_phase_2g: "none_by_design",
+    future_approved_typing_phase_would_require: [
+      "explicit_later_phase_in_repo_plus_anti_drift_updates",
+      "dedicated_env_flag_not_implemented_placeholder_MLCC_ADD_BY_CODE_TYPING_PHASE_APPROVED",
+      "tenant_code_and_quantity_selectors_resolved_or_documented_operator_waiver",
+      "layer_2_network_guards_remain_installed",
+      "layer_3_submit_like_controls_remain_out_of_scope_for_blind_entry",
+      "phase_2g_extended_mutation_risk_documented_pass_or_recorded_exception",
+      "still_no_checkout_validate_add_to_cart_submit_in_worker_paths",
+    ],
+    stop_conditions: [
+      "extended_mutation_risk_rehearsal_blocked",
+      "field_disabled_readonly_or_not_visible",
+      "sentinel_typing_env_on_but_value_invalid_or_missing",
+      "sentinel_skipped_for_number_input_until_numeric_policy_exists",
+      "network_guard_blocked_request_count_increases_during_sentinel_rehearsal",
+    ],
+    mutation_risk_signals_documented: [
+      "input_type_and_select_eligibility",
+      "form_action_url_mutation_heuristic",
+      "form_http_method_post_advisory",
+      "visible_submit_control_count_in_form_advisory",
+      "field_id_and_name_mutation_heuristic",
+      "network_abort_delta_around_sentinel_fill_clear",
+    ],
+  };
+}
+
+/**
+ * Serializable DOM hints from the page → Node-side risk (tests call this directly).
+ */
+export function computePhase2gExtendedMutationRisk(raw) {
+  if (!raw || typeof raw !== "object") {
+    return {
+      rehearsal_blocked: true,
+      block_reasons: ["invalid_risk_payload"],
+      advisory_signals: [],
+    };
+  }
+
+  if (raw.kind === "select") {
+    return {
+      rehearsal_blocked: true,
+      block_reasons: ["select_element"],
+      advisory_signals: [],
+    };
+  }
+
+  if (raw.kind === "unsupported") {
+    return {
+      rehearsal_blocked: true,
+      block_reasons: ["unsupported_element"],
+      advisory_signals: [],
+    };
+  }
+
+  if (raw.kind !== "field") {
+    return {
+      rehearsal_blocked: true,
+      block_reasons: ["unknown_element_kind"],
+      advisory_signals: [],
+    };
+  }
+
+  const t = String(raw.inputType || "text").toLowerCase();
+
+  if (
+    [
+      "submit",
+      "button",
+      "image",
+      "reset",
+      "checkbox",
+      "radio",
+      "file",
+      "hidden",
+    ].includes(t)
+  ) {
+    return {
+      rehearsal_blocked: true,
+      block_reasons: [`input_type_${t}`],
+      advisory_signals: [],
+    };
+  }
+
+  const blockReasons = [];
+  const advisory = [];
+  const a = String(raw.formAction ?? "").toLowerCase();
+
+  if (
+    /(checkout|cart\/add|order\/submit|place-order|validate|finalize|addtocart|add-to-cart|\/cart\/)/i.test(
+      a,
+    )
+  ) {
+    blockReasons.push("form_action_mutation_heuristic");
+  }
+
+  const method = String(raw.formMethodAttr ?? "get").toLowerCase();
+
+  if (method === "post") {
+    advisory.push("form_method_post");
+  }
+
+  const sc = Number(raw.formSubmitCount) || 0;
+
+  if (sc > 0) {
+    advisory.push(`form_contains_${sc}_submit_controls`);
+  }
+
+  const ident = `${String(raw.id ?? "")} ${String(raw.name ?? "")}`
+    .toLowerCase()
+    .replace(/\s+/g, "");
+
+  if (
+    /checkout|placeorder|submitorder|cartadd|addtocart|validate|finalize|place-order/i.test(
+      ident,
+    )
+  ) {
+    blockReasons.push("field_identifier_mutation_heuristic");
+  }
+
+  if (t === "number") {
+    advisory.push(
+      "input_type_number_sentinel_not_used_until_explicit_numeric_sentinel_policy",
+    );
+  }
+
+  return {
+    rehearsal_blocked: blockReasons.length > 0,
+    block_reasons: blockReasons,
+    advisory_signals: advisory,
+    input_type: t,
+  };
+}
+
+async function collectPhase2gRiskPayloadFromLocator(locator) {
+  return locator.evaluate((el) => {
+    if (!(el instanceof Element)) {
+      return { kind: "unsupported" };
+    }
+
+    if (el instanceof HTMLSelectElement) {
+      return { kind: "select" };
+    }
+
+    if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+      return { kind: "unsupported" };
+    }
+
+    const t = (el.type || "text").toLowerCase();
+    const form = el.form;
+    let formAction = "";
+    let formMethodAttr = "get";
+    let formSubmitCount = 0;
+
+    if (form) {
+      formAction = form.action || "";
+      formMethodAttr = form.getAttribute("method") || "get";
+      formSubmitCount = form.querySelectorAll(
+        'input[type="submit"],button[type="submit"]',
+      ).length;
+    }
+
+    return {
+      kind: "field",
+      inputType: t,
+      formAction,
+      formMethodAttr,
+      formSubmitCount,
+      id: el.id || "",
+      name: el.getAttribute("name") || "",
+    };
+  });
+}
+
+const PHASE_2G_SENTINEL_RE = /^__LK_[A-Z0-9_]{1,48}__$/;
+
+/**
+ * Validates optional sentinel for Phase 2g rehearsal (never a real SKU).
+ */
+export function parsePhase2gSentinelValue(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return { ok: true, value: null };
+  }
+
+  const v = String(raw).trim();
+
+  if (!PHASE_2G_SENTINEL_RE.test(v)) {
+    return {
+      ok: false,
+      value: null,
+      reason:
+        "must_match___LK_[A-Z0-9_]{1,48}__uppercase_lk_sentinel_only",
+    };
+  }
+
+  return { ok: true, value: v };
+}
+
+function isPhase2gTextLikeInputType(t) {
+  const x = String(t || "text").toLowerCase();
+
+  return ["text", "search", "tel", "url", "email", "password"].includes(x);
+}
+
+async function runPhase2gFieldPolicyAndRehearsal({
+  label,
+  resolved,
+  config,
+  page,
+  guardStats,
+}) {
+  const base = {
+    field: label,
+    selector_used: resolved.selector_used,
+    source: resolved.source,
+    matched: resolved.matched,
+  };
+
+  if (!resolved.locator || !resolved.matched) {
+    return {
+      ...base,
+      resolved: false,
+      skip_reason:
+        resolved.source === "tenant_env" && !resolved.matched
+          ? "tenant_selector_no_match_or_not_visible"
+          : "field_not_resolved",
+      focusable_editable_summary: null,
+      mutation_risk: null,
+      rehearsal_tier: "none",
+      rehearsal_detail:
+        "no_dom_target_interaction_skipped_fully_non_mutating",
+      field_rehearsal_allowed: false,
+      field_rehearsal_blocked_reason: "no_resolved_visible_field",
+      run_remained_non_mutating: true,
+    };
+  }
+
+  const snap = await readFieldDomSnapshot(resolved.locator);
+
+  const rawPayload = await collectPhase2gRiskPayloadFromLocator(
+    resolved.locator,
+  );
+  const mutation_risk = computePhase2gExtendedMutationRisk(rawPayload);
+
+  if (snap.unsupported) {
+    return {
+      ...base,
+      resolved: true,
+      dom_snapshot: snap,
+      focusable_editable_summary: null,
+      mutation_risk,
+      rehearsal_tier: "none",
+      rehearsal_detail: "skipped_unsupported_dom_snapshot_element",
+      field_rehearsal_allowed: false,
+      field_rehearsal_blocked_reason: "unsupported_element",
+      run_remained_non_mutating: true,
+    };
+  }
+
+  const visible = await resolved.locator.isVisible().catch(() => false);
+
+  const tabFocusable = await resolved.locator.evaluate((el) => {
+    if (!(el instanceof HTMLElement)) {
+      return false;
+    }
+
+    if (el.hasAttribute("disabled")) {
+      return false;
+    }
+
+    const ti = el.getAttribute("tabindex");
+
+    if (ti === "-1") {
+      return false;
+    }
+
+    return true;
+  });
+
+  const typeLower =
+    snap && typeof snap.type === "string"
+      ? snap.type.toLowerCase()
+      : "text";
+
+  const focusable_editable_summary = {
+    visible,
+    disabled: snap.disabled,
+    readOnly: snap.readOnly,
+    tab_focusable_heuristic: tabFocusable,
+    likely_text_entry_surface:
+      !snap.disabled &&
+      !snap.readOnly &&
+      (snap.tagName === "textarea" || isPhase2gTextLikeInputType(typeLower)),
+  };
+
+  let rehearsal_tier = "none";
+  let rehearsal_detail =
+    "policy_read_only_default_no_phase_2g_rehearsal_env_enabled";
+  let run_remained_non_mutating = true;
+  let network_guard_delta_rehearsal = null;
+
+  if (mutation_risk.rehearsal_blocked) {
+    return {
+      ...base,
+      resolved: true,
+      dom_snapshot: snap,
+      focusable_editable_summary,
+      mutation_risk,
+      rehearsal_tier: "none",
+      rehearsal_detail: `blocked_extended_mutation_risk:${mutation_risk.block_reasons.join("|")}`,
+      field_rehearsal_allowed: false,
+      field_rehearsal_blocked_reason: "extended_mutation_risk",
+      run_remained_non_mutating: true,
+    };
+  }
+
+  if (snap.disabled || snap.readOnly) {
+    return {
+      ...base,
+      resolved: true,
+      dom_snapshot: snap,
+      focusable_editable_summary,
+      mutation_risk,
+      rehearsal_tier: "none",
+      rehearsal_detail: "skipped_disabled_or_readonly",
+      field_rehearsal_allowed: false,
+      field_rehearsal_blocked_reason: "disabled_or_readonly",
+      run_remained_non_mutating: true,
+    };
+  }
+
+  const sentinelOn = config.addByCodePhase2gSentinelTyping === true;
+  const sentinelVal = config.addByCodePhase2gSentinelValue;
+  const focusBlurOn = config.addByCodePhase2gFocusBlurRehearsal === true;
+
+  if (sentinelOn) {
+    if (!sentinelVal) {
+      return {
+        ...base,
+        resolved: true,
+        dom_snapshot: snap,
+        focusable_editable_summary,
+        mutation_risk,
+        rehearsal_tier: "none",
+        rehearsal_detail:
+          "sentinel_typing_env_on_but_sentinel_value_missing_or_invalid",
+        field_rehearsal_allowed: false,
+        field_rehearsal_blocked_reason: "sentinel_not_configured",
+        run_remained_non_mutating: true,
+      };
+    }
+
+    if (typeLower === "number") {
+      return {
+        ...base,
+        resolved: true,
+        dom_snapshot: snap,
+        focusable_editable_summary,
+        mutation_risk,
+        rehearsal_tier: "none",
+        rehearsal_detail:
+          "sentinel_skipped_input_type_number_pending_future_numeric_policy",
+        field_rehearsal_allowed: false,
+        field_rehearsal_blocked_reason: "number_input_sentinel_policy_not_implemented",
+        run_remained_non_mutating: true,
+      };
+    }
+
+    if (
+      snap.tagName !== "textarea" &&
+      !isPhase2gTextLikeInputType(typeLower)
+    ) {
+      return {
+        ...base,
+        resolved: true,
+        dom_snapshot: snap,
+        focusable_editable_summary,
+        mutation_risk,
+        rehearsal_tier: "none",
+        rehearsal_detail: `sentinel_skipped_non_text_like_input_type:${typeLower}`,
+        field_rehearsal_allowed: false,
+        field_rehearsal_blocked_reason: "input_type_not_text_like_for_sentinel",
+        run_remained_non_mutating: true,
+      };
+    }
+
+    const blockedBefore =
+      guardStats && typeof guardStats.blockedRequestCount === "number"
+        ? guardStats.blockedRequestCount
+        : null;
+
+    try {
+      await resolved.locator.fill(sentinelVal, { timeout: 5000 });
+      await new Promise((r) => setTimeout(r, 200));
+      await resolved.locator.fill("", { timeout: 5000 });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+
+      return {
+        ...base,
+        resolved: true,
+        dom_snapshot: snap,
+        focusable_editable_summary,
+        mutation_risk,
+        rehearsal_tier: "none",
+        rehearsal_detail: `sentinel_rehearsal_failed:${m}`,
+        field_rehearsal_allowed: false,
+        field_rehearsal_blocked_reason: "playwright_error",
+        run_remained_non_mutating: false,
+      };
+    }
+
+    const blockedAfter =
+      guardStats && typeof guardStats.blockedRequestCount === "number"
+        ? guardStats.blockedRequestCount
+        : null;
+
+    network_guard_delta_rehearsal =
+      blockedBefore != null && blockedAfter != null
+        ? blockedAfter - blockedBefore
+        : null;
+
+    const guardObserved =
+      network_guard_delta_rehearsal != null && network_guard_delta_rehearsal > 0;
+
+    return {
+      ...base,
+      resolved: true,
+      dom_snapshot: snap,
+      focusable_editable_summary,
+      mutation_risk,
+      rehearsal_tier: "sentinel_fill_clear",
+      rehearsal_detail: guardObserved
+        ? "sentinel_performed_but_network_guard_abort_observed_not_interpreted_as_cart_proof"
+        : "sentinel_fill_and_clear_completed_no_new_network_aborts_observed",
+      field_rehearsal_allowed: true,
+      field_rehearsal_blocked_reason: null,
+      network_guard_delta_rehearsal,
+      run_remained_non_mutating: !guardObserved,
+      sentinel_disclaimer:
+        "synthetic_sentinel_only_real_product_codes_and_quantities_remain_forbidden_until_future_phase",
+    };
+  }
+
+  if (focusBlurOn) {
+    const blockedBefore =
+      guardStats && typeof guardStats.blockedRequestCount === "number"
+        ? guardStats.blockedRequestCount
+        : null;
+
+    try {
+      await resolved.locator.focus({ timeout: 3000 });
+
+      if (typeof resolved.locator.blur === "function") {
+        await resolved.locator.blur({ timeout: 3000 });
+      } else {
+        await resolved.locator.evaluate((el) => {
+          if (el instanceof HTMLElement) {
+            el.blur();
+          }
+        });
+      }
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+
+      return {
+        ...base,
+        resolved: true,
+        dom_snapshot: snap,
+        focusable_editable_summary,
+        mutation_risk,
+        rehearsal_tier: "none",
+        rehearsal_detail: `focus_blur_failed:${m}`,
+        field_rehearsal_allowed: false,
+        field_rehearsal_blocked_reason: "focus_blur_error",
+        run_remained_non_mutating: true,
+      };
+    }
+
+    const blockedAfter =
+      guardStats && typeof guardStats.blockedRequestCount === "number"
+        ? guardStats.blockedRequestCount
+        : null;
+
+    network_guard_delta_rehearsal =
+      blockedBefore != null && blockedAfter != null
+        ? blockedAfter - blockedBefore
+        : null;
+
+    const guardObserved =
+      network_guard_delta_rehearsal != null && network_guard_delta_rehearsal > 0;
+
+    return {
+      ...base,
+      resolved: true,
+      dom_snapshot: snap,
+      focusable_editable_summary,
+      mutation_risk,
+      rehearsal_tier: "focus_blur_only",
+      rehearsal_detail: guardObserved
+        ? "focus_blur_done_network_abort_observed_advisory_only"
+        : "focus_blur_performed_phase_2g_env_no_new_network_aborts",
+      field_rehearsal_allowed: true,
+      field_rehearsal_blocked_reason: null,
+      network_guard_delta_rehearsal,
+      run_remained_non_mutating: !guardObserved,
+    };
+  }
+
+  return {
+    ...base,
+    resolved: true,
+    dom_snapshot: snap,
+    focusable_editable_summary,
+    mutation_risk,
+    rehearsal_tier: "none",
+    rehearsal_detail,
+    field_rehearsal_allowed: false,
+    field_rehearsal_blocked_reason: "rehearsal_env_disabled",
+    run_remained_non_mutating: true,
+  };
+}
+
+/**
+ * Phase 2g: typing policy manifest + extended mutation-risk readout + env-gated rehearsal only.
+ * No real product code or quantity values. No submit/validate/checkout/add-to-cart.
+ */
+export async function runAddByCodePhase2gTypingPolicyAndRehearsal({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  phase2bFieldInfo,
+}) {
+  await heartbeat({
+    progressStage: "mlcc_phase_2g_typing_policy_start",
+    progressMessage:
+      "Phase 2g: pre-mutation typing policy + bounded rehearsal (default read-only)",
+  });
+
+  const manifest = buildPhase2gTypingPolicyManifest();
+
+  const visibleInputs = await collectVisibleInputs(page);
+  const fieldInfo =
+    phase2bFieldInfo ?? classifyCodeAndQtyFields(visibleInputs);
+
+  const codeRes = await resolveFieldLocator(
+    page,
+    config.addByCodeCodeFieldSelector,
+    fieldInfo.code_field_hints,
+  );
+
+  const qtyRes = await resolveFieldLocator(
+    page,
+    config.addByCodeQtyFieldSelector,
+    fieldInfo.quantity_field_hints,
+  );
+
+  const codeRow = await runPhase2gFieldPolicyAndRehearsal({
+    label: "code",
+    resolved: codeRes,
+    config,
+    page,
+    guardStats,
+  });
+
+  const qtyRow = await runPhase2gFieldPolicyAndRehearsal({
+    label: "quantity",
+    resolved: qtyRes,
+    config,
+    page,
+    guardStats,
+  });
+
+  const any_rehearsal_performed =
+    codeRow.rehearsal_tier !== "none" || qtyRow.rehearsal_tier !== "none";
+
+  const run_remained_fully_non_mutating =
+    codeRow.run_remained_non_mutating !== false &&
+    qtyRow.run_remained_non_mutating !== false;
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2g_typing_policy_findings",
+      message:
+        "Phase 2g typing policy + rehearsal (truthful; no real product values; no cart mutation paths)",
+      attributes: {
+        typing_policy_manifest: manifest,
+        code_field_policy: codeRow,
+        quantity_field_policy: qtyRow,
+        rehearsal_env: {
+          phase_2g_focus_blur_rehearsal:
+            config.addByCodePhase2gFocusBlurRehearsal === true,
+          phase_2g_sentinel_typing:
+            config.addByCodePhase2gSentinelTyping === true,
+          sentinel_configured: Boolean(config.addByCodePhase2gSentinelValue),
+        },
+        any_rehearsal_performed,
+        run_remained_fully_non_mutating,
+        layers_active: {
+          layer_2_network_abort_counts_tracked:
+            guardStats &&
+            typeof guardStats.blockedRequestCount === "number",
+          layer_3_ui_guard_module: "MLCC_PROBE_UNSAFE_UI_TEXT_for_clicks_not_for_field_typing",
+        },
+        cart_mutation: "none",
+        typing_policy_phase_2g:
+          "no_real_product_code_or_quantity_entry_default_read_only_plus_optional_gated_rehearsal",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2g_typing_policy_complete",
+    progressMessage:
+      "Phase 2g complete (no validate/add-to-cart/checkout/submit)",
+  });
+
+  return {
+    typing_policy_manifest: manifest,
+    code_field: codeRow,
+    quantity_field: qtyRow,
+    any_rehearsal_performed,
+    run_remained_fully_non_mutating,
+  };
+}
+
 async function collectMutationBoundaryControls(page, maxElements) {
   return page.evaluate((max) => {
     const cap = Math.min(Math.max(max, 1), 150);

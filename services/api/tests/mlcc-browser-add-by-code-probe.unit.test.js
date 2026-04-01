@@ -2,13 +2,17 @@ import { describe, it, expect } from "vitest";
 
 import {
   applyTenantAdvisoryForUncertain,
+  buildPhase2gTypingPolicyManifest,
   buildPlaywrightSelectorFromHint,
   classifyMutationBoundaryControl,
+  computePhase2gExtendedMutationRisk,
   evaluatePhase2fOpenCandidateEligibility,
   isProbeUiTextUnsafe,
   parseMutationBoundaryUncertainHints,
   parsePhase2fSafeOpenTextAllowSubstrings,
+  parsePhase2gSentinelValue,
   parseSafeOpenCandidateSelectors,
+  PHASE_2G_TYPING_POLICY_VERSION,
   shouldBlockHttpRequest,
 } from "../src/workers/mlcc-browser-add-by-code-probe.js";
 
@@ -80,6 +84,50 @@ describe("parseMutationBoundaryUncertainHints", () => {
     expect(() => parseMutationBoundaryUncertainHints('{"x":1}')).toThrow(
       /must be a JSON array/,
     );
+  });
+});
+
+describe("Phase 2g policy and risk", () => {
+  it("exports a stable policy version string", () => {
+    expect(PHASE_2G_TYPING_POLICY_VERSION).toMatch(/^lk-rpa-2g-/);
+    expect(buildPhase2gTypingPolicyManifest().version).toBe(
+      PHASE_2G_TYPING_POLICY_VERSION,
+    );
+  });
+
+  it("parsePhase2gSentinelValue accepts only LK sentinel pattern", () => {
+    expect(parsePhase2gSentinelValue("__LK_X__").ok).toBe(true);
+    expect(parsePhase2gSentinelValue("bad").ok).toBe(false);
+    expect(parsePhase2gSentinelValue(null).ok).toBe(true);
+    expect(parsePhase2gSentinelValue(null).value).toBe(null);
+  });
+
+  it("computePhase2gExtendedMutationRisk blocks suspicious form action", () => {
+    const r = computePhase2gExtendedMutationRisk({
+      kind: "field",
+      inputType: "text",
+      formAction: "https://x.example/cart/add",
+      formMethodAttr: "post",
+      formSubmitCount: 1,
+      id: "sku",
+      name: "code",
+    });
+    expect(r.rehearsal_blocked).toBe(true);
+    expect(r.block_reasons.some((x) => /form_action/.test(x))).toBe(true);
+  });
+
+  it("computePhase2gExtendedMutationRisk flags number input advisory", () => {
+    const r = computePhase2gExtendedMutationRisk({
+      kind: "field",
+      inputType: "number",
+      formAction: "",
+      formMethodAttr: "get",
+      formSubmitCount: 0,
+      id: "qty",
+      name: "qty",
+    });
+    expect(r.rehearsal_blocked).toBe(false);
+    expect(r.advisory_signals.some((x) => /number/.test(x))).toBe(true);
   });
 });
 

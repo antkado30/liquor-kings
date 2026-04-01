@@ -55,6 +55,10 @@ describe("buildMlccBrowserConfig", () => {
       addByCodeSafeOpenCandidateSelectors: [],
       addByCodeSafeOpenTextAllowSubstrings: [],
       addByCodeProbeSkipEntryNav: false,
+      addByCodePhase2g: false,
+      addByCodePhase2gFocusBlurRehearsal: false,
+      addByCodePhase2gSentinelTyping: false,
+      addByCodePhase2gSentinelValue: null,
     });
   });
 
@@ -264,6 +268,58 @@ describe("buildMlccBrowserConfig", () => {
     expect(out.config.mutationBoundaryUncertainHints).toEqual([
       { contains: "sku", advisory_label: "Likely product lookup (advisory)" },
     ]);
+  });
+
+  it("rejects Phase 2g without Phase 2b probe", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PHASE_2G: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(out.errors.some((e) => /MLCC_ADD_BY_CODE_PROBE/.test(e.message))).toBe(
+      true,
+    );
+  });
+
+  it("accepts Phase 2g with probe and optional sentinel when pattern valid", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2G: "true",
+      MLCC_ADD_BY_CODE_PHASE_2G_SENTINEL_TYPING: "true",
+      MLCC_ADD_BY_CODE_PHASE_2G_SENTINEL_VALUE: "__LK_TEST__",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2gSentinelValue).toBe("__LK_TEST__");
+  });
+
+  it("rejects Phase 2g sentinel typing when value pattern invalid", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2G: "true",
+      MLCC_ADD_BY_CODE_PHASE_2G_SENTINEL_TYPING: "true",
+      MLCC_ADD_BY_CODE_PHASE_2G_SENTINEL_VALUE: "real-sku-123",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) => /MLCC_ADD_BY_CODE_PHASE_2G_SENTINEL_VALUE/.test(e.message)),
+    ).toBe(true);
   });
 
   it("rejects Phase 2f without Phase 2b probe", () => {
