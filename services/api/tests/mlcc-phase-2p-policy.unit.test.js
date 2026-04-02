@@ -74,5 +74,11 @@ describe("mlcc-phase-2p-policy", () => {
     expect(ladder.steps.some((s) => /out_of_scope/.test(String(s.status)))).toBe(
       true,
     );
+
+    const checkoutFlow = ladder.steps.find((s) => s.id === "checkout_flow");
+
+    expect(String(checkoutFlow?.planning_gate_detail ?? "")).toMatch(
+      /mlcc_phase_2s_policy/,
+    );
   });
 });

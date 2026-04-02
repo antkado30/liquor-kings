@@ -6,7 +6,7 @@
  * Bump version when validate criteria or ladder semantics change.
  */
 
-export const PHASE_2P_POLICY_VERSION = "lk-rpa-2p-3";
+export const PHASE_2P_POLICY_VERSION = "lk-rpa-2p-4";
 
 /**
  * Approval model for Phase **2q**: **at most one** bounded validate control interaction when env-gated.
@@ -111,6 +111,8 @@ export function buildPhase2pPostValidateLadder() {
         id: "checkout_flow",
         label: "Checkout or equivalent pre-submit cart flow",
         status: "out_of_scope_until_separate_approval",
+        planning_gate_detail:
+          "approval_criteria_and_post_checkout_ladder_in_mlcc_phase_2s_policy_js_planning_only_until_execution_phase",
         forbids_until_approved: [
           "submit",
           "finalize_order",

@@ -19,6 +19,7 @@ const phase2iPolicyPath = "services/api/src/workers/mlcc-phase-2i-policy.js";
 const phase2kPolicyPath = "services/api/src/workers/mlcc-phase-2k-policy.js";
 const phase2mPolicyPath = "services/api/src/workers/mlcc-phase-2m-policy.js";
 const phase2pPolicyPath = "services/api/src/workers/mlcc-phase-2p-policy.js";
+const phase2sPolicyPath = "services/api/src/workers/mlcc-phase-2s-policy.js";
 const phasesDocPath = "docs/lk/architecture/rpa-rebuild-phases.md";
 
 const checks = [];
@@ -29,6 +30,7 @@ const phase2iPolicy = read(phase2iPolicyPath);
 const phase2kPolicy = read(phase2kPolicyPath);
 const phase2mPolicy = read(phase2mPolicyPath);
 const phase2pPolicy = read(phase2pPolicyPath);
+const phase2sPolicy = read(phase2sPolicyPath);
 const phasesDoc = read(phasesDocPath);
 
 if (worker.includes("mlcc-phase-2m-policy")) {
@@ -52,6 +54,18 @@ if (worker.includes("mlcc-phase-2p-policy")) {
 if (!probe.includes("mlcc-phase-2p-policy")) {
   checks.push(
     "mlcc-browser-add-by-code-probe.js must import mlcc-phase-2p-policy.js for Phase 2q validate gate manifest echo",
+  );
+}
+
+if (worker.includes("mlcc-phase-2s-policy")) {
+  checks.push(
+    "mlcc-browser-worker.js must not import mlcc-phase-2s-policy.js (Phase 2s is planning-only until a future checkout execution phase)",
+  );
+}
+
+if (probe.includes("mlcc-phase-2s-policy")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must not import mlcc-phase-2s-policy.js (Phase 2s is planning-only until a future checkout execution phase)",
   );
 }
 
@@ -524,6 +538,64 @@ if (
 ) {
   checks.push(
     "rpa-rebuild-phases.md must label Phase 2p as planning-only (heading or table)",
+  );
+}
+
+if (!phase2sPolicy.includes("export const PHASE_2S_POLICY_VERSION")) {
+  checks.push("mlcc-phase-2s-policy.js must export PHASE_2S_POLICY_VERSION (Phase 2s)");
+}
+
+if (!phase2sPolicy.includes("export function buildPhase2sCheckoutFutureGateManifest")) {
+  checks.push(
+    "mlcc-phase-2s-policy.js must export buildPhase2sCheckoutFutureGateManifest",
+  );
+}
+
+if (!phase2sPolicy.includes("export function buildPhase2sPostCheckoutLadder")) {
+  checks.push(
+    "mlcc-phase-2s-policy.js must export buildPhase2sPostCheckoutLadder",
+  );
+}
+
+if (!phase2sPolicy.includes("out_of_scope_until_separate_approval")) {
+  checks.push(
+    "mlcc-phase-2s-policy.js must tag ladder steps with out_of_scope_until_separate_approval",
+  );
+}
+
+if (!phase2sPolicy.includes("checkout_bounded_interaction")) {
+  checks.push(
+    "mlcc-phase-2s-policy.js must define checkout_bounded_interaction ladder step",
+  );
+}
+
+if (!phase2sPolicy.includes("post_checkout_observation")) {
+  checks.push(
+    "mlcc-phase-2s-policy.js must define post_checkout_observation ladder step",
+  );
+}
+
+if (!phase2sPolicy.includes("submit_finalize_order")) {
+  checks.push(
+    "mlcc-phase-2s-policy.js must define submit_finalize_order ladder step (post-checkout ladder)",
+  );
+}
+
+if (!phasesDoc.includes("Phase 2s")) {
+  checks.push("rpa-rebuild-phases.md must document Phase 2s");
+}
+
+if (!phasesDoc.includes("mlcc-phase-2s-policy.js")) {
+  checks.push("rpa-rebuild-phases.md must reference mlcc-phase-2s-policy.js");
+}
+
+if (
+  !/phase\s*2s\s*\([^)]*planning[- ]only|planning[- ]only[^\n|]*\*\*2s\*\*/i.test(
+    phasesDoc,
+  )
+) {
+  checks.push(
+    "rpa-rebuild-phases.md must label Phase 2s as planning-only (heading or table)",
   );
 }
 

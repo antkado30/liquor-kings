@@ -62,7 +62,15 @@ Phase **2k** is the versioned checklist in [`services/api/src/workers/mlcc-phase
 - **Post-validate ladder:** `validate_order_bounded_interaction` is **`implemented_as_phase_2q_when_env_gated`**; `post_validate_observation` is **`implemented_as_phase_2r_when_env_gated`**; `checkout_flow` and `submit_finalize_order` remain **`out_of_scope_until_separate_approval`** until future phases.
 - **Non-negotiable:** **No** checkout, submit, or order finalization in **2q** or **2r**; **do not** assume MLCC validate or post-validate DOM implies generally safe checkout.
 
+## Checkout planning (Phase 2s)
+
+Phase **2s** is **planning-only**: [`services/api/src/workers/mlcc-phase-2s-policy.js`](../../../services/api/src/workers/mlcc-phase-2s-policy.js) exports `buildPhase2sCheckoutFutureGateManifest` and `buildPhase2sPostCheckoutLadder`. It **does not** run in the browser; the **worker** and **probe** **must not** import **2s** until a separately approved **checkout execution** phase (e.g. **2t**) updates `verify:lk:rpa-safety`.
+
+- **Criteria (manifest):** evidence expectations after **2q** / **2r** (or documented equivalent when **2r** is off); future non-heuristic tenant checkout selector list; Layer 2 notes (checkout-shaped URLs may remain blocked until an execution phase documents policy); Layer 3 / mutation-boundary family expectations for a future bounded click; hard-fail stops; observable proof criteria; **mandatory_disclaimers** (browser/client signals ≠ backend checkout or payment truth).
+- **Post-checkout ladder:** `checkout_bounded_interaction` → `post_checkout_observation` → `submit_finalize_order` — each **`out_of_scope_until_separate_approval`** until implemented.
+- **Non-negotiable:** **No** runtime checkout, submit, or finalize in **2s** itself; **do not** treat **2r** inferred checkout-like controls as approval to implement checkout without a new gated phase.
+
 ## Drift enforcement
 
-- Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i**, **2k**, **2m**, and **2p** policy files, phases-doc markers, Phase **2l**/**2n**/**2o**/**2q**/**2r** probe/worker markers, probe import of **2k**, **2m**, and **2p**, guards that the **worker** does not import **2k**, **2m**, or **2p**).
+- Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i**, **2k**, **2m**, **2p**, and **2s** policy files, phases-doc markers, Phase **2l**/**2n**/**2o**/**2q**/**2r** probe/worker markers, probe import of **2k**, **2m**, and **2p**, guards that the **worker** does not import **2k**, **2m**, **2p**, or **2s**, and guards that the **probe** does not import **2s** until a checkout execution phase).
 - See [DEVELOPER_ANTI_DRIFT.md](../DEVELOPER_ANTI_DRIFT.md).
