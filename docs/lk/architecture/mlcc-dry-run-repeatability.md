@@ -5,6 +5,27 @@
 **Canonical phase table:** [rpa-rebuild-phases.md](./rpa-rebuild-phases.md)  
 **Safety rules:** [rpa-safety-rules.md](./rpa-safety-rules.md)
 
+## Operator quick path (step by step)
+
+Do these in order; skip steps that do not apply to your tenant.
+
+1. **Copy env** — Put tenant secrets and URLs in `services/api/.env` (or your deploy secret store). Never commit credentials.
+2. **Doctor (config-only)** — From repo root: `npm run doctor:lk:mlcc-dry-run -- <store_mlcc_username>`. Exit **0** means structural readiness passed; **1** means fix listed errors; **2** means username missing. This command does **not** open a browser.
+3. **Read SUMMARY** — The printed report includes runnable vs off counts and a **Suggested next action** line. Use that before changing env at random.
+4. **Interpret phase rows** — Each phase shows **Status** (`RUNNABLE` vs `off`) and **Off-kind**:
+   - **`blocked(2b)`** — `MLCC_ADD_BY_CODE_PROBE` is false. Phases **2c–2r** are structurally blocked until 2b is on; base login/2a_nav can still be runnable.
+   - **`disabled`** — That phase’s own flags (and any `*_APPROVED` gate) are off; turn them on only when prior steps in this doc are green.
+   - **`—`** (runnable) — Config allows the phase; you must still run the worker dry-run and confirm evidence for that phase id (doctor does not prove UI success).
+5. **Tenant vs generic lists** — Below the table, **Tenant-specific keys** are what you must document per MLCC skin; **Generic / operator flags** are booleans and shared patterns.
+6. **Worker dry-run** — After doctor is clean for your target depth: `npm run worker:mlcc-browser-dry-run` from `services/api` (see `package.json`). Still **no** checkout/submit/finalize in the worker during this rebuild phase.
+7. **Anti-drift** — After env or readiness code changes: `npm run verify:lk:rpa-safety` and `npm run verify:lk:architecture` from repo root.
+
+**2Q without 2O:** If you enable Phase 2Q but not 2O, the worker and doctor expect **`MLCC_ADD_BY_CODE_PHASE_2Q_OPERATOR_ACCEPTS_MISSING_2O=true`** (explicit waiver per phase plan). Otherwise 2Q is treated as not ready.
+
+**2D vs 2E:** Enable **at most one** of `MLCC_ADD_BY_CODE_PHASE_2D` and `MLCC_ADD_BY_CODE_PHASE_2E` for a given config (mutually exclusive paths).
+
+**`MLCC_SUBMISSION_ARMED`:** May appear in env for future guardrails; submit/finalize paths are **not** implemented in safe dry-run — do not treat it as permission to place orders.
+
 ## Minimum config (every tenant run)
 
 | Item | Source | Tenant-specific? |
@@ -32,7 +53,7 @@ Without these, `buildMlccBrowserConfig` returns `ready: false` — the worker wi
 - `MLCC_ADD_BY_CODE_PROBE`, `MLCC_ADD_BY_CODE_PHASE_2C` … `MLCC_ADD_BY_CODE_PHASE_2R`
 - `*_APPROVED` flags for gated phases (2H, 2J, 2L, 2N, 2O, 2Q, 2R)
 - Test payloads: `MLCC_ADD_BY_CODE_PHASE_2H_TEST_CODE`, `*_TEST_QUANTITY`, combined rehearsal fields for 2L
-- `MLCC_HEADLESS`, `MLCC_STEP_SCREENSHOTS`, `MLCC_SUBMISSION_ARMED` (submit **not** implemented; guard for future)
+- `MLCC_HEADLESS`, `MLCC_STEP_SCREENSHOTS`, `MLCC_STEP_SCREENSHOT_MAX_BYTES` (optional), `MLCC_SUBMISSION_ARMED` (submit **not** implemented; guard for future)
 
 **Planning-only (no env flags; do not import in worker/probe until execution phase):**
 
@@ -46,7 +67,7 @@ Use this in order when enabling deeper phases. Each step assumes previous prereq
 2. **2a license (optional)** — `MLCC_LICENSE_STORE_AUTOMATION=true` + both selectors; optional URL pattern.
 3. **2b probe** — `MLCC_ADD_BY_CODE_PROBE=true`; optional entry selector. Confirms add-by-code UI mapping without typing.
 4. **2c** — Tenant code/qty field selectors + `MLCC_ADD_BY_CODE_PHASE_2C=true`.
-5. **2d or 2e** — One of `MLCC_ADD_BY_CODE_PHASE_2D` or `MLCC_ADD_BY_CODE_PHASE_2E` (not both); 2e may set scoped root + uncertain hints JSON.
+5. **2d or 2e** — Exactly one path: either `MLCC_ADD_BY_CODE_PHASE_2D` **or** `MLCC_ADD_BY_CODE_PHASE_2E` (never both). 2e may set scoped root + uncertain hints JSON.
 6. **2f** — `MLCC_ADD_BY_CODE_PHASE_2F=true` + non-empty `MLCC_ADD_BY_CODE_SAFE_OPEN_CANDIDATE_SELECTORS` JSON.
 7. **2g** — `MLCC_ADD_BY_CODE_PHASE_2G=true`; optional rehearsal flags per env doc.
 8. **2h** — `MLCC_ADD_BY_CODE_PHASE_2H=true` + `MLCC_ADD_BY_CODE_PHASE_2H_APPROVED=true` + test code + tenant code selector.

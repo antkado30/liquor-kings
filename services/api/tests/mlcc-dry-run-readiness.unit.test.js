@@ -15,6 +15,7 @@ describe("mlcc-dry-run-readiness", () => {
     expect(report.config_ready).toBe(false);
     expect(report.errors.length).toBeGreaterThan(0);
     expect(report.phases).toEqual([]);
+    expect(report.summary?.runnable_count ?? 0).toBe(0);
     const text = formatMlccDryRunReadinessText(report);
     expect(text).toMatch(/NOT READY/);
     expect(text).toMatch(/forbidden/i);
@@ -36,15 +37,21 @@ describe("mlcc-dry-run-readiness", () => {
     expect(report.config_ready).toBe(true);
     expect(report.errors).toEqual([]);
     expect(report.phases.length).toBeGreaterThan(5);
+    expect(report.summary.runnable_count).toBeGreaterThanOrEqual(1);
+    expect(report.summary.recommended_next_step).toMatch(/PROBE/i);
     expect(report.phases.some((p) => p.id === "2b" && p.status === "off")).toBe(
       true,
     );
     expect(
       report.phases.some((p) => p.id === "2a_nav" && p.status === "runnable"),
     ).toBe(true);
+    const p2c = report.phases.find((p) => p.id === "2c");
+    expect(p2c?.off_kind).toBe("blocked_dependency");
 
     const text = formatMlccDryRunReadinessText(report);
     expect(text).toMatch(/CONFIG: READY/);
+    expect(text).toMatch(/SUMMARY:/);
+    expect(text).toMatch(/blocked\(2b\)/);
     expect(text).toMatch(/2b/);
     expect(text).toMatch(/mlcc-dry-run-repeatability\.md/);
   });
