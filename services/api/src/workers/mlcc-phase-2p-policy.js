@@ -1,12 +1,12 @@
 /**
  * Phase 2p — canonical repo truth for MLCC **validate** interaction approval and post-validate ladder.
- * Imported by `mlcc-browser-add-by-code-probe.js` only (Phase **2q** echoes manifest + ladder in evidence).
+ * Imported by `mlcc-browser-add-by-code-probe.js` only (Phases **2q** / **2r** echo manifest + ladder in evidence).
  * `mlcc-browser-worker.js` must not import this module (`verify:lk:rpa-safety`).
  * Specializes the `validate_order` step in `buildPhase2mPostAddApplyLadder()` in `mlcc-phase-2m-policy.js`.
  * Bump version when validate criteria or ladder semantics change.
  */
 
-export const PHASE_2P_POLICY_VERSION = "lk-rpa-2p-2";
+export const PHASE_2P_POLICY_VERSION = "lk-rpa-2p-3";
 
 /**
  * Approval model for Phase **2q**: **at most one** bounded validate control interaction when env-gated.
@@ -21,6 +21,8 @@ export function buildPhase2pValidateFutureGateManifest() {
       "phase_2m_post_add_apply_ladder_validate_order_step_gated_by_this_manifest_until_execution",
       "phase_2n_documents_single_add_apply_click_and_layer2_delta_expectations",
       "phase_2o_documents_read_only_post_add_apply_observation_with_strict_disclaimers",
+      "phase_2q_documents_bounded_single_validate_click_with_layer2_window_and_disclaimers",
+      "phase_2r_documents_read_only_post_validate_observation_with_strict_disclaimers",
       "mlcc_validate_safety_unknown_do_not_infer_from_visible_success_text_or_zero_abort_count_alone",
     ],
     evidence_prerequisites_before_validate_execution_considered: [
@@ -95,7 +97,9 @@ export function buildPhase2pPostValidateLadder() {
         id: "post_validate_observation",
         label:
           "Read-only observation after validate (DOM, status messages, Layer 2 tally; no checkout/submit)",
-        status: "out_of_scope_until_separate_approval",
+        status: "implemented_as_phase_2r_when_env_gated",
+        implementation_note:
+          "runtime_mlcc_browser_add_by_code_probe_runAddByCodePhase2rPostValidateObservation",
         forbids_until_approved: [
           "checkout",
           "submit",

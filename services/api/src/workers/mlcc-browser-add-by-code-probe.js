@@ -2232,12 +2232,36 @@ export const PHASE_2O_OBSERVATION_POLICY_VERSION = "lk-rpa-2o-1";
 /** Phase 2q: one bounded validate click; aligns with mlcc-phase-2p-policy.js gate manifest. */
 export const PHASE_2Q_VALIDATE_POLICY_VERSION = "lk-rpa-2q-1";
 
+/** Phase 2r: read-only observation after Phase 2q; no clicks; no checkout/submit/finalize. */
+export const PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION = "lk-rpa-2r-1";
+
 /**
  * Bounded settle wait between Phase 2o pre/post read-only scrapes (ms). Default 500; max 5000.
  */
 export function parsePhase2oSettleMs(raw) {
   if (raw == null || String(raw).trim() === "") {
     return { ok: true, value: 500 };
+  }
+
+  const n = Number.parseInt(String(raw).trim(), 10);
+
+  if (!Number.isFinite(n) || n < 0) {
+    return {
+      ok: false,
+      value: null,
+      reason: "must_be_non_negative_integer_ms",
+    };
+  }
+
+  return { ok: true, value: Math.min(n, 5000) };
+}
+
+/**
+ * Bounded settle between Phase 2r pre/post read-only scrapes after validate (ms). Default 600; max 5000.
+ */
+export function parsePhase2rSettleMs(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return { ok: true, value: 600 };
   }
 
   const n = Number.parseInt(String(raw).trim(), 10);
@@ -2321,6 +2345,33 @@ export function diffPhase2oObservationSnapshots(pre, post) {
     any_heuristic_dom_or_signal_delta: any_heuristic_delta,
     labeling:
       "client_visible_text_and_dom_summary_diff_only_not_inventory_or_server_cart_proof",
+  };
+}
+
+/**
+ * Extends Phase 2o diff with validate-selector and inferred checkout-adjacent control samples (read-only scan).
+ */
+export function diffPhase2rPostValidateObservationSnapshots(pre, post) {
+  const base = diffPhase2oObservationSnapshots(pre, post);
+  const valPre = JSON.stringify(pre?.validate_selector_states ?? []);
+  const valPost = JSON.stringify(post?.validate_selector_states ?? []);
+  const chkPre = JSON.stringify(
+    pre?.checkout_like_controls_inferred?.samples ?? [],
+  );
+  const chkPost = JSON.stringify(
+    post?.checkout_like_controls_inferred?.samples ?? [],
+  );
+  const valChanged = valPre !== valPost;
+  const chkChanged = chkPre !== chkPost;
+
+  return {
+    ...base,
+    validate_selector_states_changed: valChanged,
+    inferred_checkout_like_control_samples_changed: chkChanged,
+    any_heuristic_dom_or_signal_delta:
+      base.any_heuristic_dom_or_signal_delta || valChanged || chkChanged,
+    labeling:
+      `${base.labeling};phase_2r_includes_validate_selector_state_and_inferred_checkout_adjacent_visible_control_scan`,
   };
 }
 
@@ -4694,6 +4745,160 @@ export async function collectPhase2oReadOnlyObservationSnapshot(page, config) {
 }
 
 /**
+ * Read-only scrape after validate (Phase 2r): extends Phase 2o snapshot with validate control states
+ * and an inferred visible scan for checkout/submit-adjacent labels (no clicks).
+ */
+export async function collectPhase2rPostValidateReadOnlyObservationSnapshot(
+  page,
+  config,
+) {
+  const base = await collectPhase2oReadOnlyObservationSnapshot(page, config);
+  const validate_selector_states = [];
+  const valCands = config.addByCodePhase2qValidateCandidateSelectors ?? [];
+
+  for (const s of valCands) {
+    const loc = page.locator(s).first();
+    const n = await loc.count().catch(() => 0);
+    const vis = n > 0 && (await loc.isVisible().catch(() => false));
+    const dis = n > 0 ? await loc.isDisabled().catch(() => false) : null;
+    const row = {
+      selector: s,
+      match_count: n,
+      visible: vis,
+      disabled: dis,
+    };
+
+    if (n > 0) {
+      const r = await extractMutationBoundaryRowFromLocator(loc);
+
+      row.text_sample = (r.text ?? "").slice(0, 200);
+      row.tag = r.tag;
+    }
+
+    validate_selector_states.push(row);
+  }
+
+  const checkout_like_controls_inferred = await page.evaluate(() => {
+    const isVis = (el) => {
+      if (!(el instanceof HTMLElement)) {
+        return false;
+      }
+
+      const st = window.getComputedStyle(el);
+
+      if (
+        st.display === "none" ||
+        st.visibility === "hidden" ||
+        Number(st.opacity) === 0
+      ) {
+        return false;
+      }
+
+      const r = el.getBoundingClientRect();
+
+      return r.width >= 2 && r.height >= 2;
+    };
+
+    const checkoutLikeRes = [
+      /\bcheckout\b/i,
+      /place\s*order/i,
+      /submit\s*order/i,
+      /complete\s*(order|purchase)/i,
+      /confirm\s*order/i,
+      /buy\s*now/i,
+      /\bfinalize\b/i,
+      /\bpurchase\b/i,
+      /proceed\s+to\s+checkout/i,
+      /continue\s+to\s+checkout/i,
+    ];
+
+    const matchesCheckoutLike = (text, href) => {
+      const hay = `${text} ${href}`.toLowerCase();
+
+      return checkoutLikeRes.some((re) => re.test(hay));
+    };
+
+    const samples = [];
+    const seen = new Set();
+    const selList = [
+      "button",
+      "a[href]",
+      "[role=\"button\"]",
+      "input[type=\"submit\"]",
+      "input[type=\"button\"]",
+    ];
+
+    outer: for (const sel of selList) {
+      let nodes;
+
+      try {
+        nodes = document.querySelectorAll(sel);
+      } catch {
+        continue;
+      }
+
+      for (const el of nodes) {
+        if (samples.length >= 24) {
+          break outer;
+        }
+
+        if (!isVis(el)) {
+          continue;
+        }
+
+        const tag = el.tagName ? el.tagName.toLowerCase() : "";
+        const inner = (el.innerText || el.textContent || "").trim();
+        const aria = (el.getAttribute("aria-label") || "").trim();
+        const title = (el.getAttribute("title") || "").trim();
+        const text = (inner || aria || title).slice(0, 240);
+        const href =
+          tag === "a" ? String(el.getAttribute("href") || "").slice(0, 240) : "";
+
+        if (!matchesCheckoutLike(text, href)) {
+          continue;
+        }
+
+        const key = `${tag}|${text.slice(0, 60)}|${href.slice(0, 60)}`;
+
+        if (seen.has(key)) {
+          continue;
+        }
+
+        seen.add(key);
+
+        const disabled =
+          el.disabled === true ||
+          String(el.getAttribute("aria-disabled") || "").toLowerCase() ===
+            "true";
+
+        samples.push({
+          tag,
+          text_sample: text.slice(0, 160),
+          href_sample: href.slice(0, 200),
+          visible: true,
+          disabled,
+          inferred_checkout_or_submit_adjacent_label_or_href: true,
+        });
+      }
+    }
+
+    return {
+      samples,
+      scan_is_visible_dom_text_and_href_heuristic_only: true,
+      not_proof_of_safe_checkout_or_submit_readiness: true,
+      no_controls_were_clicked: true,
+    };
+  });
+
+  return {
+    ...base,
+    captured_at: "read_only_phase_2r_post_validate_snapshot",
+    validate_selector_states,
+    checkout_like_controls_inferred,
+  };
+}
+
+/**
  * Phase 2o: read-only observation after Phase 2n click. No further clicks, validate, checkout, or submit.
  */
 export async function runAddByCodePhase2oPostAddApplyObservation({
@@ -5437,6 +5642,290 @@ export async function runAddByCodePhase2qBoundedValidateSingleClick({
     post_validate_read_only_snapshot_present:
       post_validate_read_only_snapshot != null,
     phase_2p_gate_manifest_version: gateManifest.version,
+  };
+}
+
+/**
+ * Phase 2r: read-only observation after Phase 2q validate click. Zero Playwright clicks.
+ * No checkout, submit, finalize, or second validate.
+ */
+export async function runAddByCodePhase2rPostValidateObservation({
+  page,
+  config,
+  heartbeat,
+  buildEvidence,
+  evidenceCollected,
+  guardStats,
+  buildStepEvidence,
+  phase2qResult,
+}) {
+  const gateManifest = buildPhase2pValidateFutureGateManifest();
+  const postValidateLadder = buildPhase2pPostValidateLadder();
+  const settleMs = config.addByCodePhase2rSettleMs ?? 600;
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2r_observation_start",
+    progressMessage:
+      "Phase 2r: read-only post-validate observation (no clicks; no checkout/submit/finalize)",
+  });
+
+  const mutation_risk_checks_used = [
+    `phase_2p_policy_version_${PHASE_2P_POLICY_VERSION}`,
+    `phase_2r_policy_version_${PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION}`,
+    "read_only_zero_playwright_clicks_after_validate",
+    "layer_2_guardstats_blockedrequestcount_delta_zero_required_across_observation_window",
+    "phase_2q_prerequisite_validate_click_performed_true",
+    "post_validate_ladder_step_echoed_from_phase_2p",
+    "inferred_checkout_like_scan_visible_dom_only_not_clicked",
+  ];
+
+  if (!phase2qResult || phase2qResult.validate_click_performed !== true) {
+    const err =
+      "Phase 2r requires Phase 2q to have completed with validate_click_performed=true in the same run";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2r_observation_blocked",
+        message: err,
+        attributes: {
+          phase_2r_policy_version: PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION,
+          phase_2p_policy_version: PHASE_2P_POLICY_VERSION,
+          phase_2p_validate_gate_manifest: gateManifest,
+          phase_2p_post_validate_ladder: postValidateLadder,
+          observation_performed: false,
+          block_reason: "phase_2q_prerequisite_missing_or_no_validate_click",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (phase2qResult.no_new_blocked_downstream_requests_observed === false) {
+    const err =
+      "Phase 2r requires Phase 2q no_new_blocked_downstream_requests_observed !== false (Layer 2 prerequisite from validate phase)";
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2r_observation_blocked",
+        message: err,
+        attributes: {
+          phase_2r_policy_version: PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION,
+          observation_performed: false,
+          block_reason: "phase_2q_layer2_prerequisite_failed",
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const blocked_at_observation_start =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2r_pre_observation_snapshot",
+        message:
+          "Phase 2r pre-observation snapshot after validate (read-only; before settle window)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  const observation_pre =
+    await collectPhase2rPostValidateReadOnlyObservationSnapshot(page, config);
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2r_pre_observation_evidence",
+      message:
+        "Phase 2r pre-settle read-only scrape after validate (no clicks; DOM/status/inferred checkout-adjacent scan only)",
+      attributes: {
+        phase_2r_policy_version: PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION,
+        phase_2p_policy_version: PHASE_2P_POLICY_VERSION,
+        phase_2p_validate_gate_manifest: gateManifest,
+        ladder_step_post_validate_observation:
+          postValidateLadder.steps?.find((s) => s.id === "post_validate_observation") ??
+          null,
+        settle_ms_configured: settleMs,
+        observation_pre,
+        phase_2q_selector_used: phase2qResult.selector_clicked ?? null,
+        network_guard_blocked_request_count_at_window_start:
+          blocked_at_observation_start,
+        mutation_risk_checks_used,
+        disclaimer_dom_observation_only:
+          "visible_text_field_and_control_samples_do_not_prove_backend_order_cart_or_inventory_truth",
+        disclaimer_no_checkout_submit_readiness:
+          "inferred_checkout_like_controls_are_visible_text_heuristic_only_not_safe_to_click_or_submit",
+        disclaimer_inferred_labels:
+          "checkout_like_scan_is_pattern_match_on_visible_dom_not_authorization_to_proceed",
+      },
+    }),
+  );
+
+  await new Promise((r) => setTimeout(r, settleMs));
+
+  const blocked_after_settle =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_during_pre_scrape =
+    blocked_at_observation_start != null && blocked_after_settle != null
+      ? blocked_after_settle - blocked_at_observation_start
+      : null;
+
+  if (
+    network_guard_delta_during_pre_scrape != null &&
+    network_guard_delta_during_pre_scrape !== 0
+  ) {
+    const err = `Phase 2r: Layer 2 blocked request counter increased during observation window (delta=${network_guard_delta_during_pre_scrape} after pre-scrape/settle)`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2r_observation_blocked",
+        message: err,
+        attributes: {
+          phase_2r_policy_version: PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION,
+          observation_performed: false,
+          observation_pre,
+          block_reason: "positive_layer2_abort_delta_during_observation",
+          network_guard_blocked_at_window_start: blocked_at_observation_start,
+          network_guard_blocked_after_settle: blocked_after_settle,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  if (typeof buildStepEvidence === "function") {
+    evidenceCollected.push(
+      await buildStepEvidence({
+        page,
+        stage: "mlcc_phase_2r_post_observation_snapshot",
+        message:
+          "Phase 2r post-settle snapshot (read-only; no checkout/submit clicks)",
+        kind: "mlcc_add_by_code_probe",
+        buildEvidence,
+        config,
+      }),
+    );
+  }
+
+  const observation_post =
+    await collectPhase2rPostValidateReadOnlyObservationSnapshot(page, config);
+
+  const blocked_at_observation_end =
+    guardStats && typeof guardStats.blockedRequestCount === "number"
+      ? guardStats.blockedRequestCount
+      : null;
+
+  const network_guard_delta_full_observation_window =
+    blocked_at_observation_start != null && blocked_at_observation_end != null
+      ? blocked_at_observation_end - blocked_at_observation_start
+      : null;
+
+  if (
+    network_guard_delta_full_observation_window != null &&
+    network_guard_delta_full_observation_window !== 0
+  ) {
+    const err = `Phase 2r: Layer 2 blocked request counter increased during full observation window (delta=${network_guard_delta_full_observation_window})`;
+
+    evidenceCollected.push(
+      buildEvidence({
+        kind: "mlcc_add_by_code_probe",
+        stage: "mlcc_phase_2r_observation_blocked",
+        message: err,
+        attributes: {
+          phase_2r_policy_version: PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION,
+          observation_performed: false,
+          observation_pre,
+          observation_post,
+          block_reason: "positive_layer2_abort_delta_full_observation_window",
+          network_guard_blocked_at_window_start: blocked_at_observation_start,
+          network_guard_blocked_at_window_end: blocked_at_observation_end,
+          mutation_risk_checks_used,
+        },
+      }),
+    );
+
+    throw new Error(err);
+  }
+
+  const observation_diff = diffPhase2rPostValidateObservationSnapshots(
+    observation_pre,
+    observation_post,
+  );
+
+  evidenceCollected.push(
+    buildEvidence({
+      kind: "mlcc_add_by_code_probe",
+      stage: "mlcc_phase_2r_observation_findings",
+      message:
+        "Phase 2r read-only post-validate observation complete (no checkout/submit/finalize; no second validate)",
+      attributes: {
+        phase_2r_policy_version: PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION,
+        phase_2p_policy_version: PHASE_2P_POLICY_VERSION,
+        phase_2p_post_validate_ladder: postValidateLadder,
+        settle_ms_used: settleMs,
+        observation_pre,
+        observation_post,
+        observation_diff,
+        clicks_performed_this_phase: 0,
+        network_guard_blocked_at_window_start: blocked_at_observation_start,
+        network_guard_blocked_at_window_end: blocked_at_observation_end,
+        network_guard_delta_full_observation_window,
+        no_new_blocked_downstream_requests_observed:
+          network_guard_delta_full_observation_window === null
+            ? null
+            : network_guard_delta_full_observation_window === 0,
+        page_appears_changed_visible_dom_heuristic:
+          observation_diff.any_heuristic_dom_or_signal_delta === true,
+        mutation_risk_checks_used,
+        disclaimer_observation_not_server_order_truth:
+          "browser_visible_signals_do_not_prove_server_order_line_items_or_validate_outcome",
+        disclaimer_checkout_like_inference_only:
+          "checkout_like_controls_inferred_are_regex_visible_text_hits_not_proof_controls_are_safe_or_enabled_for_real_checkout",
+        disclaimer_no_submit_readiness:
+          "this_phase_does_not_assess_submit_finalize_or_purchase_readiness",
+      },
+    }),
+  );
+
+  await heartbeat({
+    progressStage: "mlcc_phase_2r_observation_complete",
+    progressMessage:
+      "Phase 2r complete (read-only post-validate only; checkout/submit/finalize out of scope)",
+  });
+
+  return {
+    phase_2r_policy_version: PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION,
+    phase_2p_policy_version: PHASE_2P_POLICY_VERSION,
+    observation_performed: true,
+    settle_ms_used: settleMs,
+    observation_diff,
+    network_guard_delta_full_observation_window,
+    no_new_blocked_downstream_requests_observed:
+      network_guard_delta_full_observation_window === null
+        ? null
+        : network_guard_delta_full_observation_window === 0,
+    page_appears_changed_visible_dom_heuristic:
+      observation_diff.any_heuristic_dom_or_signal_delta === true,
   };
 }
 

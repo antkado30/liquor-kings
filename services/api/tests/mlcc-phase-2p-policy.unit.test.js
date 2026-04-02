@@ -56,9 +56,16 @@ describe("mlcc-phase-2p-policy", () => {
 
     expect(validateStep?.status).toBe("implemented_as_phase_2q_when_env_gated");
 
+    const postVal = ladder.steps.find((s) => s.id === "post_validate_observation");
+
+    expect(postVal?.status).toBe("implemented_as_phase_2r_when_env_gated");
+
     for (const step of ladder.steps) {
       expect(Array.isArray(step.forbids_until_approved)).toBe(true);
-      if (step.id === "validate_order_bounded_interaction") {
+      if (
+        step.id === "validate_order_bounded_interaction" ||
+        step.id === "post_validate_observation"
+      ) {
         continue;
       }
       expect(step.status).toBe("out_of_scope_until_separate_approval");

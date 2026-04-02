@@ -7,6 +7,7 @@ import {
   classifyMutationBoundaryControl,
   computePhase2gExtendedMutationRisk,
   diffPhase2oObservationSnapshots,
+  diffPhase2rPostValidateObservationSnapshots,
   evaluatePhase2fOpenCandidateEligibility,
   evaluatePhase2nAddApplyCandidateEligibility,
   evaluatePhase2qValidateCandidateEligibility,
@@ -21,6 +22,7 @@ import {
   parsePhase2oSettleMs,
   parsePhase2qPostValidateObserveSettleMs,
   parsePhase2qValidateCandidateSelectors,
+  parsePhase2rSettleMs,
   parseSafeOpenCandidateSelectors,
   PHASE_2G_TYPING_POLICY_VERSION,
   PHASE_2J_QUANTITY_POLICY_VERSION,
@@ -282,6 +284,43 @@ describe("parsePhase2oSettleMs", () => {
 
   it("rejects negative", () => {
     expect(parsePhase2oSettleMs("-1").ok).toBe(false);
+  });
+});
+
+describe("parsePhase2rSettleMs", () => {
+  it("defaults to 600 when blank", () => {
+    expect(parsePhase2rSettleMs(null).ok).toBe(true);
+    expect(parsePhase2rSettleMs(null).value).toBe(600);
+  });
+
+  it("caps at 5000", () => {
+    expect(parsePhase2rSettleMs("99999").value).toBe(5000);
+  });
+});
+
+describe("diffPhase2rPostValidateObservationSnapshots", () => {
+  it("flags validate selector state change", () => {
+    const pre = {
+      url: "u",
+      title: "t",
+      ui_open_signals: { open_signal: true },
+      visible_input_field_summary: { code_field_detected: true },
+      tenant_code_field_state: { visible: true },
+      tenant_quantity_field_state: { visible: false },
+      body_text_digest: { char_length: 10, head_snippet: "hello" },
+      status_alert_and_live_region_samples: [],
+      inferred_cart_or_line_text_clues: { regex_hits_visible_text_only: [] },
+      add_apply_selector_states: [],
+      validate_selector_states: [{ selector: "#v", visible: true, disabled: false }],
+      checkout_like_controls_inferred: { samples: [] },
+    };
+    const post = {
+      ...pre,
+      validate_selector_states: [{ selector: "#v", visible: true, disabled: true }],
+    };
+    const d = diffPhase2rPostValidateObservationSnapshots(pre, post);
+    expect(d.validate_selector_states_changed).toBe(true);
+    expect(d.any_heuristic_dom_or_signal_delta).toBe(true);
   });
 });
 

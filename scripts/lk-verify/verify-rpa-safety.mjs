@@ -305,6 +305,46 @@ if (!phasesDoc.includes("Phase 2q")) {
   checks.push("rpa-rebuild-phases.md must document Phase 2q");
 }
 
+if (!probe.includes("export async function runAddByCodePhase2rPostValidateObservation")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export runAddByCodePhase2rPostValidateObservation (Phase 2r)",
+  );
+}
+
+if (!probe.includes("export const PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export PHASE_2R_POST_VALIDATE_OBSERVATION_POLICY_VERSION (Phase 2r)",
+  );
+}
+
+if (!probe.includes("export function parsePhase2rSettleMs")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export parsePhase2rSettleMs (Phase 2r)",
+  );
+}
+
+if (!probe.includes("export function diffPhase2rPostValidateObservationSnapshots")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export diffPhase2rPostValidateObservationSnapshots (Phase 2r)",
+  );
+}
+
+if (!probe.includes("export async function collectPhase2rPostValidateReadOnlyObservationSnapshot")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export collectPhase2rPostValidateReadOnlyObservationSnapshot (Phase 2r)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2R_APPROVED")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2R_APPROVED (Phase 2r)",
+  );
+}
+
+if (!phasesDoc.includes("Phase 2r")) {
+  checks.push("rpa-rebuild-phases.md must document Phase 2r");
+}
+
 if (!probe.includes("mlcc-phase-2k-policy")) {
   checks.push(
     "mlcc-browser-add-by-code-probe.js must import mlcc-phase-2k-policy.js for Phase 2l evidence (Phase 2k manifest echo)",
