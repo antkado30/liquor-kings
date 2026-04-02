@@ -16,7 +16,8 @@
     "audit:lk:cart-identity:apply": "node scripts/lk-audit/cart-item-identity-backfill.mjs --apply",
     "verify:lk:contracts": "node scripts/lk-verify/verify-contracts.mjs",
     "verify:lk:rpa-safety": "node scripts/lk-verify/verify-rpa-safety.mjs",
-    "verify:lk:architecture": "node scripts/lk-verify/verify-architecture.mjs"
+    "verify:lk:architecture": "node scripts/lk-verify/verify-architecture.mjs",
+    "doctor:lk:mlcc-dry-run": "node scripts/lk-verify/mlcc-dry-run-doctor.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

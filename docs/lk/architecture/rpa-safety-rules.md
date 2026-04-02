@@ -73,4 +73,5 @@ Phase **2s** is **planning-only**: [`services/api/src/workers/mlcc-phase-2s-poli
 ## Drift enforcement
 
 - Run `npm run verify:lk:rpa-safety` from repo root (includes Phase **2i**, **2k**, **2m**, **2p**, and **2s** policy files, phases-doc markers, Phase **2l**/**2n**/**2o**/**2q**/**2r** probe/worker markers, probe import of **2k**, **2m**, and **2p**, guards that the **worker** does not import **2k**, **2m**, **2p**, or **2s**, and guards that the **probe** does not import **2s** until a checkout execution phase).
+- **Operational repeatability (no new runtime risk):** [mlcc-dry-run-repeatability.md](./mlcc-dry-run-repeatability.md) documents env/checklists; `npm run doctor:lk:mlcc-dry-run` validates config for safe phases **without** launching a browser or checkout.
 - See [DEVELOPER_ANTI_DRIFT.md](../DEVELOPER_ANTI_DRIFT.md).

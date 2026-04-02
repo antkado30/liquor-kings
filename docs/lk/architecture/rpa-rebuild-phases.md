@@ -3,7 +3,8 @@
 **Primary implementation:** `services/api/src/workers/mlcc-browser-worker.js`  
 **Add-by-code / guards:** `services/api/src/workers/mlcc-browser-add-by-code-probe.js`  
 **Dry-run plan:** `services/api/src/workers/mlcc-dry-run.js`  
-**Entry script:** `npm run worker:mlcc-browser-dry-run` in `services/api/package.json`
+**Entry script:** `npm run worker:mlcc-browser-dry-run` in `services/api/package.json`  
+**Repeatability / operator checklist (2a–2r, config doctor):** [mlcc-dry-run-repeatability.md](./mlcc-dry-run-repeatability.md) · `npm run doctor:lk:mlcc-dry-run` from repo root
 
 ## Runtime through Phase 2q validate + optional Phase 2r post-validate read-only observation (when env-gated); Phase 2p remains **planning + manifest** (probe imports **2p** for **2q**/**2r** evidence; **worker** must not import **2p**)
 

@@ -20,7 +20,11 @@ const phase2kPolicyPath = "services/api/src/workers/mlcc-phase-2k-policy.js";
 const phase2mPolicyPath = "services/api/src/workers/mlcc-phase-2m-policy.js";
 const phase2pPolicyPath = "services/api/src/workers/mlcc-phase-2p-policy.js";
 const phase2sPolicyPath = "services/api/src/workers/mlcc-phase-2s-policy.js";
+const mlccDryRunReadinessPath = "services/api/src/workers/mlcc-dry-run-readiness.js";
+const mlccDryRunDoctorPath = "scripts/lk-verify/mlcc-dry-run-doctor.mjs";
+const rootPackageJsonPath = "package.json";
 const phasesDocPath = "docs/lk/architecture/rpa-rebuild-phases.md";
+const repeatabilityDocPath = "docs/lk/architecture/mlcc-dry-run-repeatability.md";
 
 const checks = [];
 
@@ -31,7 +35,11 @@ const phase2kPolicy = read(phase2kPolicyPath);
 const phase2mPolicy = read(phase2mPolicyPath);
 const phase2pPolicy = read(phase2pPolicyPath);
 const phase2sPolicy = read(phase2sPolicyPath);
+const mlccDryRunReadiness = read(mlccDryRunReadinessPath);
+const mlccDryRunDoctor = read(mlccDryRunDoctorPath);
+const rootPackageJson = read(rootPackageJsonPath);
 const phasesDoc = read(phasesDocPath);
+const repeatabilityDoc = read(repeatabilityDocPath);
 
 if (worker.includes("mlcc-phase-2m-policy")) {
   checks.push(
@@ -596,6 +604,62 @@ if (
 ) {
   checks.push(
     "rpa-rebuild-phases.md must label Phase 2s as planning-only (heading or table)",
+  );
+}
+
+if (!mlccDryRunReadiness.includes("export function buildMlccDryRunReadinessReport")) {
+  checks.push(
+    "mlcc-dry-run-readiness.js must export buildMlccDryRunReadinessReport",
+  );
+}
+
+if (!mlccDryRunReadiness.includes("export function formatMlccDryRunReadinessText")) {
+  checks.push(
+    "mlcc-dry-run-readiness.js must export formatMlccDryRunReadinessText",
+  );
+}
+
+if (!mlccDryRunReadiness.includes("buildMlccBrowserConfig")) {
+  checks.push(
+    "mlcc-dry-run-readiness.js must use buildMlccBrowserConfig for structural validation",
+  );
+}
+
+if (!mlccDryRunDoctor.includes("buildMlccDryRunReadinessReport")) {
+  checks.push(
+    "mlcc-dry-run-doctor.mjs must invoke buildMlccDryRunReadinessReport",
+  );
+}
+
+if (!rootPackageJson.includes("doctor:lk:mlcc-dry-run")) {
+  checks.push("root package.json must define npm script doctor:lk:mlcc-dry-run");
+}
+
+if (!phasesDoc.includes("mlcc-dry-run-repeatability.md")) {
+  checks.push("rpa-rebuild-phases.md must reference mlcc-dry-run-repeatability.md");
+}
+
+if (!phasesDoc.includes("doctor:lk:mlcc-dry-run")) {
+  checks.push(
+    "rpa-rebuild-phases.md must mention doctor:lk:mlcc-dry-run repeatability command",
+  );
+}
+
+if (!repeatabilityDoc.includes("doctor:lk:mlcc-dry-run")) {
+  checks.push(
+    "mlcc-dry-run-repeatability.md must document doctor:lk:mlcc-dry-run",
+  );
+}
+
+if (!repeatabilityDoc.includes("Forbidden")) {
+  checks.push(
+    "mlcc-dry-run-repeatability.md must document forbidden claims (truthfulness)",
+  );
+}
+
+if (!repeatabilityDoc.includes("mlcc-dry-run-readiness.js")) {
+  checks.push(
+    "mlcc-dry-run-repeatability.md must reference mlcc-dry-run-readiness.js",
   );
 }
 
