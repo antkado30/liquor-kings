@@ -127,3 +127,4 @@ Implementation: [`scripts/lk-verify/mlcc-dry-run-doctor.mjs`](../../../scripts/l
 
 - Dry-run worker: `npm run worker:mlcc-browser-dry-run` in `services/api` (see `services/api/package.json`).
 - Anti-drift: `npm run verify:lk:rpa-safety`, `npm run verify:lk:architecture` from repo root.
+- Broader product direction (MILO vs MLCC paths, reconciliation, durable truth): [strategic-architecture.md](./strategic-architecture.md).

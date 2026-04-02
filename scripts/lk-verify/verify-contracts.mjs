@@ -12,6 +12,7 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 
 const requiredFiles = [
   "docs/lk/architecture/README.md",
+  "docs/lk/architecture/strategic-architecture.md",
   "docs/lk/architecture/execution-state-machine.md",
   "docs/lk/architecture/rpa-rebuild-phases.md",
   "docs/lk/architecture/rpa-safety-rules.md",

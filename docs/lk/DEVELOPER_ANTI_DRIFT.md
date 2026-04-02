@@ -2,7 +2,7 @@
 
 ## Source of truth
 
-1. **Canonical specs:** `docs/lk/architecture/` (execution model, RPA phases, safety, auth, API truth).
+1. **Canonical specs:** `docs/lk/architecture/` (execution model, **strategic architecture** / reconciliation direction, RPA phases, safety, auth, API truth).
 2. **Code:** `services/api`, `apps/admin`, workers under `services/api/src/workers/`.
 
 If you change behavior, **update the matching spec** in the same PR. If you add a contract route or worker safety invariant, **extend verification** when practical.

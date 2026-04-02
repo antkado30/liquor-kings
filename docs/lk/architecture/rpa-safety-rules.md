@@ -1,5 +1,7 @@
 # RPA safety rules — rebuild (canonical)
 
+**Product alignment:** Liquor Kings is a **control and reconciliation** system; browser RPA here is one execution mechanism alongside **MILO** (current production lane). Partner portals (MLCC, SIPS+, successors) are expected to change; safety rules and verify gates remain binding until an **explicitly approved** phase or doc change updates them. See [strategic-architecture.md](./strategic-architecture.md).
+
 **Non-negotiable:** Until an **explicitly approved later phase**, the MLCC browser dry-run / rebuild path must **not** perform:
 
 - Real order **submission**
