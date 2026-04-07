@@ -8,3 +8,5 @@ coverage
 playwright-report
 mlcc_ui_dump
 *.log
+supabase/.temp/
+supabase/.branches/
