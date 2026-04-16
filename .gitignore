@@ -10,3 +10,12 @@ mlcc_ui_dump
 *.log
 supabase/.temp/
 supabase/.branches/
+
+# Runtime artifacts and temp files
+tmp/
+*.tmp
+
+# Staging and environment variants
+.env.staging
+.env.production
+.env.*.local

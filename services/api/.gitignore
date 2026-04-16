@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Environment files — never commit real credentials
+.env
+.env.local
+.env.staging
+.env.production
+.env.*.local
+
+# Runtime artifacts
+tmp/
+*.log
+*.tmp
+
+# Build outputs
+dist/
+build/
+coverage/
+
+# Playwright
+playwright-report/
+mlcc_ui_dump/
