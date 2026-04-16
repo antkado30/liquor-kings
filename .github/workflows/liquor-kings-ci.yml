@@ -56,5 +56,8 @@ jobs:
       - name: Install API dependencies and run unit tests (no smoke / no live stack)
         run: npm run test:ci
 
+      - name: Install root Playwright browsers (for RPA safety invariant test)
+        run: npx playwright install chromium --with-deps
+
       - name: RPA safety checks (static checks + SAFE MODE invariant)
         run: npm run verify:lk:rpa-safety
