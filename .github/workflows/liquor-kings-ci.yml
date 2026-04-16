@@ -1,0 +1,60 @@
+# SAFE-MODE-ONLY CI — unit tests + RPA safety verification.
+# Does not deploy, does not run MLCC browser dry-run workers, and does not call any ordering/submit path.
+# All MLCC-related URLs are non-routable placeholders; submission is explicitly disabled via env.
+
+name: Liquor Kings CI (SAFE MODE — tests & RPA safety)
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  safe-mode-tests:
+    name: Unit tests & RPA safety (SAFE MODE only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: "true"
+      # Explicit CI guardrails (documentation + any future env readers)
+      SAFEMODE: "true"
+      LLK_CI_SAFE_MODE_ONLY: "true"
+      MLCC_SUBMISSION_ARMED: "false"
+      # Non-production / non-routable hosts only — must never be real MLCC or prod API
+      MLCC_LOGIN_URL: "https://ci-safe.example.invalid/mlcc/login"
+      MLCC_SAFE_TARGET_URL: "https://ci-safe.example.invalid/mlcc/safe"
+      MLCC_PASSWORD: "ci-not-used-no-network-ordering"
+      API_BASE_URL: "https://ci-safe.example.invalid/api"
+      SUPABASE_URL: "https://ci-safe.example.invalid/supabase"
+      SUPABASE_ANON_KEY: "ci-invalid-anon-key"
+      SUPABASE_SERVICE_ROLE_KEY: "ci-invalid-service-role"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            services/api/package-lock.json
+
+      - name: Install root dependencies (RPA verify + Playwright for invariant test)
+        run: npm ci
+
+      # api.smoke / *.smoke tests require a live API + DB — excluded from SAFE MODE CI.
+      # Playwright Chromium is installed for mlcc-browser-* tests and verify invariant.
+      - name: Install API dependencies and run unit tests (no smoke / no live stack)
+        run: npm run test:ci
+
+      - name: RPA safety checks (static checks + SAFE MODE invariant)
+        run: npm run verify:lk:rpa-safety

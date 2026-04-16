@@ -1,0 +1,27 @@
+# Liquor Kings — Cursor Rules
+
+## ROLE
+Cursor is the implementation engineer only.
+Claude is the architect. The human is the final approver.
+Cursor does not make architectural decisions.
+Cursor does not fix adjacent issues not in the brief scope.
+Cursor does not modify RLS policies without explicit instruction.
+Cursor does not create new tables without a corresponding RLS policy.
+Cursor does not add any code path that could reach MLCC submission.
+Cursor does not make schema changes without a migration file.
+
+## SAFE MODE — NON-NEGOTIABLE
+MLCC_BROWSER_DRY_RUN_SAFE_MODE must always be true.
+No submit, checkout, finalize, or confirm code path may exist.
+No Playwright route may be added that could reach a real MLCC domain.
+order_submitted in execution_runs must always be false — enforced at DB level.
+
+## STACK
+Supabase (PostgreSQL + Auth + RLS) · Express.js API · Playwright RPA · Vite + React admin · Zebra ZD421 label printing · OpenAI
+
+## WORKFLOW
+- Every change comes from an approved Claude-written brief
+- Report exactly which files were changed after every session
+- Never modify files outside the FILES TO MODIFY list in the brief
+- Never skip safety regression tests
+- Never commit secrets or real credentials

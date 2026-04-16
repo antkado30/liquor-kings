@@ -74,6 +74,52 @@ File: [`sql/mlcc_mapping_audit.sql`](../sql/mlcc_mapping_audit.sql)
 
 ---
 
+## Backfill plan (staging): `bottles.mlcc_item_id` from catalog
+
+**Why:** In staging, many bottles already have **`mlcc_code`** set but **`mlcc_item_id`** still **NULL** (see `bottles_code_only_no_fk` in the audit above). Backfilling the FK from **`mlcc_items`** tightens catalog linkage before RPA / dry-run work.
+
+**Safety model** (see [`sql/mlcc_backfill_preview_and_apply.sql`](../sql/mlcc_backfill_preview_and_apply.sql) and [`scripts/lk-verify/doctor-mlcc-backfill.mjs`](../scripts/lk-verify/doctor-mlcc-backfill.mjs)):
+
+- **Exact-code join only:** `bottles.mlcc_code = mlcc_items.code` (trimmed non-empty codes; candidates are `mlcc_item_id IS NULL` with a non-blank code).
+- **Preview first:** default / dry-run path runs the **PREVIEW** section only (bucket summary).
+- **Unique matches only:** **APPLY** updates rows where **exactly one** `mlcc_items` row matches that code (`can_backfill`). **`ambiguous`** (2+ catalog rows for the same code) and **`no_match`** are never updated by APPLY.
+- **No overwrite:** APPLY never sets `mlcc_item_id` where it is already non-NULL.
+- **Explicit apply:** writes run only when **`APPLY_BACKFILL=1`** is set **and** you type the exact confirmation token **`MLCC_BACKFILL_STAGING`** at the prompt; APPLY runs inside a **single `psql` transaction** (`-1`). Default without that env flag is **preview-only** (no APPLY).
+
+**Staging workflow**
+
+1. From repo root, with the **same `DATABASE_URL` / `PG*` env you use for `psql`** (do not commit secrets): run **`node scripts/lk-verify/doctor-mlcc-backfill.mjs`** — **preview only** (dry-run default).
+2. Read **`can_backfill`**, **`ambiguous`**, **`no_match`**. Resolve or accept risk on **ambiguous** / **no_match** before any apply; APPLY only ever touches the **unique-match** subset.
+3. If the preview looks safe, run apply: **`APPLY_BACKFILL=1 node scripts/lk-verify/doctor-mlcc-backfill.mjs`**, confirm when prompted; the script runs preview again, then APPLY, then preview once more for a post-apply bucket view.
+
+**After apply**
+
+1. Re-run [`sql/mlcc_mapping_audit.sql`](../sql/mlcc_mapping_audit.sql) (same session style as [Audit metadata](#audit-metadata)).
+2. Confirm **`bottles_with_mlcc_item_id`** and **`bottles_with_valid_join`** moved in the right direction vs the snapshot above; reconcile any remaining **`bottles_code_only_no_fk`** / catalog gaps manually if needed.
+3. Paste fresh audit outputs into this doc per **How to refresh (Gate 1 / Gate 2)** below if you are refreshing Gate 2 evidence.
+
+### Post-backfill exception buckets (staging)
+
+Use [`sql/mlcc_post_backfill_exception_audit.sql`](../sql/mlcc_post_backfill_exception_audit.sql) after the guarded MLCC backfill to list every `public.bottles` row that still has `mlcc_item_id IS NULL`.
+
+This audit is read-only and classifies each remaining bottle into a small status bucket so the remaining mapping gap is easy to understand at a glance:
+
+- `blank_code` — the bottle has no usable MLCC code
+- `bad_code_format` — the code is present but fails a simple numeric-format sanity check
+- `exact_match_available` — a unique exact match exists in `mlcc_items`, so a remaining NULL after backfill should be treated as an execution gap or follow-up bug
+- `ambiguous_code` — more than one `mlcc_items` row matched the code, so the guarded apply correctly skipped it
+- `code_not_found` — no exact `mlcc_items.code` match was found
+
+Run it with:
+
+```bash
+psql -v ON_ERROR_STOP=1 -f sql/mlcc_post_backfill_exception_audit.sql
+```
+
+Use the output as the staging exception queue for any bottles that remain unmapped after the preview/apply flow.
+
+---
+
 ## How to refresh (Gate 1 / Gate 2)
 
 1. Run the **Exact command** in [Audit metadata](#audit-metadata).
@@ -144,3 +190,5 @@ Unit coverage: `services/api/tests/quantity-rules.unit.test.js`, `services/api/t
 | 2026-04-10 | Docs-only refresh scaffold: audit metadata, dual snapshot tables, coverage one-liner placeholder. |
 | 2026-04-10 | SPEC-RPA-FINALIZATION: Gate 2 **snapshot completion status** block (live paste still required). |
 | 2026-04-11 | **Staging live snapshot pasted** (summary + buckets); Gate 2 SQL half **COMPLETE**; metadata + `psql` command aligned with RLS audit run. |
+| 2026-04-11 | **Backfill plan** section: safe `mlcc_item_id` preview/apply workflow (`sql/mlcc_backfill_preview_and_apply.sql`, `scripts/lk-verify/doctor-mlcc-backfill.mjs`). |
+| 2026-04-11 | **Post-backfill exception buckets** + read-only audit `sql/mlcc_post_backfill_exception_audit.sql` (staging exception queue after guarded backfill). |

@@ -2,6 +2,7 @@
 /**
  * verify:lk:rpa-safety — lightweight static checks on MLCC browser rebuild path.
  */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -213,6 +214,86 @@ if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2L_APPROVED")) {
   );
 }
 
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2L_SKIP_CLEAR_WHEN_2U_APPROVED")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2L_SKIP_CLEAR_WHEN_2U_APPROVED (Phase 2l skip clear for 2u)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_CLICK_AWAY")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_CLICK_AWAY (MILO post-2l blur+click-away parity)",
+  );
+}
+
+if (!probe.includes("runPhase2lMiloPostFillClickAwayParityStep")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export runPhase2lMiloPostFillClickAwayParityStep (MILO post-2l click-away)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_TAB_FROM_QUANTITY")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_TAB_FROM_QUANTITY (MILO Tab-from-qty after 2l)",
+  );
+}
+
+if (!probe.includes("runPhase2lMiloPostFillTabFromQuantityParityStep")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export runPhase2lMiloPostFillTabFromQuantityParityStep (MILO Tab-from-qty)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE (MILO manual click/type parity)",
+  );
+}
+
+for (const key of [
+  "MLCC_ADD_BY_CODE_PHASE_2L_MILO_FULL_KEYBOARD_PARITY_SEQUENCE",
+  "MLCC_ADD_BY_CODE_PHASE_2L_MILO_FULL_KEYBOARD_PARITY_SEQUENCE_APPROVED",
+  "MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_BLANK_CLICK_POSITION_X",
+  "MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_BLANK_CLICK_POSITION_Y",
+  "MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_POST_BLANK_WAIT_FOR_TEXT_SUBSTRING",
+  "MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_POST_BLANK_WAIT_FOR_TEXT_MS",
+  "MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_POST_BLANK_WAIT_FOR_TEXT_APPROVED",
+]) {
+  if (!worker.includes(key)) {
+    checks.push(`mlcc-browser-worker.js must document ${key} (MILO manual parity tighten)`);
+  }
+}
+
+if (!probe.includes("runPhase2lMiloManualParitySequenceAndPre2uSnapshot")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export runPhase2lMiloManualParitySequenceAndPre2uSnapshot (MILO manual parity pre-2U snapshot)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U_PRE_READONLY_CART_SETTLE_MS")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U_PRE_READONLY_CART_SETTLE_MS (pre-cart settle after MILO 2o post-2u)",
+  );
+}
+
+if (!probe.includes("parseMiloPost2uPreReadonlyCartDiscoverySettleMs")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export parseMiloPost2uPreReadonlyCartDiscoverySettleMs",
+  );
+}
+
+if (!probe.includes("collectMiloPreCartBycodeListSurfaceReadonly")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export collectMiloPreCartBycodeListSurfaceReadonly (pre-cart by-code list read-only)",
+  );
+}
+
+if (!probe.includes("sampleMiloPreCartListRootOverrideReadonly")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export sampleMiloPreCartListRootOverrideReadonly (MILO optional list-root read-only sampling)",
+  );
+}
+
 if (!probe.includes("export function evaluatePhase2nAddApplyCandidateEligibility")) {
   checks.push(
     "mlcc-browser-add-by-code-probe.js must export evaluatePhase2nAddApplyCandidateEligibility (Phase 2n)",
@@ -249,6 +330,54 @@ if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2N_ADD_APPLY_SELECTORS")) {
   );
 }
 
+for (const key of [
+  "MLCC_2U_DETERMINISM_STATE_PATH",
+  "MLCC_2U_DETERMINISM_STATE_WRITE",
+  "MLCC_2U_DETERMINISM_STATE_WRITE_APPROVED",
+]) {
+  if (!worker.includes(key)) {
+    checks.push(
+      `mlcc-browser-worker.js must document ${key} (2U cross-run determinism state)`,
+    );
+  }
+}
+
+if (!probe.includes("export function compute2uDeterminismCrossRunConsistency")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export compute2uDeterminismCrossRunConsistency (2U determinism cross-run)",
+  );
+}
+
+if (!probe.includes("export function build2uDeterminismPersistPayload")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export build2uDeterminismPersistPayload (2U determinism cross-run)",
+  );
+}
+
+if (!probe.includes("export function build2uDeterminismTwoPassHandoff")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export build2uDeterminismTwoPassHandoff (2U two-pass handoff)",
+  );
+}
+
+if (!probe.includes("export function computeBodyChildDeltaExplainer")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export computeBodyChildDeltaExplainer (post-2U body-child delta explainer)",
+  );
+}
+
+if (!probe.includes("export function buildMiloReadonlyCartDiscoveryCandidateUrls")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export buildMiloReadonlyCartDiscoveryCandidateUrls (read-only cart route probe)",
+  );
+}
+
+if (!probe.includes("export function parsePhase2oMiloReadonlyCartDiscoveryPathCandidates")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export parsePhase2oMiloReadonlyCartDiscoveryPathCandidates",
+  );
+}
+
 if (!phasesDoc.includes("Phase 2n")) {
   checks.push("rpa-rebuild-phases.md must document Phase 2n");
 }
@@ -280,6 +409,48 @@ if (!probe.includes("export function diffPhase2oObservationSnapshots")) {
 if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2O_APPROVED")) {
   checks.push(
     "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2O_APPROVED (Phase 2o)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY (MILO cart validate discovery)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_PHASE_2O_MILO_SAFE_CART_ICON_CLICK")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_PHASE_2O_MILO_SAFE_CART_ICON_CLICK (optional safe header cart icon before URL cart probe)",
+  );
+}
+
+if (!worker.includes("MLCC_ADD_BY_CODE_MILO_PRE_CART_LIST_ROOT_SELECTOR")) {
+  checks.push(
+    "mlcc-browser-worker.js must document MLCC_ADD_BY_CODE_MILO_PRE_CART_LIST_ROOT_SELECTOR (MILO optional pre-cart list host selector)",
+  );
+}
+
+if (!probe.includes("export async function runMiloReadonlyPost2oCartValidateDiscovery")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export runMiloReadonlyPost2oCartValidateDiscovery",
+  );
+}
+
+if (!probe.includes("export function miloSafeCartIconTextFailsOrderSafetyFilter")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export miloSafeCartIconTextFailsOrderSafetyFilter (safe cart icon label gate)",
+  );
+}
+
+if (!probe.includes("export async function runMiloSafeHeaderCartIconClickReadonly")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export runMiloSafeHeaderCartIconClickReadonly (bounded safe cart icon navigation)",
+  );
+}
+
+if (!probe.includes("export function classifyMiloReadonlyCartDiscoveryState")) {
+  checks.push(
+    "mlcc-browser-add-by-code-probe.js must export classifyMiloReadonlyCartDiscoveryState",
   );
 }
 
@@ -703,6 +874,32 @@ if (processStart === -1) {
   if (/\bassertMlccSubmissionAllowed\s*\(/u.test(fnSlice)) {
     checks.push(
       "processOneMlccBrowserDryRun must not call assertMlccSubmissionAllowed (guard exists for future submit only)",
+    );
+  }
+}
+
+const safeModeInvariantPath = path.join(
+  repoRoot,
+  "tests/rpa/safe-mode-invariant.test.js",
+);
+if (!fs.existsSync(safeModeInvariantPath)) {
+  checks.push(
+    "tests/rpa/safe-mode-invariant.test.js must exist (SAFE MODE network invariant)",
+  );
+} else {
+  const inv = spawnSync(
+    process.execPath,
+    ["--test", safeModeInvariantPath],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+    },
+  );
+  if (inv.status !== 0) {
+    const tail = [inv.stderr, inv.stdout].filter(Boolean).join("\n").trim();
+    checks.push(
+      `SAFE MODE invariant test failed (node --test tests/rpa/safe-mode-invariant.test.js) status=${inv.status}${tail ? `:\n${tail}` : ""}`,
     );
   }
 }

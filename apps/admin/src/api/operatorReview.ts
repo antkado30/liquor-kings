@@ -75,3 +75,53 @@ export async function getDiagnosticsOverview(query?: string): Promise<Response> 
     headers: { "Content-Type": "application/json" },
   });
 }
+
+export async function getPilotOpsStores(query?: string): Promise<Response> {
+  const q = query && query.length > 0 ? `?${query}` : "";
+  return fetch(`${BASE}/api/pilot-ops/stores${q}`, {
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function getPilotOpsStoreOverview(
+  storeId: string,
+  query?: string,
+): Promise<Response> {
+  const q = query && query.length > 0 ? `?${query}` : "";
+  return fetch(`${BASE}/api/pilot-ops/stores/${encodeURIComponent(storeId)}${q}`, {
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function patchPilotOpsStoreWorkflowState(
+  storeId: string,
+  body: {
+    pilot_ops_status: "unreviewed" | "watching" | "escalated" | "resolved";
+    operator_note?: string | null;
+  },
+): Promise<Response> {
+  return fetch(`${BASE}/api/pilot-ops/stores/${encodeURIComponent(storeId)}/workflow-state`, {
+    method: "PATCH",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getPilotOpsNotifications(query?: string): Promise<Response> {
+  const q = query && query.length > 0 ? `?${query}` : "";
+  return fetch(`${BASE}/api/pilot-ops/notifications${q}`, {
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function getPilotOpsQualitySummary(query?: string): Promise<Response> {
+  const q = query && query.length > 0 ? `?${query}` : "";
+  return fetch(`${BASE}/api/pilot-ops/quality-summary${q}`, {
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+  });
+}

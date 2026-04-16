@@ -8,6 +8,12 @@ import {
   createExecutionRunFromCart,
   getExecutionRunEvidenceById,
   getExecutionRunById,
+  getExecutionRunLifecycleById,
+  getExecutionRunPilotVerificationById,
+  getExecutionRunPilotVerdictById,
+  getExecutionRunPilotReviewPacketById,
+  getStorePilotOverview,
+  getStorePilotRunsFeed,
   getExecutionRunSummaryById,
   heartbeatExecutionRun,
   listExecutionRunsForOperatorReview,
@@ -99,6 +105,29 @@ router.get("/review/:storeId/runs", async (req, res) => {
   return res.status(statusCode).json(body);
 });
 
+router.get("/review/:storeId/pilot-runs", async (req, res) => {
+  const { storeId } = req.params;
+  const limitRaw = Number.parseInt(String(req.query.limit ?? "20"), 10);
+  const limit = Number.isNaN(limitRaw) ? 20 : limitRaw;
+  const { statusCode, body } = await getStorePilotRunsFeed(supabase, storeId, {
+    limit,
+  });
+  return res.status(statusCode).json(body);
+});
+
+router.get("/review/:storeId/pilot-overview", async (req, res) => {
+  const { storeId } = req.params;
+  const limitRaw = Number.parseInt(String(req.query.limit ?? "20"), 10);
+  const failedLimitRaw = Number.parseInt(String(req.query.failed_limit ?? "5"), 10);
+  const limit = Number.isNaN(limitRaw) ? 20 : limitRaw;
+  const failedLimit = Number.isNaN(failedLimitRaw) ? 5 : failedLimitRaw;
+  const { statusCode, body } = await getStorePilotOverview(supabase, storeId, {
+    limit,
+    failedLimit,
+  });
+  return res.status(statusCode).json(body);
+});
+
 router.get("/:runId/summary", async (req, res) => {
   if (!req.store_id) {
     return res.status(400).json({ error: "X-Store-Id header required" });
@@ -106,6 +135,60 @@ router.get("/:runId/summary", async (req, res) => {
 
   const { runId } = req.params;
   const { statusCode, body } = await getExecutionRunSummaryById(
+    supabase,
+    runId,
+    req.store_id,
+  );
+  return res.status(statusCode).json(body);
+});
+
+router.get("/:runId/lifecycle", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+
+  const { runId } = req.params;
+  const { statusCode, body } = await getExecutionRunLifecycleById(
+    supabase,
+    runId,
+    req.store_id,
+  );
+  return res.status(statusCode).json(body);
+});
+
+router.get("/:runId/pilot-verification", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+
+  const { runId } = req.params;
+  const { statusCode, body } = await getExecutionRunPilotVerificationById(
+    supabase,
+    runId,
+    req.store_id,
+  );
+  return res.status(statusCode).json(body);
+});
+
+router.get("/:runId/pilot-verdict", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+  const { runId } = req.params;
+  const { statusCode, body } = await getExecutionRunPilotVerdictById(
+    supabase,
+    runId,
+    req.store_id,
+  );
+  return res.status(statusCode).json(body);
+});
+
+router.get("/:runId/pilot-review-packet", async (req, res) => {
+  if (!req.store_id) {
+    return res.status(400).json({ error: "X-Store-Id header required" });
+  }
+  const { runId } = req.params;
+  const { statusCode, body } = await getExecutionRunPilotReviewPacketById(
     supabase,
     runId,
     req.store_id,

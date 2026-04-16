@@ -16,6 +16,12 @@ export function AppNavLayout() {
           Overview
         </NavLink>
         <NavLink
+          to="/pilot-ops"
+          className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}
+        >
+          Pilot Ops
+        </NavLink>
+        <NavLink
           to="/review"
           end
           className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}

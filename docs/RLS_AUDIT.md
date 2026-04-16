@@ -190,3 +190,18 @@ The following rows were inferred from **older repository migrations only** (not 
 | 2026-04-10 | SPEC-RPA-FINALIZATION: Gate 1 **snapshot completion status** block (live paste still required). |
 | 2026-04-11 | **Staging live snapshot pasted** (56 rows); Gate 1 snapshot **COMPLETE**; metadata + `psql` command recorded. |
 
+## Open Gaps
+
+### mlcc_items — NO RLS POLICIES (RED)
+- Table exists: `public.mlcc_items`
+- `ENABLE ROW LEVEL SECURITY`: NOT present in any migration
+- `CREATE POLICY`: NOT present for this table in any migration
+- Risk: Any authenticated user can read all MLCC product data. Service role writes are unrestricted from API layer.
+- Mitigation required: Add migration with ENABLE ROW LEVEL SECURITY + read policy for authenticated users + write restricted to service role only.
+- Status: OPEN — mitigation task created, pending implementation brief from Claude.
+
+### order_submitted — CONSTRAINT MISSING (RED)
+- Referenced in master context as Layer 3 of SAFE MODE enforcement.
+- Was never implemented in any migration.
+- Mitigation: Migration 20260415130000 adds the column with CHECK (order_submitted = false) constraint.
+- Status: CLOSED by migration 20260415130000_add_order_submitted_constraint.sql.

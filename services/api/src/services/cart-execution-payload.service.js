@@ -3,6 +3,10 @@ import {
   getLatestCartByStatus,
   getSubmittedCartById,
 } from "./cart.service.js";
+import {
+  collectMissingMlccItemIdLines,
+  MLCC_EXECUTION_ITEM_ID_MESSAGE,
+} from "../utils/mlcc-execution-item-guard.js";
 import { isUuid } from "../utils/validation.js";
 
 const STORE_SELECT = `
@@ -22,6 +26,7 @@ const mapBottleForPayload = (b) => ({
   id: b?.id ?? null,
   name: b?.name ?? null,
   mlcc_code: b?.mlcc_code ?? null,
+  mlcc_item_id: b?.mlcc_item_id ?? null,
   upc: b?.upc ?? null,
   size_ml: b?.size_ml ?? null,
   category: b?.category ?? null,
@@ -41,6 +46,7 @@ const buildItemsAndSummary = (cartItems) => {
     return {
       cartItemId: cartItem.id,
       bottleId: cartItem.bottle_id,
+      mlcc_item_id: cartItem.mlcc_item_id ?? null,
       quantity: cartItem.quantity,
       bottle: mapBottleForPayload(b),
     };
@@ -179,3 +185,65 @@ export const buildLatestExecutionPayloadForStore = async (
 
   return buildExecutionPayloadForSubmittedCart(supabase, storeId, cart.id);
 };
+
+/**
+ * Read-only MLCC execution readiness (same payload build + collectMissingMlccItemIdLines as from-cart guard).
+ *
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} storeId
+ * @param {string} cartId
+ * @returns {Promise<{ statusCode: number; body: Record<string, unknown> }>}
+ */
+export async function evaluateMlccExecutionReadinessForSubmittedCart(
+  supabase,
+  storeId,
+  cartId,
+) {
+  const payloadResult = await buildExecutionPayloadForSubmittedCart(
+    supabase,
+    storeId,
+    cartId,
+  );
+
+  if (payloadResult.statusCode !== 200) {
+    const b = payloadResult.body ?? {};
+    const err = b.error ?? "readiness_check_failed";
+    const message =
+      typeof b.error === "string"
+        ? b.error
+        : (typeof b.message === "string" ? b.message : "Cart cannot be evaluated for MLCC readiness.");
+    return {
+      statusCode: payloadResult.statusCode,
+      body: {
+        ok: false,
+        ready: false,
+        error: err,
+        message,
+        blocking_lines: [],
+      },
+    };
+  }
+
+  const blocking = collectMissingMlccItemIdLines(payloadResult.body.payload);
+  if (blocking.length > 0) {
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        ready: false,
+        error: "MLCC_ITEM_ID_REQUIRED",
+        message: MLCC_EXECUTION_ITEM_ID_MESSAGE,
+        blocking_lines: blocking,
+      },
+    };
+  }
+
+  return {
+    statusCode: 200,
+    body: {
+      ok: true,
+      ready: true,
+      blocking_lines: [],
+    },
+  };
+}

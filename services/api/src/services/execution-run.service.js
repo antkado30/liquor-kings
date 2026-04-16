@@ -1,5 +1,9 @@
-import { buildExecutionPayloadForSubmittedCart } from "./cart-execution-payload.service.js";
+import {
+  buildExecutionPayloadForSubmittedCart,
+  evaluateMlccExecutionReadinessForSubmittedCart,
+} from "./cart-execution-payload.service.js";
 import { verifyCartItemsBeforeExecution } from "./bottle-identity.service.js";
+import { assertMlccExecutionReadinessForEnqueue } from "../mlcc/assert-mlcc-execution-readiness-for-cart.js";
 import {
   fetchAttemptsByRunIdsGrouped,
   listItemAttemptFields,
@@ -485,6 +489,18 @@ export const createExecutionRunFromCart = async (
     };
   }
 
+  const readinessEval = await evaluateMlccExecutionReadinessForSubmittedCart(
+    supabase,
+    storeId,
+    cartId,
+  );
+  const gate = assertMlccExecutionReadinessForEnqueue(readinessEval);
+  if (!gate.ok) {
+    return { statusCode: gate.statusCode, body: gate.body };
+  }
+
+  const snapshot = payloadResult.body.payload;
+
   const { data: existing, error: existingError } = await supabase
     .from("execution_runs")
     .select("id")
@@ -504,8 +520,6 @@ export const createExecutionRunFromCart = async (
       body: { error: "An active execution run already exists for this cart" },
     };
   }
-
-  const snapshot = payloadResult.body.payload;
 
   const { data: executionRun, error: insertError } = await supabase
     .from("execution_runs")
@@ -784,6 +798,298 @@ export const listExecutionRunsForOperatorReview = async (
   };
 };
 
+export const getStorePilotRunsFeed = async (
+  supabase,
+  storeId,
+  { limit = 20 } = {},
+) => {
+  if (!storeId || !isUuid(storeId)) {
+    return {
+      statusCode: 400,
+      body: { error: "Store context required" },
+    };
+  }
+
+  let n = Number.parseInt(String(limit), 10);
+  if (!Number.isFinite(n) || n < 1) n = 20;
+  n = Math.min(n, 100);
+
+  const { data: runs, error } = await supabase
+    .from("execution_runs")
+    .select("*")
+    .eq("store_id", storeId)
+    .order("created_at", { ascending: false })
+    .range(0, n - 1);
+  if (error) return serverError(error.message);
+
+  const rows = runs ?? [];
+  const runIds = rows.map((r) => r.id).filter(Boolean);
+  const attemptsCountByRunId = new Map();
+  if (runIds.length > 0) {
+    const { data: attRows, error: attErr } = await supabase
+      .from("execution_run_attempts")
+      .select("run_id")
+      .eq("store_id", storeId)
+      .in("run_id", runIds);
+    if (attErr) return serverError(attErr.message);
+    for (const row of attRows ?? []) {
+      const rid = String(row.run_id ?? "");
+      if (!rid) continue;
+      attemptsCountByRunId.set(rid, (attemptsCountByRunId.get(rid) ?? 0) + 1);
+    }
+  }
+
+  const items = [];
+  /** @type {Record<string, number>} */
+  const by_status = {};
+  /** @type {Record<string, number>} */
+  const by_verdict_code = {};
+  /** @type {Record<string, number>} */
+  const by_triage_bucket = {};
+  let pilot_complete_runs = 0;
+  let runs_with_failed_checks = 0;
+
+  for (const run of rows) {
+    const summary = buildRunSummary(run, []);
+    const attemptsCount = attemptsCountByRunId.get(String(run.id)) ?? 0;
+    const evidenceKinds = summarizeEvidenceKinds(run.evidence);
+    const stepEvidence = extractStepEvidence(run.evidence);
+    const checks = evaluatePilotVerificationChecks(summary, {
+      counts: { attempts: attemptsCount },
+      evidence_kinds_tally: evidenceKinds,
+    });
+    const failedChecks = checks.filter((c) => c?.pass !== true);
+    const overallPass = failedChecks.length === 0;
+    const verdict = derivePilotVerdict({
+      status: summary.status,
+      overallPass,
+      failedChecks,
+    });
+    const triageBucket = classifyPilotRunTriageBucket({
+      summary,
+      verdict,
+      failedChecks,
+    });
+
+    const statusKey = String(run.status ?? "unknown");
+    by_status[statusKey] = (by_status[statusKey] ?? 0) + 1;
+    by_verdict_code[verdict.verdict_code] =
+      (by_verdict_code[verdict.verdict_code] ?? 0) + 1;
+    by_triage_bucket[triageBucket] = (by_triage_bucket[triageBucket] ?? 0) + 1;
+    if (verdict.pilot_complete === true) pilot_complete_runs += 1;
+    if (failedChecks.length > 0) runs_with_failed_checks += 1;
+
+    items.push({
+      run_id: run.id,
+      cart_id: run.cart_id ?? null,
+      created_at: run.created_at ?? null,
+      updated_at: run.updated_at ?? null,
+      status: run.status ?? null,
+      pilot_verdict_code: verdict.verdict_code,
+      triage_bucket: triageBucket,
+      pilot_complete: verdict.pilot_complete,
+      failed_check_count: failedChecks.length,
+      no_submit_evidence_present:
+        Number(evidenceKinds.no_submit_attestation ?? 0) > 0,
+      worker_step_count: stepEvidence.length,
+      latest_step: stepEvidence.length > 0 ? stepEvidence[stepEvidence.length - 1] : null,
+    });
+  }
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      store_id: storeId,
+      limit: n,
+      counts: {
+        total_runs: items.length,
+        pilot_complete_runs,
+        runs_with_failed_checks,
+        by_status,
+        by_verdict_code,
+        by_triage_bucket,
+      },
+      items,
+    },
+  };
+};
+
+export const getStorePilotOverview = async (
+  supabase,
+  storeId,
+  { limit = 20, failedLimit = 5 } = {},
+) => {
+  const feed = await getStorePilotRunsFeed(supabase, storeId, { limit });
+  if (feed.statusCode !== 200) return feed;
+
+  let failN = Number.parseInt(String(failedLimit), 10);
+  if (!Number.isFinite(failN) || failN < 1) failN = 5;
+  failN = Math.min(failN, 20);
+
+  const items = Array.isArray(feed.body?.items) ? feed.body.items : [];
+  const counts = feed.body?.counts ?? {};
+  const totalRuns = Number(counts.total_runs ?? items.length ?? 0);
+  const pilotCompleteRuns = Number(counts.pilot_complete_runs ?? 0);
+  const runsWithFailedChecks = Number(counts.runs_with_failed_checks ?? 0);
+  const completionRate =
+    totalRuns > 0
+      ? Number(((pilotCompleteRuns / totalRuns) * 100).toFixed(2))
+      : 0;
+
+  const byTriage = counts.by_triage_bucket ?? {};
+  let mostCommonTriageBucket = {
+    bucket: null,
+    count: 0,
+  };
+  for (const [bucket, countRaw] of Object.entries(byTriage)) {
+    const n = Number(countRaw) || 0;
+    if (n > mostCommonTriageBucket.count) {
+      mostCommonTriageBucket = { bucket, count: n };
+    }
+  }
+
+  const recentFailedRuns = items
+    .filter((r) => r?.pilot_complete !== true || Number(r?.failed_check_count ?? 0) > 0)
+    .slice(0, failN)
+    .map((r) => ({
+      run_id: r.run_id,
+      cart_id: r.cart_id ?? null,
+      created_at: r.created_at ?? null,
+      updated_at: r.updated_at ?? null,
+      status: r.status ?? null,
+      pilot_verdict_code: r.pilot_verdict_code ?? null,
+      triage_bucket: r.triage_bucket ?? null,
+      failed_check_count: Number(r.failed_check_count ?? 0),
+      no_submit_evidence_present: r.no_submit_evidence_present === true,
+      worker_step_count: Number(r.worker_step_count ?? 0),
+      latest_step: r.latest_step ?? null,
+    }));
+
+  const evaluateStorePilotHealth = ({
+    totalRuns: total,
+    completionRatePct,
+    failedChecksRuns,
+    triageCounts,
+    completeRuns,
+  }) => {
+    const triggered_by = {
+      low_completion_rate: false,
+      repeated_failed_checks: false,
+      repeated_same_triage_bucket: false,
+      recent_failure_streak: false,
+      no_recent_pilot_complete_runs: false,
+    };
+    /** @type {string[]} */
+    const alert_reasons = [];
+
+    if (total >= 3 && completionRatePct < 60) {
+      triggered_by.low_completion_rate = true;
+      alert_reasons.push("low_completion_rate");
+    }
+
+    if (failedChecksRuns >= 2) {
+      triggered_by.repeated_failed_checks = true;
+      alert_reasons.push("repeated_failed_checks");
+    }
+
+    const triageEntries = Object.entries(triageCounts ?? {});
+    const dominantCount = triageEntries.reduce(
+      (max, [, n]) => Math.max(max, Number(n) || 0),
+      0,
+    );
+    if (dominantCount >= 3) {
+      triggered_by.repeated_same_triage_bucket = true;
+      alert_reasons.push("repeated_same_triage_bucket");
+    }
+
+    const streakWindow = items.slice(0, Math.min(3, items.length));
+    if (
+      streakWindow.length >= 3 &&
+      streakWindow.every(
+        (r) => r?.pilot_complete !== true || Number(r?.failed_check_count ?? 0) > 0,
+      )
+    ) {
+      triggered_by.recent_failure_streak = true;
+      alert_reasons.push("recent_failure_streak");
+    }
+
+    if (total >= 3 && completeRuns === 0) {
+      triggered_by.no_recent_pilot_complete_runs = true;
+      alert_reasons.push("no_recent_pilot_complete_runs");
+    }
+
+    const severeCount = [
+      triggered_by.recent_failure_streak,
+      triggered_by.no_recent_pilot_complete_runs,
+      triggered_by.low_completion_rate,
+    ].filter(Boolean).length;
+    const any = alert_reasons.length > 0;
+    const health_status =
+      severeCount >= 2
+        ? "needs_attention"
+        : any
+          ? "degraded"
+          : "healthy";
+
+    const firstAttentionCandidateMs = items
+      .filter((r) => r?.pilot_complete !== true || Number(r?.failed_check_count ?? 0) > 0)
+      .map((r) => new Date(r?.updated_at ?? r?.created_at ?? "").getTime())
+      .filter((n) => Number.isFinite(n))
+      .reduce((min, n) => (min == null ? n : Math.min(min, n)), null);
+
+    const needs_attention_since =
+      health_status === "needs_attention" && firstAttentionCandidateMs != null
+        ? new Date(firstAttentionCandidateMs).toISOString()
+        : null;
+
+    return {
+      health_status,
+      needs_attention_since,
+      alert_reasons,
+      triggered_by,
+    };
+  };
+
+  const health = evaluateStorePilotHealth({
+    totalRuns,
+    completionRatePct: completionRate,
+    failedChecksRuns: runsWithFailedChecks,
+    triageCounts: byTriage,
+    completeRuns: pilotCompleteRuns,
+  });
+  const minimumDataWindowMet = totalRuns >= 3;
+  const healthWithWindow = {
+    ...health,
+    minimum_data_window_met: minimumDataWindowMet,
+  };
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      store_id: feed.body.store_id,
+      generated_at: new Date().toISOString(),
+      window: {
+        run_limit: feed.body.limit,
+        failed_runs_limit: failN,
+      },
+      summary: {
+        total_recent_runs: totalRuns,
+        pilot_complete_runs: pilotCompleteRuns,
+        completion_rate_pct: completionRate,
+        runs_with_failed_checks: runsWithFailedChecks,
+        by_status: counts.by_status ?? {},
+        by_verdict: counts.by_verdict_code ?? {},
+        by_triage_bucket: byTriage,
+        most_common_triage_bucket: mostCommonTriageBucket,
+      },
+      health: healthWithWindow,
+      recent_failed_runs: recentFailedRuns,
+    },
+  };
+};
+
 export const getExecutionRunAttemptsById = async (supabase, runId, storeId) => {
   const runResult = await getExecutionRunById(supabase, runId, storeId);
   if (runResult.statusCode !== 200) return runResult;
@@ -854,6 +1160,428 @@ export const getExecutionRunOperatorReviewBundleById = async (
         attempt_history: {
           count: attemptsResult.body.count,
           items: attemptsResult.body.data,
+        },
+      },
+    },
+  };
+};
+
+const pushLifecycleEvent = (events, kind, at, details = {}) => {
+  if (!at) return;
+  events.push({
+    kind,
+    at,
+    details,
+  });
+};
+
+const summarizeEvidenceKinds = (evidence) => {
+  const tally = {};
+  for (const row of asEvidenceArray(evidence)) {
+    const k = typeof row?.kind === "string" ? row.kind : "unknown";
+    tally[k] = (tally[k] ?? 0) + 1;
+  }
+  return tally;
+};
+
+const extractStepEvidence = (evidence, limit = 50) =>
+  asEvidenceArray(evidence)
+    .filter((e) => e?.kind === "worker_step_event")
+    .sort((a, b) =>
+      String(a?.created_at ?? "").localeCompare(String(b?.created_at ?? "")),
+    )
+    .slice(0, limit)
+    .map((e) => ({
+      stage: e?.stage ?? null,
+      message: e?.message ?? null,
+      created_at: e?.created_at ?? null,
+      attributes:
+        e?.attributes && typeof e.attributes === "object" ? e.attributes : {},
+    }));
+
+const sortLifecycleEvents = (events) =>
+  [...events].sort((a, b) => {
+    const cmp = String(a.at ?? "").localeCompare(String(b.at ?? ""));
+    if (cmp !== 0) return cmp;
+    return String(a.kind ?? "").localeCompare(String(b.kind ?? ""));
+  });
+
+export const getExecutionRunLifecycleById = async (supabase, runId, storeId) => {
+  const runResult = await getExecutionRunById(supabase, runId, storeId);
+  if (runResult.statusCode !== 200) return runResult;
+  const run = runResult.body.data;
+
+  const actionsResult = await getRunOperatorActions(supabase, runId, storeId);
+  if (actionsResult.error) return serverError(actionsResult.error.message);
+  const actions = actionsResult.data ?? [];
+
+  const attemptsResult = await getExecutionRunAttemptsById(supabase, runId, storeId);
+  if (attemptsResult.statusCode !== 200) return attemptsResult;
+  const attempts = attemptsResult.body.data ?? [];
+
+  const summary = buildRunSummary(run, actions);
+  const events = [];
+  pushLifecycleEvent(events, "run_queued", summary.timestamps?.queued_at, {
+    status: "queued",
+  });
+  pushLifecycleEvent(events, "run_started", summary.timestamps?.started_at, {
+    status: "running",
+    worker_id: run.worker_id ?? null,
+  });
+  pushLifecycleEvent(events, "run_heartbeat", summary.timestamps?.heartbeat_at, {
+    progress_stage: summary.progress_stage,
+    progress_message: summary.progress_message,
+  });
+  pushLifecycleEvent(events, "run_finished", summary.timestamps?.finished_at, {
+    status: summary.status,
+    failure_type: summary.failure_type,
+  });
+
+  for (const att of attempts) {
+    pushLifecycleEvent(events, "attempt_started", att.started_at, {
+      attempt_number: att.attempt_number,
+      worker_id: att.worker_id ?? null,
+    });
+    pushLifecycleEvent(events, "attempt_finished", att.finished_at, {
+      attempt_number: att.attempt_number,
+      status: att.status ?? null,
+      failure_type: att.failure_type ?? null,
+    });
+  }
+
+  for (const act of actions) {
+    pushLifecycleEvent(events, "operator_action", act.created_at, {
+      action: act.action ?? null,
+      reason: act.reason ?? null,
+      actor_id: act.actor_id ?? null,
+    });
+  }
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      run_id: run.id,
+      store_id: run.store_id,
+      cart_id: run.cart_id,
+      status: run.status,
+      lifecycle: {
+        summary,
+        counts: {
+          attempts: attempts.length,
+          operator_actions: actions.length,
+          evidence_entries: asEvidenceArray(run.evidence).length,
+          step_evidence_entries: extractStepEvidence(run.evidence).length,
+        },
+        evidence_kinds_tally: summarizeEvidenceKinds(run.evidence),
+        step_evidence: extractStepEvidence(run.evidence),
+        events: sortLifecycleEvents(events),
+      },
+    },
+  };
+};
+
+const evaluatePilotVerificationChecks = (summary, lifecycle) => {
+  const checks = [];
+  const status = summary?.status ?? null;
+  const ts = summary?.timestamps ?? {};
+
+  checks.push({
+    key: "queue_timestamp_present",
+    pass: !!ts.queued_at,
+    details: { queued_at: ts.queued_at ?? null },
+  });
+
+  checks.push({
+    key: "run_started_when_expected",
+    pass:
+      status === "queued"
+        ? true
+        : !!ts.started_at,
+    details: { status, started_at: ts.started_at ?? null },
+  });
+
+  checks.push({
+    key: "heartbeat_present_for_running_or_terminal",
+    pass:
+      status === "queued"
+        ? true
+        : !!ts.heartbeat_at,
+    details: { status, heartbeat_at: ts.heartbeat_at ?? null },
+  });
+
+  checks.push({
+    key: "terminal_runs_have_finished_at",
+    pass:
+      status === "succeeded" || status === "failed" || status === "canceled"
+        ? !!ts.finished_at
+        : true,
+    details: { status, finished_at: ts.finished_at ?? null },
+  });
+
+  checks.push({
+    key: "failed_runs_have_failure_type",
+    pass: status === "failed" ? !!summary.failure_type : true,
+    details: { status, failure_type: summary.failure_type ?? null },
+  });
+
+  checks.push({
+    key: "succeeded_runs_mark_completed_stage",
+    pass:
+      status === "succeeded"
+        ? summary.progress_stage === "completed"
+        : true,
+    details: { status, progress_stage: summary.progress_stage ?? null },
+  });
+
+  checks.push({
+    key: "attempt_history_present_after_start",
+    pass:
+      status === "queued"
+        ? true
+        : Number(lifecycle?.counts?.attempts ?? 0) > 0,
+    details: {
+      status,
+      attempts: Number(lifecycle?.counts?.attempts ?? 0),
+    },
+  });
+
+  const noSubmitEvidenceCount = Number(
+    lifecycle?.evidence_kinds_tally?.no_submit_attestation ?? 0,
+  );
+  const workerStepEvidenceCount = Number(
+    lifecycle?.evidence_kinds_tally?.worker_step_event ?? 0,
+  );
+  checks.push({
+    key: "no_submit_attestation_present_for_succeeded_runs",
+    pass: status === "succeeded" ? noSubmitEvidenceCount > 0 : true,
+    details: {
+      status,
+      no_submit_attestation_count: noSubmitEvidenceCount,
+    },
+  });
+  checks.push({
+    key: "worker_step_evidence_present_for_succeeded_runs",
+    pass: status === "succeeded" ? workerStepEvidenceCount > 0 : true,
+    details: {
+      status,
+      worker_step_event_count: workerStepEvidenceCount,
+    },
+  });
+
+  return checks;
+};
+
+export const getExecutionRunPilotVerificationById = async (
+  supabase,
+  runId,
+  storeId,
+) => {
+  const lifecycleResult = await getExecutionRunLifecycleById(supabase, runId, storeId);
+  if (lifecycleResult.statusCode !== 200) return lifecycleResult;
+
+  const data = lifecycleResult.body;
+  const lifecycle = data.lifecycle ?? {};
+  const summary = lifecycle.summary ?? {};
+  const checks = evaluatePilotVerificationChecks(summary, lifecycle);
+  const failed = checks.filter((c) => c.pass !== true);
+  const overall_pass = failed.length === 0;
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      run_id: data.run_id,
+      store_id: data.store_id,
+      cart_id: data.cart_id,
+      status: data.status,
+      pilot_verification: {
+        overall_pass,
+        failed_check_count: failed.length,
+        checks,
+      },
+      lifecycle,
+    },
+  };
+};
+
+const derivePilotVerdict = ({ status, overallPass, failedChecks }) => {
+  if (overallPass === true && status === "succeeded") {
+    return {
+      pilot_complete: true,
+      verdict_code: "pilot_complete_succeeded",
+      next_action: "run_passed_no_submit_pilot_checks",
+    };
+  }
+  if (overallPass === true && status !== "succeeded") {
+    return {
+      pilot_complete: false,
+      verdict_code: "checks_passed_but_not_succeeded",
+      next_action: "wait_for_terminal_success_or_finish_run",
+    };
+  }
+  return {
+    pilot_complete: false,
+    verdict_code: "pilot_verification_failed",
+    next_action:
+      failedChecks.length > 0
+        ? "fix_failed_checks_then_reverify"
+        : "inspect_run_and_reverify",
+  };
+};
+
+export const classifyPilotRunTriageBucket = ({
+  summary,
+  verdict,
+  failedChecks,
+}) => {
+  if (verdict?.pilot_complete === true) return "pilot_complete";
+
+  const failureType = String(summary?.failure_type ?? "");
+  const stage = String(summary?.progress_stage ?? "");
+  const failed = Array.isArray(failedChecks) ? failedChecks : [];
+  const keys = new Set(failed.map((c) => String(c?.key ?? "")));
+
+  if (failureType === "CODE_MISMATCH" || failureType === "OUT_OF_STOCK") {
+    return "mapping_blocked";
+  }
+  if (
+    stage === "validate" ||
+    failureType === "QUANTITY_RULE_VIOLATION" ||
+    keys.has("attempt_history_present_after_start")
+  ) {
+    return "worker_validation_failed";
+  }
+  if (stage === "mlcc_preflight" || failureType === "PRECHECK_FAILED") {
+    return "preflight_failed";
+  }
+  if (stage === "mlcc_dry_run_plan" || failureType === "PLAN_BUILD_FAILED") {
+    return "dry_run_plan_failed";
+  }
+  return "pilot_checks_failed";
+};
+
+export const getExecutionRunPilotVerdictById = async (supabase, runId, storeId) => {
+  const pv = await getExecutionRunPilotVerificationById(supabase, runId, storeId);
+  if (pv.statusCode !== 200) return pv;
+
+  const status = pv.body.status ?? null;
+  const checks = Array.isArray(pv.body?.pilot_verification?.checks)
+    ? pv.body.pilot_verification.checks
+    : [];
+  const failed_checks = checks.filter((c) => c?.pass !== true);
+  const overall_pass = pv.body?.pilot_verification?.overall_pass === true;
+
+  const verdict = derivePilotVerdict({
+    status,
+    overallPass: overall_pass,
+    failedChecks: failed_checks,
+  });
+  const triage_bucket = classifyPilotRunTriageBucket({
+    summary: pv.body?.lifecycle?.summary ?? {},
+    verdict,
+    failedChecks: failed_checks,
+  });
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      run_id: pv.body.run_id,
+      store_id: pv.body.store_id,
+      cart_id: pv.body.cart_id,
+      status,
+      generated_at: new Date().toISOString(),
+      verdict,
+      triage_bucket,
+      failed_checks: failed_checks.map((c) => ({
+        key: c.key ?? "unknown",
+        details: c.details ?? {},
+      })),
+      checks_total: checks.length,
+      checks_passed: checks.length - failed_checks.length,
+    },
+  };
+};
+
+const compactFailedCheck = (row) => ({
+  key: row?.key ?? "unknown",
+  details: row?.details && typeof row.details === "object" ? row.details : {},
+});
+
+const pickKeyLifecycleHighlights = (lifecycle) => {
+  const summary = lifecycle?.summary ?? {};
+  const ts = summary?.timestamps ?? {};
+  return {
+    status: summary?.status ?? null,
+    progress_stage: summary?.progress_stage ?? null,
+    retry_count: summary?.retry_count ?? 0,
+    failure_type: summary?.failure_type ?? null,
+    queued_at: ts.queued_at ?? null,
+    started_at: ts.started_at ?? null,
+    heartbeat_at: ts.heartbeat_at ?? null,
+    finished_at: ts.finished_at ?? null,
+  };
+};
+
+export const getExecutionRunPilotReviewPacketById = async (
+  supabase,
+  runId,
+  storeId,
+) => {
+  const verdictResult = await getExecutionRunPilotVerdictById(
+    supabase,
+    runId,
+    storeId,
+  );
+  if (verdictResult.statusCode !== 200) return verdictResult;
+
+  const verificationResult = await getExecutionRunPilotVerificationById(
+    supabase,
+    runId,
+    storeId,
+  );
+  if (verificationResult.statusCode !== 200) return verificationResult;
+
+  const lifecycle = verificationResult.body.lifecycle ?? {};
+  const stepEvidence = Array.isArray(lifecycle?.step_evidence)
+    ? lifecycle.step_evidence
+    : [];
+  const latestStep = stepEvidence.length > 0 ? stepEvidence[stepEvidence.length - 1] : null;
+  const noSubmitCount = Number(
+    lifecycle?.evidence_kinds_tally?.no_submit_attestation ?? 0,
+  );
+
+  const failedChecks = Array.isArray(verdictResult.body?.failed_checks)
+    ? verdictResult.body.failed_checks
+    : [];
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      run_id: verdictResult.body.run_id,
+      store_id: verdictResult.body.store_id,
+      cart_id: verdictResult.body.cart_id,
+      generated_at: new Date().toISOString(),
+      pilot_review_packet: {
+        verdict: verdictResult.body.verdict,
+        triage_bucket: verdictResult.body.triage_bucket ?? "pilot_checks_failed",
+        checks: {
+          total: verdictResult.body.checks_total ?? 0,
+          passed: verdictResult.body.checks_passed ?? 0,
+          failed: failedChecks.length,
+        },
+        failed_checks: failedChecks.map((r) => compactFailedCheck(r)),
+        lifecycle_highlights: pickKeyLifecycleHighlights(lifecycle),
+        no_submit_evidence: {
+          present: noSubmitCount > 0,
+          count: noSubmitCount,
+        },
+        worker_step_trace: {
+          step_count: stepEvidence.length,
+          latest_step: latestStep,
+          latest_steps: stepEvidence.slice(-5),
         },
       },
     },

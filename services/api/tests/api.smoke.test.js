@@ -4,6 +4,7 @@ import app from "../src/app.js";
 import supabase from "../src/config/supabase.js";
 import { bottleId, cartId, mlccCode, storeId } from "./helpers/test-data.js";
 import { resetTestCartState } from "./helpers/cart-reset.js";
+import { ensureExecutionTestCartHasMlccItemIds } from "./helpers/ensure-execution-mlcc-item-ids.js";
 import { adaptExecutionPayloadToMlccOrder } from "../src/workers/mlcc-adapter.js";
 import { buildMlccDryRunPlan } from "../src/workers/mlcc-dry-run.js";
 import {
@@ -83,6 +84,19 @@ describe("Liquor Kings API smoke tests", () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(Array.isArray(res.body.history)).toBe(true);
+    const first = res.body.history[0];
+    if (first) {
+      expect(first.mlcc_execution_readiness).toBeDefined();
+      expect(first.mlcc_execution_readiness).toHaveProperty("ready");
+      expect(Array.isArray(first.mlcc_execution_readiness.blocking_lines)).toBe(true);
+      expect(first.mlcc_execution_summary).toBeDefined();
+      expect(first.mlcc_execution_summary).toMatchObject({
+        status_code: expect.any(String),
+        blocked: expect.any(Boolean),
+        blocking_count: expect.any(Number),
+        missing_mlcc_item_id_count: expect.any(Number),
+      });
+    }
   });
 
   it("GET /cart/:storeId/history/:cartId", async () => {
@@ -91,6 +105,9 @@ describe("Liquor Kings API smoke tests", () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.cart.id).toBe(cartId);
+    expect(res.body.mlcc_execution_readiness).toBeDefined();
+    expect(res.body.mlcc_execution_readiness).toHaveProperty("ready");
+    expect(Array.isArray(res.body.mlcc_execution_readiness.blocking_lines)).toBe(true);
   });
 
   it("GET /cart/:storeId/latest-submitted-summary", async () => {
@@ -708,6 +725,8 @@ describe("execution run smoke tests", () => {
     await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({ validationStatus: "validated" });
 
+    await ensureExecutionTestCartHasMlccItemIds(supabase, { cartId, bottleId });
+
     await authReq
       .post(`/execution-runs/from-cart/${storeId}/${cartId}`)
       .send();
@@ -848,6 +867,8 @@ describe("execution worker stub smoke tests", () => {
     await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({ validationStatus: "validated" });
 
+    await ensureExecutionTestCartHasMlccItemIds(supabase, { cartId, bottleId });
+
     await authReq
       .post(`/execution-runs/from-cart/${storeId}/${cartId}`)
       .send();
@@ -894,6 +915,13 @@ describe("execution worker stub smoke tests", () => {
     expect(first.status).toBe("succeeded");
     expect(first.progress_stage).toBe("completed");
     expect(first.worker_id).toBe("worker-smoke-local-1");
+    expect(Array.isArray(first.evidence)).toBe(true);
+    expect(
+      first.evidence.some((e) => e?.kind === "no_submit_attestation"),
+    ).toBe(true);
+    expect(first.evidence.some((e) => e?.kind === "worker_step_event")).toBe(
+      true,
+    );
   });
 
   it("C) processOneRun again when queue is empty", async () => {
@@ -935,6 +963,8 @@ describe("MLCC adapter and worker preflight smoke tests", () => {
 
     await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({ validationStatus: "validated" });
+
+    await ensureExecutionTestCartHasMlccItemIds(supabase, { cartId, bottleId });
 
     await authReq
       .post(`/execution-runs/from-cart/${storeId}/${cartId}`)
@@ -1072,6 +1102,8 @@ describe("MLCC dry-run worker smoke tests", () => {
     await authReq.patch(`/cart/${storeId}/history/${cartId}/validation-result`)
       .send({ validationStatus: "validated" });
 
+    await ensureExecutionTestCartHasMlccItemIds(supabase, { cartId, bottleId });
+
     await authReq
       .post(`/execution-runs/from-cart/${storeId}/${cartId}`)
       .send();
@@ -1174,6 +1206,13 @@ describe("MLCC dry-run worker smoke tests", () => {
     expect(res.body.data.status).toBe("succeeded");
     expect(res.body.data.progress_stage).toBe("completed");
     expect(res.body.data.worker_id).toBe("worker-mlcc-dry-run-1");
+    expect(Array.isArray(res.body.data.evidence)).toBe(true);
+    expect(
+      res.body.data.evidence.some((e) => e?.kind === "no_submit_attestation"),
+    ).toBe(true);
+    expect(
+      res.body.data.evidence.some((e) => e?.kind === "worker_step_event"),
+    ).toBe(true);
   });
 
   it("E) processOneMlccDryRun again when queue is empty", async () => {
@@ -1184,5 +1223,128 @@ describe("MLCC dry-run worker smoke tests", () => {
 
     expect(result.success).toBe(true);
     expect(result.claimed).toBe(false);
+  });
+});
+
+describe("MLCC execution readiness (GET)", () => {
+  afterAll(async () => {
+    await ensureExecutionTestCartHasMlccItemIds(supabase, { cartId, bottleId });
+    await resetTestCartState(supabase, cartId);
+  });
+
+  it("GET /cart/:storeId/history/:cartId/mlcc-execution-readiness — blocked then ready (read-only)", async () => {
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+    await resetTestCartState(supabase, cartId);
+
+    await authReq.post(`/cart/${storeId}/validate`).send();
+    await authReq
+      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+      .send({ validationStatus: "validated" });
+
+    await supabase.from("cart_items").update({ mlcc_item_id: null }).eq("cart_id", cartId);
+    await supabase.from("bottles").update({ mlcc_item_id: null }).eq("id", bottleId);
+
+    const blocked = await authReq.get(
+      `/cart/${storeId}/history/${cartId}/mlcc-execution-readiness`,
+    );
+
+    expect(blocked.status).toBe(200);
+    expect(blocked.body.ok).toBe(true);
+    expect(blocked.body.ready).toBe(false);
+    expect(blocked.body.error).toBe("MLCC_ITEM_ID_REQUIRED");
+    expect(blocked.body.message).toBeTruthy();
+    expect(Array.isArray(blocked.body.blocking_lines)).toBe(true);
+    expect(blocked.body.blocking_lines.length).toBeGreaterThan(0);
+    expect(blocked.body.blocking_lines[0].reason).toBe("missing_mlcc_item_id");
+    expect(blocked.body.blocking_lines[0].cartItemId).toBeTruthy();
+    expect(blocked.body.blocking_lines[0].bottleId).toBe(bottleId);
+
+    await ensureExecutionTestCartHasMlccItemIds(supabase, { cartId, bottleId });
+
+    const ready = await authReq.get(
+      `/cart/${storeId}/history/${cartId}/mlcc-execution-readiness`,
+    );
+
+    expect(ready.status).toBe(200);
+    expect(ready.body.ok).toBe(true);
+    expect(ready.body.ready).toBe(true);
+    expect(ready.body.blocking_lines).toEqual([]);
+  });
+
+  it("GET /cart/:storeId/history/:cartId embeds mlcc_execution_readiness (blocked vs ready)", async () => {
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+    await resetTestCartState(supabase, cartId);
+
+    await authReq.post(`/cart/${storeId}/validate`).send();
+    await authReq
+      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+      .send({ validationStatus: "validated" });
+
+    await supabase.from("cart_items").update({ mlcc_item_id: null }).eq("cart_id", cartId);
+    await supabase.from("bottles").update({ mlcc_item_id: null }).eq("id", bottleId);
+
+    const detailBlocked = await authReq.get(`/cart/${storeId}/history/${cartId}`);
+    const standaloneBlocked = await authReq.get(
+      `/cart/${storeId}/history/${cartId}/mlcc-execution-readiness`,
+    );
+
+    expect(detailBlocked.status).toBe(200);
+    expect(detailBlocked.body.mlcc_execution_readiness.ready).toBe(false);
+    expect(detailBlocked.body.mlcc_execution_readiness.error).toBe("MLCC_ITEM_ID_REQUIRED");
+    expect(detailBlocked.body.mlcc_execution_readiness.blocking_lines).toEqual(
+      standaloneBlocked.body.blocking_lines,
+    );
+
+    await ensureExecutionTestCartHasMlccItemIds(supabase, { cartId, bottleId });
+
+    const detailReady = await authReq.get(`/cart/${storeId}/history/${cartId}`);
+
+    expect(detailReady.body.mlcc_execution_readiness.ready).toBe(true);
+    expect(detailReady.body.mlcc_execution_readiness.blocking_lines).toEqual([]);
+    expect(detailReady.body.mlcc_execution_readiness.error).toBeNull();
+    expect(detailReady.body.mlcc_execution_readiness.message).toBeNull();
+  });
+
+  it("GET /cart/:storeId/history lists mlcc_execution_readiness per cart (blocked vs ready)", async () => {
+    await supabase.from("execution_runs").delete().eq("cart_id", cartId);
+    await resetTestCartState(supabase, cartId);
+
+    await authReq.post(`/cart/${storeId}/validate`).send();
+    await authReq
+      .patch(`/cart/${storeId}/history/${cartId}/validation-result`)
+      .send({ validationStatus: "validated" });
+
+    await supabase.from("cart_items").update({ mlcc_item_id: null }).eq("cart_id", cartId);
+    await supabase.from("bottles").update({ mlcc_item_id: null }).eq("id", bottleId);
+
+    const listBlocked = await authReq.get(`/cart/${storeId}/history`);
+    const rowBlocked = listBlocked.body.history.find((c) => c.id === cartId);
+    expect(rowBlocked).toBeTruthy();
+    expect(rowBlocked.mlcc_execution_readiness.ready).toBe(false);
+    expect(rowBlocked.mlcc_execution_readiness.error).toBe("MLCC_ITEM_ID_REQUIRED");
+    expect(rowBlocked.mlcc_execution_readiness.blocking_lines.length).toBeGreaterThan(0);
+    expect(rowBlocked.mlcc_execution_summary.status_code).toBe(
+      "blocked_missing_mlcc_item_id",
+    );
+    expect(rowBlocked.mlcc_execution_summary.blocked).toBe(true);
+    expect(rowBlocked.mlcc_execution_summary.blocking_count).toBe(
+      rowBlocked.mlcc_execution_readiness.blocking_lines.length,
+    );
+
+    await ensureExecutionTestCartHasMlccItemIds(supabase, { cartId, bottleId });
+
+    const listReady = await authReq.get(`/cart/${storeId}/history`);
+    const rowReady = listReady.body.history.find((c) => c.id === cartId);
+    expect(rowReady).toBeTruthy();
+    expect(rowReady.mlcc_execution_readiness.ready).toBe(true);
+    expect(rowReady.mlcc_execution_readiness.blocking_lines).toEqual([]);
+    expect(rowReady.mlcc_execution_readiness.error).toBeNull();
+    expect(rowReady.mlcc_execution_readiness.message).toBeNull();
+    expect(rowReady.mlcc_execution_summary).toEqual({
+      status_code: "ready",
+      blocked: false,
+      blocking_count: 0,
+      missing_mlcc_item_id_count: 0,
+    });
   });
 });

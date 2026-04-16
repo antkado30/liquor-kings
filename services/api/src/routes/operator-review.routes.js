@@ -4,10 +4,26 @@ import supabase from "../config/supabase.js";
 import {
   applyExecutionRunOperatorAction,
   getExecutionRunOperatorReviewBundleById,
+  getStorePilotOverview,
   listExecutionRunsForOperatorReview,
 } from "../services/execution-run.service.js";
 import { getOperatorDiagnosticsOverview } from "../services/operator-diagnostics.service.js";
 import { logSystemDiagnostic, DIAGNOSTIC_KIND } from "../services/diagnostics.service.js";
+import {
+  getPilotOpsWorkflowState,
+  listPilotOpsWorkflowStateHistory,
+  listPilotOpsWorkflowStateHistoryForStores,
+  updatePilotOpsWorkflowState,
+} from "../services/pilot-ops-workflow-state.service.js";
+import { evaluatePilotOpsAttentionOverdue } from "../services/pilot-ops-attention.service.js";
+import {
+  evaluateAndRecordPilotOpsNotifications,
+  listPilotOpsNotifications,
+} from "../services/pilot-ops-notifications.service.js";
+import {
+  buildPilotOpsQualitySummary,
+  buildPilotOpsTimeComparison,
+} from "../services/pilot-ops-quality-metrics.service.js";
 
 const router = express.Router();
 const SESSION_COOKIE = "lk_operator_session";
@@ -333,6 +349,384 @@ router.get("/api/diagnostics/overview", requireOperatorSession, async (req, res)
     },
   );
   return res.status(statusCode).json(body);
+});
+
+const pilotHealthRank = (status) => {
+  if (status === "needs_attention") return 0;
+  if (status === "degraded") return 1;
+  return 2;
+};
+
+const defaultWorkflowState = () => ({
+  pilot_ops_status: "unreviewed",
+  last_reviewed_at: null,
+  last_reviewed_by: null,
+  operator_note: null,
+});
+
+const defaultAttentionSignal = (reason = "pilot_overview_unavailable") => ({
+  requires_follow_up: false,
+  is_overdue: false,
+  reason_code: reason,
+  workflow_status: "unreviewed",
+  reference_at: null,
+  due_at: null,
+  elapsed_hours: 0,
+  threshold_hours: 24,
+});
+
+router.get("/api/pilot-ops/stores", requireOperatorSession, async (req, res) => {
+  const limitRaw = Number.parseInt(String(req.query.limit ?? "20"), 10);
+  const failedRaw = Number.parseInt(String(req.query.failed_limit ?? "5"), 10);
+  const limit = Number.isNaN(limitRaw) ? 20 : Math.min(Math.max(limitRaw, 1), 100);
+  const failedLimit = Number.isNaN(failedRaw)
+    ? 5
+    : Math.min(Math.max(failedRaw, 1), 20);
+
+  const { data: stores, error } = await listUserStores(req.operatorSession.userId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const rows = [];
+  const nowIso = new Date().toISOString();
+  for (const s of stores ?? []) {
+    const ov = await getStorePilotOverview(supabase, s.id, { limit, failedLimit });
+    if (ov.statusCode !== 200) {
+      rows.push({
+        store_id: s.id,
+        store_name: s.name ?? null,
+        health_status: "needs_attention",
+        alert_reasons: ["pilot_overview_unavailable"],
+        completion_rate_pct: null,
+        total_recent_runs: 0,
+        pilot_complete_runs: 0,
+        runs_with_failed_checks: 0,
+        most_common_triage_bucket: { bucket: null, count: 0 },
+        attention_overdue: defaultAttentionSignal(),
+        ...defaultWorkflowState(),
+      });
+      continue;
+    }
+    const summary = ov.body?.summary ?? {};
+    const health = ov.body?.health ?? {};
+    const wfOut = await getPilotOpsWorkflowState(supabase, s.id);
+    if (!wfOut.ok) {
+      return res.status(500).json({ error: wfOut.error });
+    }
+    const wf = wfOut.data;
+    const attention_overdue = evaluatePilotOpsAttentionOverdue({
+      healthStatus: health.health_status ?? "healthy",
+      workflowState: wf,
+      needsAttentionSince: health.needs_attention_since ?? null,
+      minimumDataWindowMet: health.minimum_data_window_met !== false,
+      now: nowIso,
+    });
+    const notifyOut = await evaluateAndRecordPilotOpsNotifications(supabase, {
+      storeId: s.id,
+      healthStatus: health.health_status ?? "healthy",
+      attentionOverdue: attention_overdue,
+      alertReasons: Array.isArray(health.alert_reasons) ? health.alert_reasons : [],
+      workflowState: wf,
+      now: nowIso,
+    });
+    if (!notifyOut.ok) return res.status(500).json({ error: notifyOut.error });
+    rows.push({
+      store_id: s.id,
+      store_name: s.name ?? null,
+      health_status: health.health_status ?? "healthy",
+      alert_reasons: Array.isArray(health.alert_reasons) ? health.alert_reasons : [],
+      completion_rate_pct: summary.completion_rate_pct ?? null,
+      total_recent_runs: summary.total_recent_runs ?? 0,
+      pilot_complete_runs: summary.pilot_complete_runs ?? 0,
+      runs_with_failed_checks: summary.runs_with_failed_checks ?? 0,
+      most_common_triage_bucket: summary.most_common_triage_bucket ?? {
+        bucket: null,
+        count: 0,
+      },
+      attention_overdue,
+      ...wf,
+    });
+  }
+
+  rows.sort((a, b) => {
+    const ra = pilotHealthRank(a.health_status);
+    const rb = pilotHealthRank(b.health_status);
+    if (ra !== rb) return ra - rb;
+    const ao = a.attention_overdue?.is_overdue === true ? 1 : 0;
+    const bo = b.attention_overdue?.is_overdue === true ? 1 : 0;
+    if (bo !== ao) return bo - ao;
+    const ca = Number(a.completion_rate_pct ?? 0);
+    const cb = Number(b.completion_rate_pct ?? 0);
+    if (cb !== ca) return ca - cb;
+    return String(a.store_name ?? a.store_id).localeCompare(
+      String(b.store_name ?? b.store_id),
+    );
+  });
+
+  return res.status(200).json({
+    success: true,
+    current_store_id: req.operatorSession.storeId,
+    window: { run_limit: limit, failed_runs_limit: failedLimit },
+    stores: rows,
+  });
+});
+
+router.get("/api/pilot-ops/notifications", requireOperatorSession, async (req, res) => {
+  const { data: stores, error } = await listUserStores(req.operatorSession.userId);
+  if (error) return res.status(500).json({ error: error.message });
+  const storeIds = (stores ?? []).map((s) => s.id).filter(Boolean);
+  const rawLimit = Number.parseInt(String(req.query.limit ?? "50"), 10);
+  const limit = Number.isNaN(rawLimit) ? 50 : Math.min(Math.max(rawLimit, 1), 200);
+  const out = await listPilotOpsNotifications(supabase, storeIds, { limit });
+  if (!out.ok) return res.status(500).json({ error: out.error });
+  return res.status(200).json({
+    success: true,
+    count: out.data.length,
+    notifications: out.data,
+  });
+});
+
+router.get("/api/pilot-ops/quality-summary", requireOperatorSession, async (req, res) => {
+  const limitRaw = Number.parseInt(String(req.query.limit ?? "20"), 10);
+  const failedRaw = Number.parseInt(String(req.query.failed_limit ?? "5"), 10);
+  const limit = Number.isNaN(limitRaw) ? 20 : Math.min(Math.max(limitRaw, 1), 100);
+  const failedLimit = Number.isNaN(failedRaw)
+    ? 5
+    : Math.min(Math.max(failedRaw, 1), 20);
+  const metricsLimitRaw = Number.parseInt(String(req.query.metrics_limit ?? "3000"), 10);
+  const metricsLimit = Number.isNaN(metricsLimitRaw)
+    ? 3000
+    : Math.min(Math.max(metricsLimitRaw, 50), 5000);
+  const windowDaysRaw = Number.parseInt(String(req.query.window_days ?? "7"), 10);
+  const windowDays = Number.isNaN(windowDaysRaw) ? 7 : Math.min(Math.max(windowDaysRaw, 1), 90);
+
+  const { data: stores, error } = await listUserStores(req.operatorSession.userId);
+  if (error) return res.status(500).json({ error: error.message });
+  const nowIso = new Date().toISOString();
+
+  /** @type {Array<Record<string, any>>} */
+  const storeSnapshots = [];
+  for (const s of stores ?? []) {
+    const ov = await getStorePilotOverview(supabase, s.id, { limit, failedLimit });
+    if (ov.statusCode !== 200) continue;
+    const health = ov.body?.health ?? {};
+    const wfOut = await getPilotOpsWorkflowState(supabase, s.id);
+    if (!wfOut.ok) return res.status(500).json({ error: wfOut.error });
+    const attention_overdue = evaluatePilotOpsAttentionOverdue({
+      healthStatus: health.health_status ?? "healthy",
+      workflowState: wfOut.data,
+      needsAttentionSince: health.needs_attention_since ?? null,
+      minimumDataWindowMet: health.minimum_data_window_met !== false,
+      now: nowIso,
+    });
+    storeSnapshots.push({
+      store_id: s.id,
+      health_status: health.health_status ?? "healthy",
+      pilot_ops_status: wfOut.data.pilot_ops_status,
+      attention_overdue,
+    });
+  }
+
+  const storeIds = storeSnapshots.map((s) => s.store_id);
+  const notifOut = await listPilotOpsNotifications(supabase, storeIds, { limit: metricsLimit });
+  if (!notifOut.ok) return res.status(500).json({ error: notifOut.error });
+  const wfHistoryOut = await listPilotOpsWorkflowStateHistoryForStores(supabase, storeIds, {
+    limit: metricsLimit,
+  });
+  if (!wfHistoryOut.ok) return res.status(500).json({ error: wfHistoryOut.error });
+
+  const summary = buildPilotOpsQualitySummary({
+    stores: storeSnapshots,
+    notifications: notifOut.data,
+    workflowHistory: wfHistoryOut.data,
+  });
+
+  const timeComparison = buildPilotOpsTimeComparison({
+    nowMs: Date.now(),
+    windowDays,
+    notifications: notifOut.data ?? [],
+    workflowHistory: wfHistoryOut.data ?? [],
+  });
+
+  return res.status(200).json({
+    success: true,
+    generated_at: nowIso,
+    scope: {
+      stores: storeSnapshots.length,
+      run_limit: limit,
+      failed_runs_limit: failedLimit,
+      metrics_limit: metricsLimit,
+      window_days: windowDays,
+    },
+    quality_summary: summary,
+    time_comparison: timeComparison,
+  });
+});
+
+router.get("/api/pilot-ops/stores-needing-follow-up", requireOperatorSession, async (req, res) => {
+  const limitRaw = Number.parseInt(String(req.query.limit ?? "20"), 10);
+  const failedRaw = Number.parseInt(String(req.query.failed_limit ?? "5"), 10);
+  const limit = Number.isNaN(limitRaw) ? 20 : Math.min(Math.max(limitRaw, 1), 100);
+  const failedLimit = Number.isNaN(failedRaw)
+    ? 5
+    : Math.min(Math.max(failedRaw, 1), 20);
+
+  const { data: stores, error } = await listUserStores(req.operatorSession.userId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const rows = [];
+  const nowIso = new Date().toISOString();
+  for (const s of stores ?? []) {
+    const ov = await getStorePilotOverview(supabase, s.id, { limit, failedLimit });
+    if (ov.statusCode !== 200) continue;
+    const summary = ov.body?.summary ?? {};
+    const health = ov.body?.health ?? {};
+    const wfOut = await getPilotOpsWorkflowState(supabase, s.id);
+    if (!wfOut.ok) return res.status(500).json({ error: wfOut.error });
+    const attention_overdue = evaluatePilotOpsAttentionOverdue({
+      healthStatus: health.health_status ?? "healthy",
+      workflowState: wfOut.data,
+      needsAttentionSince: health.needs_attention_since ?? null,
+      minimumDataWindowMet: health.minimum_data_window_met !== false,
+      now: nowIso,
+    });
+    if (!attention_overdue.requires_follow_up) continue;
+    if (!attention_overdue.is_overdue) continue;
+    rows.push({
+      store_id: s.id,
+      store_name: s.name ?? null,
+      health_status: health.health_status ?? "healthy",
+      alert_reasons: Array.isArray(health.alert_reasons) ? health.alert_reasons : [],
+      completion_rate_pct: summary.completion_rate_pct ?? null,
+      total_recent_runs: summary.total_recent_runs ?? 0,
+      pilot_complete_runs: summary.pilot_complete_runs ?? 0,
+      runs_with_failed_checks: summary.runs_with_failed_checks ?? 0,
+      most_common_triage_bucket: summary.most_common_triage_bucket ?? {
+        bucket: null,
+        count: 0,
+      },
+      ...wfOut.data,
+      attention_overdue,
+    });
+  }
+
+  rows.sort((a, b) => {
+    const ad = new Date(a.attention_overdue?.due_at ?? 0).getTime();
+    const bd = new Date(b.attention_overdue?.due_at ?? 0).getTime();
+    if (ad !== bd) return ad - bd;
+    return String(a.store_name ?? a.store_id).localeCompare(String(b.store_name ?? b.store_id));
+  });
+
+  return res.status(200).json({
+    success: true,
+    current_store_id: req.operatorSession.storeId,
+    window: { run_limit: limit, failed_runs_limit: failedLimit },
+    stores: rows,
+  });
+});
+
+router.get("/api/pilot-ops/stores/:storeId", requireOperatorSession, async (req, res) => {
+  const requestedStoreId = String(req.params.storeId ?? "").trim();
+  const { data: stores, error } = await listUserStores(req.operatorSession.userId);
+  if (error) return res.status(500).json({ error: error.message });
+  const selected = (stores ?? []).find((s) => s.id === requestedStoreId);
+  if (!selected) return res.status(403).json({ error: "Not a member of requested store" });
+
+  const limitRaw = Number.parseInt(String(req.query.limit ?? "20"), 10);
+  const failedRaw = Number.parseInt(String(req.query.failed_limit ?? "5"), 10);
+  const limit = Number.isNaN(limitRaw) ? 20 : Math.min(Math.max(limitRaw, 1), 100);
+  const failedLimit = Number.isNaN(failedRaw)
+    ? 5
+    : Math.min(Math.max(failedRaw, 1), 20);
+  const historyLimitRaw = Number.parseInt(String(req.query.workflow_history_limit ?? "20"), 10);
+  const workflowHistoryLimit = Number.isNaN(historyLimitRaw)
+    ? 20
+    : Math.min(Math.max(historyLimitRaw, 1), 100);
+  const notifLimitRaw = Number.parseInt(String(req.query.notification_limit ?? "20"), 10);
+  const notificationLimit = Number.isNaN(notifLimitRaw)
+    ? 20
+    : Math.min(Math.max(notifLimitRaw, 1), 100);
+
+  const result = await getStorePilotOverview(supabase, requestedStoreId, {
+    limit,
+    failedLimit,
+  });
+  if (result.statusCode !== 200) {
+    return res.status(result.statusCode).json(result.body);
+  }
+
+  const wfOut = await getPilotOpsWorkflowState(supabase, selected.id);
+  if (!wfOut.ok) {
+    return res.status(500).json({ error: wfOut.error });
+  }
+  const wfHistoryOut = await listPilotOpsWorkflowStateHistory(supabase, selected.id, {
+    limit: workflowHistoryLimit,
+  });
+  if (!wfHistoryOut.ok) {
+    return res.status(500).json({ error: wfHistoryOut.error });
+  }
+
+  const notifOut = await listPilotOpsNotifications(supabase, [selected.id], {
+    limit: notificationLimit,
+  });
+  if (!notifOut.ok) {
+    return res.status(500).json({ error: notifOut.error });
+  }
+
+  const attention_overdue = evaluatePilotOpsAttentionOverdue({
+    healthStatus: result.body?.health?.health_status ?? "healthy",
+    workflowState: wfOut.data,
+    needsAttentionSince: result.body?.health?.needs_attention_since ?? null,
+    minimumDataWindowMet: result.body?.health?.minimum_data_window_met !== false,
+    now: new Date().toISOString(),
+  });
+  const notifyOut = await evaluateAndRecordPilotOpsNotifications(supabase, {
+    storeId: selected.id,
+    healthStatus: result.body?.health?.health_status ?? "healthy",
+    attentionOverdue: attention_overdue,
+    alertReasons: Array.isArray(result.body?.health?.alert_reasons)
+      ? result.body.health.alert_reasons
+      : [],
+    workflowState: wfOut.data,
+    now: new Date().toISOString(),
+  });
+  if (!notifyOut.ok) {
+    return res.status(500).json({ error: notifyOut.error });
+  }
+
+  return res.status(200).json({
+    success: true,
+    store: { id: selected.id, name: selected.name ?? null },
+    workflow_state: wfOut.data,
+    attention_overdue,
+    workflow_history: wfHistoryOut.data,
+    notifications: notifOut.data,
+    data: result.body,
+  });
+});
+
+router.patch("/api/pilot-ops/stores/:storeId/workflow-state", requireOperatorSession, async (req, res) => {
+  const requestedStoreId = String(req.params.storeId ?? "").trim();
+  const { data: stores, error } = await listUserStores(req.operatorSession.userId);
+  if (error) return res.status(500).json({ error: error.message });
+  const selected = (stores ?? []).find((s) => s.id === requestedStoreId);
+  if (!selected) return res.status(403).json({ error: "Not a member of requested store" });
+
+  const status = req.body?.pilot_ops_status;
+  const note = req.body?.operator_note;
+  const out = await updatePilotOpsWorkflowState(supabase, selected.id, {
+    status,
+    note,
+    actorId: req.operatorSession.userId,
+    actorEmail: req.operatorSession.email ?? null,
+  });
+  if (!out.ok) {
+    return res.status(400).json({ error: out.error });
+  }
+  return res.status(200).json({
+    success: true,
+    store: { id: selected.id, name: selected.name ?? null },
+    workflow_state: out.data,
+  });
 });
 
 export default router;

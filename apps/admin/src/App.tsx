@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { OperatorOverviewPage } from "./pages/OperatorOverviewPage";
+import { PilotOpsPage } from "./pages/PilotOpsPage";
 import { ReviewLayout } from "./review/ReviewLayout";
 import { ReviewQueueView } from "./review/ReviewQueueView";
 import { ReviewRunDetailView } from "./review/ReviewRunDetailView";
@@ -21,6 +22,7 @@ function AuthenticatedRoutes() {
         <Route path="/" element={<Navigate to="/overview" replace />} />
         <Route element={<ReviewLayout remountKey={remountKey} />}>
           <Route path="overview" element={<OperatorOverviewPage />} />
+          <Route path="pilot-ops" element={<PilotOpsPage />} />
           <Route path="review" element={<ReviewQueueView />} />
           <Route path="review/:runId" element={<ReviewRunDetailView />} />
           <Route path="diagnostics" element={<DiagnosticsPage />} />

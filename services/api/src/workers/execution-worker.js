@@ -70,6 +70,32 @@ function buildEvidenceEntry({
   };
 }
 
+function buildNoSubmitAttestationEvidence(stage, mode) {
+  return buildEvidenceEntry({
+    kind: "no_submit_attestation",
+    stage,
+    message: "No live MLCC submission behavior executed in this worker flow",
+    attributes: {
+      mode,
+      no_submit_policy: true,
+      forbidden_actions: [
+        "submit_order",
+        "confirm_purchase",
+        "final_place_order_click",
+      ],
+    },
+  });
+}
+
+function buildWorkerStepEvidence(stage, message, attrs = {}) {
+  return buildEvidenceEntry({
+    kind: "worker_step_event",
+    stage,
+    message,
+    attributes: attrs,
+  });
+}
+
 export function assertDeterministicExecutionPayload(payload) {
   if (!payload || !Array.isArray(payload.items) || !payload.summary) {
     return {
@@ -281,6 +307,13 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
 
   const { run, payload } = claimBody.data;
   const storeId = run.store_id;
+  const stepEvidence = [];
+  stepEvidence.push(
+    buildWorkerStepEvidence("claimed", "Run claimed by local execution worker", {
+      run_id: run.id,
+      worker_id: workerId ?? null,
+    }),
+  );
 
   if (
     !payload ||
@@ -303,12 +336,14 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
       failureType: failure.failureType,
       failureDetails: failure.details,
       evidence: [
+        ...stepEvidence,
         buildEvidenceEntry({
           kind: "cart_verification_snapshot",
           stage: "payload_loaded",
           message: "Payload shape was invalid",
           attributes: { payload_present: !!payload },
         }),
+        buildNoSubmitAttestationEvidence("payload_loaded", "local_execution"),
       ],
     });
 
@@ -327,6 +362,11 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
     progressStage: "add_by_code",
     progressMessage: "Execution payload loaded",
   });
+  stepEvidence.push(
+    buildWorkerStepEvidence("payload_loaded", "Execution payload loaded", {
+      item_count: Array.isArray(payload?.items) ? payload.items.length : 0,
+    }),
+  );
 
   await heartbeatRun({
     apiBaseUrl,
@@ -336,6 +376,13 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
     progressStage: "validate",
     progressMessage: "Validating payload and quantity rules",
   });
+  stepEvidence.push(
+    buildWorkerStepEvidence(
+      "validate",
+      "Worker started deterministic payload assertions",
+      {},
+    ),
+  );
 
   const deterministic = assertDeterministicExecutionPayload(payload);
   if (!deterministic.ok) {
@@ -354,12 +401,14 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
         stage: "validate",
       },
       evidence: [
+        ...stepEvidence,
         buildEvidenceEntry({
           kind: "cart_verification_snapshot",
           stage: "validate",
           message: deterministic.message,
           attributes: deterministic.details ?? {},
         }),
+        buildNoSubmitAttestationEvidence("validate", "local_execution"),
       ],
     });
     return {
@@ -378,6 +427,13 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
     progressStage: "assertions_passed",
     progressMessage: "Deterministic assertions passed",
   });
+  stepEvidence.push(
+    buildWorkerStepEvidence(
+      "assertions_passed",
+      "Deterministic payload assertions passed",
+      {},
+    ),
+  );
 
   await finalizeRun({
     apiBaseUrl,
@@ -386,6 +442,10 @@ export async function processOneRun({ apiBaseUrl, workerId }) {
     status: "succeeded",
     workerNotes: "completed by local execution worker",
     errorMessage: undefined,
+    evidence: [
+      ...stepEvidence,
+      buildNoSubmitAttestationEvidence("worker_completion", "local_execution"),
+    ],
   });
 
   return {
@@ -412,6 +472,12 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
   const { run, payload } = claimBody.data;
   const storeId = run.store_id;
   const preflight = buildMlccPreflightReport(payload);
+  const stepEvidence = [
+    buildWorkerStepEvidence("claimed", "Run claimed for MLCC preflight", {
+      run_id: run.id,
+      worker_id: workerId ?? null,
+    }),
+  ];
 
   if (!preflight.ready) {
     const errorMessage = preflight.errors.map((e) => e.message).join("; ");
@@ -434,12 +500,14 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
       failureType: failure.failureType,
       failureDetails: failure.details,
       evidence: [
+        ...stepEvidence,
         buildEvidenceEntry({
           kind: "learned_qty_rule_dump",
           stage: "mlcc_preflight",
           message: "MLCC preflight validation failed",
           attributes: { errors: preflight.errors },
         }),
+        buildNoSubmitAttestationEvidence("mlcc_preflight", "mlcc_preflight"),
       ],
     });
 
@@ -461,6 +529,15 @@ export async function preflightClaimedRunPayload({ apiBaseUrl, workerId }) {
     progressMessage: "MLCC preflight completed successfully",
     workerNotes: "MLCC preflight passed in local execution worker",
   });
+  stepEvidence.push(
+    buildWorkerStepEvidence(
+      "mlcc_preflight_ready",
+      "MLCC preflight completed successfully",
+      {
+        plan_item_count: Array.isArray(preflight?.items) ? preflight.items.length : null,
+      },
+    ),
+  );
 
   return {
     success: true,
@@ -486,6 +563,12 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
 
   const { run, payload } = claimBody.data;
   const storeId = run.store_id;
+  const stepEvidence = [
+    buildWorkerStepEvidence("claimed", "Run claimed for MLCC dry-run plan", {
+      run_id: run.id,
+      worker_id: workerId ?? null,
+    }),
+  ];
   const planResult = buildMlccDryRunPlan(payload);
 
   if (!planResult.ready) {
@@ -506,12 +589,14 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
       failureType: failure.failureType,
       failureDetails: failure.details,
       evidence: [
+        ...stepEvidence,
         buildEvidenceEntry({
           kind: "learned_qty_rule_dump",
           stage: "mlcc_dry_run_plan",
           message: "Dry-run plan generation failed",
           attributes: { errors: planResult.errors },
         }),
+        buildNoSubmitAttestationEvidence("mlcc_dry_run_plan", "mlcc_dry_run"),
       ],
     });
 
@@ -534,6 +619,17 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
     progressMessage: "MLCC dry-run plan generated successfully",
     workerNotes: "MLCC dry-run plan ready",
   });
+  stepEvidence.push(
+    buildWorkerStepEvidence(
+      "mlcc_dry_run_plan_ready",
+      "MLCC dry-run plan generated successfully",
+      {
+        plan_item_count: Array.isArray(planResult?.plan?.items)
+          ? planResult.plan.items.length
+          : null,
+      },
+    ),
+  );
 
   await finalizeRun({
     apiBaseUrl,
@@ -543,6 +639,10 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
     workerNotes:
       "MLCC dry run completed successfully; no live MLCC actions were performed",
     errorMessage: undefined,
+    evidence: [
+      ...stepEvidence,
+      buildNoSubmitAttestationEvidence("mlcc_dry_run_done", "mlcc_dry_run"),
+    ],
   });
 
   return {

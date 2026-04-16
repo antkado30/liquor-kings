@@ -7,6 +7,7 @@
     "apps/admin"
   ],
   "scripts": {
+    "test:ci": "npm ci --prefix services/api && npm exec --prefix services/api -- playwright install chromium && env SUPABASE_URL=https://ci-safe.example.invalid/supabase SUPABASE_ANON_KEY=ci-invalid-anon-key SUPABASE_SERVICE_ROLE_KEY=ci-invalid-service-role npm exec --prefix services/api -- vitest run -r services/api --exclude \"**/*.smoke.test.js\"",
     "dev:admin": "npm run dev -w lk-admin",
     "build:admin": "npm run build -w lk-admin",
     "audit:lk": "node scripts/lk-audit/run-full-audit.mjs",
@@ -16,8 +17,11 @@
     "audit:lk:cart-identity:apply": "node scripts/lk-audit/cart-item-identity-backfill.mjs --apply",
     "verify:lk:contracts": "node scripts/lk-verify/verify-contracts.mjs",
     "verify:lk:rpa-safety": "node scripts/lk-verify/verify-rpa-safety.mjs",
+    "safety:lk:rpa-local": "npm run doctor:lk:mlcc-dry-run && npm run test:ci && npm run verify:lk:rpa-safety",
     "verify:lk:architecture": "node scripts/lk-verify/verify-architecture.mjs",
-    "doctor:lk:mlcc-dry-run": "node scripts/lk-verify/mlcc-dry-run-doctor.mjs"
+    "doctor:lk:mlcc-dry-run": "node scripts/lk-verify/doctor-mlcc-dry-run.mjs",
+    "seed:lk:queue-mlcc-dry-run": "node scripts/lk-seed/queue-mlcc-dry-run.mjs",
+    "seed:lk:queue-mlcc-dry-run:replace": "MLCC_SEED_REPLACE_STALE_QUEUED=true node scripts/lk-seed/queue-mlcc-dry-run.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

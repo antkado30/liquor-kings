@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, it, expect } from "vitest";
 
 import {
@@ -6,6 +10,10 @@ import {
   inferLicenseStoreHeuristic,
   loginAndVerifyMlccLanding,
 } from "../src/workers/mlcc-browser-worker.js";
+import { MLCC_SAFE_FLOW_RUN_SUMMARY_BASENAME } from "../src/workers/mlcc-browser-evidence.js";
+import { MLCC_SAFE_FLOW_RUN_SUMMARY_BASENAME as probeRunSummaryBasename } from "../src/workers/mlcc-browser-add-by-code-probe.js";
+import { evaluateDryRunMappingConfidenceGuard } from "../src/quantity-rules/index.js";
+import { shouldBlockHttpRequest } from "../src/workers/mlcc-guards.js";
 
 describe("buildMlccBrowserConfig", () => {
   it("returns ready=true for valid synthetic payload + env", () => {
@@ -41,9 +49,22 @@ describe("buildMlccBrowserConfig", () => {
       licenseStoreContinueSelector: null,
       licenseStoreUrlPattern: null,
       licenseStoreWaitMs: 2000,
+      loginFailureSnapshotMaxBytes: 450_000,
+      safeFlowScreenshotDir: null,
+      reconMode: false,
+      reconMappingUrls: [
+        "https://example.com/safe",
+        "https://example.com/milo/home",
+        "https://example.com/milo/location",
+        "https://example.com/milo/products",
+        "https://example.com/milo/products/bycode",
+        "https://example.com/milo/cart",
+      ],
       addByCodeProbe: false,
       addByCodeEntrySelector: null,
       addByCodePhase2c: false,
+      addByCodePhase2cNavBycodeUrl: null,
+      addByCodePhase2cSkipBycodeNav: false,
       addByCodeCodeFieldSelector: null,
       addByCodeQtyFieldSelector: null,
       addByCodeSafeFocusBlur: false,
@@ -72,13 +93,50 @@ describe("buildMlccBrowserConfig", () => {
       addByCodePhase2lTestQuantity: null,
       addByCodePhase2lFieldOrder: null,
       addByCodePhase2lAllowBlur: false,
+      addByCodePhase2lSkipClearWhen2uApproved: false,
+      addByCodePhase2lMiloPostFillTabFromQuantity: false,
+      addByCodePhase2lMiloPostFillTabFromQuantityApproved: false,
+      addByCodePhase2lMiloPostFillTabFromQuantitySettleMs: 500,
+      addByCodePhase2lMiloManualParitySequence: false,
+      addByCodePhase2lMiloManualParitySequenceApproved: false,
+      addByCodePhase2lMiloManualParitySequenceSettleMs: 600,
+      addByCodePhase2lMiloFullKeyboardParitySequence: false,
+      addByCodePhase2lMiloFullKeyboardParitySequenceApproved: false,
+      addByCodePhase2lMiloManualParityBlankClickTargetSelector: null,
+      addByCodePhase2lMiloManualParityBlankClickPositionX: null,
+      addByCodePhase2lMiloManualParityBlankClickPositionY: null,
+      addByCodePhase2lMiloManualParityPostBlankWaitForTextSubstring: null,
+      addByCodePhase2lMiloManualParityPostBlankWaitForTextMs: 0,
+      addByCodePhase2lMiloPostFillClickAway: false,
+      addByCodePhase2lMiloPostFillClickAwayApproved: false,
+      addByCodePhase2lMiloPostFillClickAwayTargetSelector: null,
+      addByCodePhase2lMiloPostFillClickAwaySettleMs: 500,
       addByCodePhase2n: false,
       addByCodePhase2nApproved: false,
       addByCodePhase2nAddApplyCandidateSelectors: [],
       addByCodePhase2nTextAllowSubstrings: [],
+      addByCodePhase2uMiloBulk: false,
+      addByCodePhase2uMiloBulkApproved: false,
+      addByCodePhase2uMiloBulkCandidateSelectors: [],
+      addByCodePhase2uMiloBulkTextAllowSubstrings: [],
+      addByCode2uDeterminismStatePath: null,
+      addByCode2uDeterminismStateWrite: false,
+      addByCode2uDeterminismStateWriteApproved: false,
       addByCodePhase2o: false,
+      addByCodePhase2oMiloPost2u: false,
       addByCodePhase2oApproved: false,
       addByCodePhase2oSettleMs: 500,
+      addByCodePhase2oMiloReadonlyCartValidateDiscovery: false,
+      addByCodePhase2oMiloReadonlyCartValidateDiscoveryApproved: false,
+      addByCodePhase2oMiloSafeCartIconClick: false,
+      addByCodePhase2oMiloSafeCartIconClickApproved: false,
+      addByCodePhase2oMiloReadonlyCartValidateDiscoveryUrl: null,
+      addByCodePhase2oMiloReadonlyCartDiscoveryPathCandidates: [],
+      addByCodePhase2oMiloReadonlyCartValidateDiscoverySettleMs: 600,
+      addByCodePhase2oMiloPost2uPreReadonlyCartDiscoverySettleMs: 0,
+      addByCodePhase2oMiloPost2uPreReadonlyCartDiscoverySettleApproved: false,
+      addByCodeMiloPreCartListRootSelector: null,
+      addByCodeMiloPreCartListRootSelectorApproved: false,
       addByCodePhase2q: false,
       addByCodePhase2qApproved: false,
       addByCodePhase2qOperatorAcceptsMissing2o: false,
@@ -88,6 +146,13 @@ describe("buildMlccBrowserConfig", () => {
       addByCodePhase2r: false,
       addByCodePhase2rApproved: false,
       addByCodePhase2rSettleMs: 600,
+      addByCodePhase2vMiloValidate: false,
+      addByCodePhase2vMiloValidateApproved: false,
+      addByCodePhase2vMiloValidateSelectors: [],
+      addByCodePhase2vMiloValidateTextAllowSubstrings: [],
+      addByCodePhase2wMiloPostValidate: false,
+      addByCodePhase2wMiloPostValidateApproved: false,
+      addByCodePhase2wMiloPostValidateSettleMs: 600,
     });
   });
 
@@ -168,6 +233,7 @@ describe("buildMlccBrowserConfig", () => {
       MLCC_SUBMISSION_ARMED: "true",
       MLCC_STEP_SCREENSHOTS: "true",
       MLCC_STEP_SCREENSHOT_MAX_BYTES: "100000",
+      MLCC_SAFE_FLOW_SCREENSHOT_DIR: " /tmp/mlcc-flow ",
     };
 
     const out = buildMlccBrowserConfig({ payload, env });
@@ -177,6 +243,7 @@ describe("buildMlccBrowserConfig", () => {
     expect(out.config.submissionArmed).toBe(true);
     expect(out.config.stepScreenshotsEnabled).toBe(true);
     expect(out.config.stepScreenshotMaxBytes).toBe(100_000);
+    expect(out.config.safeFlowScreenshotDir).toBe("/tmp/mlcc-flow");
     expect(out.config.licenseStoreAutomation).toBe(false);
     expect(out.config.licenseStoreWaitMs).toBe(2000);
   });
@@ -413,6 +480,140 @@ describe("buildMlccBrowserConfig", () => {
     expect(out.errors.some((e) => /2L_APPROVED/.test(e.message))).toBe(true);
   });
 
+  it("rejects MLCC_ADD_BY_CODE_PHASE_2L_SKIP_CLEAR_WHEN_2U_APPROVED without Phase 2U bulk approved lane", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_PHASE_2L_SKIP_CLEAR_WHEN_2U_APPROVED: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_PHASE_2L_SKIP_CLEAR_WHEN_2U_APPROVED=true requires MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts Phase 2l skip-clear flag when MILO 2U bulk lane is fully approved", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_ADD_BY_CODE_PHASE_2L_SKIP_CLEAR_WHEN_2U_APPROVED: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2lSkipClearWhen2uApproved).toBe(true);
+  });
+
+  it("rejects MLCC_2U_DETERMINISM_STATE_WRITE without MLCC_2U_DETERMINISM_STATE_PATH", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_2U_DETERMINISM_STATE_WRITE: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_2U_DETERMINISM_STATE_WRITE=true requires MLCC_2U_DETERMINISM_STATE_PATH/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects MLCC_2U_DETERMINISM_STATE_PATH without Phase 2U MILO bulk", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_2U_DETERMINISM_STATE_PATH: "/tmp/x.json",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_2U_DETERMINISM_STATE_PATH or MLCC_2U_DETERMINISM_STATE_WRITE requires MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts MLCC_2U_DETERMINISM_STATE_PATH with approved 2U bulk lane", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_2U_DETERMINISM_STATE_PATH: "/tmp/lk-2u-determinism.json",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCode2uDeterminismStatePath).toBe(
+      "/tmp/lk-2u-determinism.json",
+    );
+  });
+
   it("accepts Phase 2l when approved with selectors, test values, and field order", () => {
     const payload = { store: { mlcc_username: "u" } };
     const env = {
@@ -620,6 +821,10 @@ describe("buildMlccBrowserConfig", () => {
 
     expect(out.ready).toBe(true);
     expect(out.config.addByCodePhase2c).toBe(true);
+    expect(out.config.addByCodePhase2cNavBycodeUrl).toBe(
+      "https://example.com/milo/products/bycode",
+    );
+    expect(out.config.addByCodePhase2cSkipBycodeNav).toBe(false);
     expect(out.config.addByCodeCodeFieldSelector).toBe("#product-code");
     expect(out.config.addByCodeQtyFieldSelector).toBe("input[name=qty]");
     expect(out.config.addByCodeSafeFocusBlur).toBe(true);
@@ -630,5 +835,634 @@ describe("buildMlccBrowserConfig", () => {
       /MLCC submission blocked/,
     );
     expect(() => assertMlccSubmissionAllowed({ submissionArmed: true })).not.toThrow();
+  });
+
+  it("rejects MILO read-only cart validate discovery without approval flag", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_APPROVED/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects MILO safe cart icon click without readonly cart discovery lane", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_SAFE_CART_ICON_CLICK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_SAFE_CART_ICON_CLICK_APPROVED: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_PHASE_2O_MILO_SAFE_CART_ICON_CLICK=true requires MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY=true/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts MILO read-only cart validate discovery when fully gated", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_URL:
+        "https://example.com/milo/cart",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2oMiloReadonlyCartValidateDiscovery).toBe(true);
+    expect(out.config.addByCodePhase2oMiloReadonlyCartValidateDiscoveryUrl).toBe(
+      "https://example.com/milo/cart",
+    );
+    expect(out.config.addByCodeMiloPreCartListRootSelector).toBe(null);
+    expect(out.config.addByCodePhase2oMiloSafeCartIconClick).toBe(false);
+  });
+
+  it("accepts MILO safe cart icon click when discovery lane is fully gated", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_URL:
+        "https://example.com/milo/cart",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_SAFE_CART_ICON_CLICK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_SAFE_CART_ICON_CLICK_APPROVED: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2oMiloSafeCartIconClick).toBe(true);
+    expect(out.config.addByCodePhase2oMiloSafeCartIconClickApproved).toBe(true);
+  });
+
+  it("rejects MILO pre-cart list-root selector without operator approval in discovery lane", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_URL:
+        "https://example.com/milo/cart",
+      MLCC_ADD_BY_CODE_MILO_PRE_CART_LIST_ROOT_SELECTOR: ".search-container",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_MILO_PRE_CART_LIST_ROOT_SELECTOR requires MLCC_ADD_BY_CODE_MILO_PRE_CART_LIST_ROOT_SELECTOR_APPROVED/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts MILO pre-cart list-root selector when approved in discovery lane", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_URL:
+        "https://example.com/milo/cart",
+      MLCC_ADD_BY_CODE_MILO_PRE_CART_LIST_ROOT_SELECTOR: ".search-container",
+      MLCC_ADD_BY_CODE_MILO_PRE_CART_LIST_ROOT_SELECTOR_APPROVED: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodeMiloPreCartListRootSelector).toBe(".search-container");
+    expect(out.config.addByCodeMiloPreCartListRootSelectorApproved).toBe(true);
+  });
+
+  it("rejects MILO pre-readonly-cart settle ms without operator approval", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U_PRE_READONLY_CART_SETTLE_MS: "2000",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /PRE_READONLY_CART_SETTLE_MS>0 requires/.test(e.message),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts MILO pre-readonly-cart settle when ms and approval are set", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2U_MILO_BULK_SELECTORS: '["button.ok"]',
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_READONLY_CART_VALIDATE_DISCOVERY_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U_PRE_READONLY_CART_SETTLE_MS: "2500",
+      MLCC_ADD_BY_CODE_PHASE_2O_MILO_POST_2U_PRE_READONLY_CART_SETTLE_APPROVED: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2oMiloPost2uPreReadonlyCartDiscoverySettleMs).toBe(
+      2500,
+    );
+    expect(out.config.addByCodePhase2oMiloPost2uPreReadonlyCartDiscoverySettleApproved).toBe(
+      true,
+    );
+  });
+
+  it("rejects MILO post-fill click-away without operator approval", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_CLICK_AWAY: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_CLICK_AWAY_APPROVED/.test(e.message),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects MILO manual parity sequence without operator approval", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE_APPROVED/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts MILO manual parity sequence when approved and selectors present", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE_SETTLE_MS: "900",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_BLANK_CLICK_TARGET_SELECTOR: "main",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2lMiloManualParitySequence).toBe(true);
+    expect(out.config.addByCodePhase2lMiloManualParitySequenceApproved).toBe(
+      true,
+    );
+    expect(out.config.addByCodePhase2lMiloManualParitySequenceSettleMs).toBe(
+      900,
+    );
+    expect(out.config.addByCodePhase2lMiloManualParityBlankClickTargetSelector).toBe(
+      "main",
+    );
+  });
+
+  it("rejects MILO full keyboard parity sequence without dedicated approval", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_FULL_KEYBOARD_PARITY_SEQUENCE: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_PHASE_2L_MILO_FULL_KEYBOARD_PARITY_SEQUENCE_APPROVED/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts MILO full keyboard parity sequence when dedicated approval is present", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_FULL_KEYBOARD_PARITY_SEQUENCE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_FULL_KEYBOARD_PARITY_SEQUENCE_APPROVED: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2lMiloFullKeyboardParitySequence).toBe(true);
+    expect(out.config.addByCodePhase2lMiloFullKeyboardParitySequenceApproved).toBe(
+      true,
+    );
+  });
+
+  it("rejects MILO manual parity post-blank wait substring without approval", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_POST_BLANK_WAIT_FOR_TEXT_SUBSTRING:
+        "Patron",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_POST_BLANK_WAIT_FOR_TEXT_APPROVED/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts MILO manual parity post-blank wait substring when approved (default ms)", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_SEQUENCE_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_POST_BLANK_WAIT_FOR_TEXT_SUBSTRING:
+        "Patron",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_MANUAL_PARITY_POST_BLANK_WAIT_FOR_TEXT_APPROVED:
+        "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2lMiloManualParityPostBlankWaitForTextSubstring).toBe(
+      "Patron",
+    );
+    expect(out.config.addByCodePhase2lMiloManualParityPostBlankWaitForTextMs).toBe(8000);
+  });
+
+  it("rejects MILO Tab-from-quantity without operator approval", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_TAB_FROM_QUANTITY: "true",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(false);
+    expect(
+      out.errors.some((e) =>
+        /MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_TAB_FROM_QUANTITY_APPROVED/.test(
+          e.message,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts MILO Tab-from-quantity when approved and 2L + qty selector satisfied", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_TAB_FROM_QUANTITY: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_TAB_FROM_QUANTITY_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_TAB_FROM_QUANTITY_SETTLE_MS: "600",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2lMiloPostFillTabFromQuantity).toBe(true);
+    expect(out.config.addByCodePhase2lMiloPostFillTabFromQuantityApproved).toBe(
+      true,
+    );
+    expect(out.config.addByCodePhase2lMiloPostFillTabFromQuantitySettleMs).toBe(
+      600,
+    );
+  });
+
+  it("accepts MILO post-fill click-away when approved and 2L gates satisfied", () => {
+    const payload = { store: { mlcc_username: "u" } };
+    const env = {
+      MLCC_PASSWORD: "p",
+      MLCC_LOGIN_URL: "https://example.com/login",
+      MLCC_ADD_BY_CODE_PROBE: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_CODE: "1",
+      MLCC_ADD_BY_CODE_PHASE_2L_TEST_QUANTITY: "2",
+      MLCC_ADD_BY_CODE_PHASE_2L_FIELD_ORDER: "code_first",
+      MLCC_ADD_BY_CODE_CODE_FIELD_SELECTOR: "#c",
+      MLCC_ADD_BY_CODE_QTY_FIELD_SELECTOR: "#q",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_CLICK_AWAY: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_CLICK_AWAY_APPROVED: "true",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_CLICK_AWAY_TARGET_SELECTOR: "main",
+      MLCC_ADD_BY_CODE_PHASE_2L_MILO_POST_FILL_CLICK_AWAY_SETTLE_MS: "800",
+    };
+
+    const out = buildMlccBrowserConfig({ payload, env });
+
+    expect(out.ready).toBe(true);
+    expect(out.config.addByCodePhase2lMiloPostFillClickAway).toBe(true);
+    expect(out.config.addByCodePhase2lMiloPostFillClickAwayApproved).toBe(true);
+    expect(out.config.addByCodePhase2lMiloPostFillClickAwayTargetSelector).toBe("main");
+    expect(out.config.addByCodePhase2lMiloPostFillClickAwaySettleMs).toBe(800);
+  });
+});
+
+describe("MLCC SAFE MODE network policy (same rules as installMlccSafetyNetworkGuards)", () => {
+  it("blocks high-risk order completion mutations while keeping 2n/2q allowlisted XHR paths open", () => {
+    expect(
+      shouldBlockHttpRequest("https://vendor.example/order/complete", "POST").block,
+    ).toBe(true);
+    expect(
+      shouldBlockHttpRequest("https://vendor.example/milo/order/submit", "POST")
+        .block,
+    ).toBe(true);
+    expect(
+      shouldBlockHttpRequest("https://vendor.example/cart/checkout", "POST").block,
+    ).toBe(true);
+    expect(
+      shouldBlockHttpRequest("https://vendor.example/order/apply-line", "POST")
+        .block,
+    ).toBe(false);
+    expect(
+      shouldBlockHttpRequest("https://vendor.example/order/validate", "POST")
+        .block,
+    ).toBe(false);
+  });
+
+  it("blocks checkout-confirm GET navigation patterns used in order flows", () => {
+    expect(
+      shouldBlockHttpRequest("https://vendor.example/checkout/confirm", "GET")
+        .block,
+    ).toBe(true);
+    expect(shouldBlockHttpRequest("https://vendor.example/home", "GET").block).toBe(
+      false,
+    );
+  });
+});
+
+describe("MLCC safe-flow evidence baseline (probe ↔ evidence)", () => {
+  it("re-exports the canonical run summary basename for operators and drift checks", () => {
+    expect(probeRunSummaryBasename).toBe(MLCC_SAFE_FLOW_RUN_SUMMARY_BASENAME);
+    expect(probeRunSummaryBasename).toBe("mlcc_run_summary.json");
+  });
+});
+
+describe("Dry-run mapping confidence guard (worker preflight)", () => {
+  it("worker invokes evaluateDryRunMappingConfidenceGuard after deterministic validation", () => {
+    const workerPath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../src/workers/mlcc-browser-worker.js",
+    );
+    const src = fs.readFileSync(workerPath, "utf8");
+    expect(src).toContain("evaluateDryRunMappingConfidenceGuard(payload)");
+    expect(src).toContain("validate_mapping_confidence");
+    expect(src).toContain("mlcc_dry_run_mapping_confidence");
+  });
+
+  it("matches quantity-rules module behavior for confirmed / inferred / unknown", () => {
+    expect(
+      evaluateDryRunMappingConfidenceGuard({
+        items: [{ cartItemId: "1", bottle: { mlcc_code: "x" } }],
+      }).ok,
+    ).toBe(true);
+    expect(
+      evaluateDryRunMappingConfidenceGuard({
+        items: [
+          { cartItemId: "1", mappingconfidence: "unknown", bottle: { mlcc_code: "7127" } },
+        ],
+      }).ok,
+    ).toBe(false);
+    expect(
+      evaluateDryRunMappingConfidenceGuard({
+        items: [
+          { cartItemId: "1", mappingconfidence: "inferred", bottle: { mlcc_code: "4101" } },
+        ],
+      }).inferred_items,
+    ).toHaveLength(1);
   });
 });

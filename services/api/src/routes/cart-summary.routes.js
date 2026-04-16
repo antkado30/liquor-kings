@@ -11,9 +11,11 @@ import {
   getActiveCartAvailability,
   getSubmittedCartAvailability,
 } from "../services/cart-availability.service.js";
+import { readinessDedicatedHttpPayload } from "../mlcc/mlcc-execution-readiness-serialize.js";
 import {
   buildExecutionPayloadForSubmittedCart,
   buildLatestExecutionPayloadForStore,
+  evaluateMlccExecutionReadinessForSubmittedCart,
 } from "../services/cart-execution-payload.service.js";
 import { isUuid } from "../utils/validation.js";
 
@@ -192,6 +194,35 @@ router.get("/:storeId/history/:cartId/execution-payload", async (req, res) => {
   return res.status(statusCode).json(body);
 });
 
+/** Read-only: MLCC execution readiness (same rules as POST /execution-runs/from-cart guard). */
+router.get("/:storeId/history/:cartId/mlcc-execution-readiness", async (req, res) => {
+  const { storeId, cartId } = req.params;
+
+  if (!isUuid(cartId)) {
+    return res.status(404).json(
+      readinessDedicatedHttpPayload({
+        statusCode: 404,
+        body: {
+          ok: false,
+          ready: false,
+          error: "Submitted cart not found",
+          message: "Submitted cart not found",
+          blocking_lines: [],
+        },
+      }),
+    );
+  }
+
+  const evalResult = await evaluateMlccExecutionReadinessForSubmittedCart(
+    supabase,
+    storeId,
+    cartId,
+  );
+
+  return res
+    .status(evalResult.statusCode)
+    .json(readinessDedicatedHttpPayload(evalResult));
+});
 
 router.get("/:storeId/history/:cartId/summary", async (req, res) => {
     const { storeId, cartId } = req.params;

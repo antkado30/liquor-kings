@@ -16,17 +16,18 @@ import operatorReviewRouter from "./routes/operator-review.routes.js";
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const repoRoot = path.resolve(__dirname, "..", "..", "..");
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const operatorReviewLegacyHtml = path.join(__dirname, "static", "operator-review.html");
+const operatorAdminDistDefault = path.join(repoRoot, "apps", "admin", "dist");
 const operatorAdminDist = process.env.OPERATOR_REVIEW_ADMIN_DIST
   ? path.resolve(process.env.OPERATOR_REVIEW_ADMIN_DIST)
-  : path.join(repoRoot, "apps", "admin", "dist");
+  : operatorAdminDistDefault;
 const operatorAdminIndexHtml = path.join(operatorAdminDist, "index.html");
 const operatorAdminDistReady = fs.existsSync(operatorAdminIndexHtml);
 
 app.use(cors());
-app.use(express.json());
+/** Large enough for MLCC browser worker finalize payloads (step screenshots + boundary evidence). */
+app.use(express.json({ limit: "12mb" }));
 
 app.use(
   "/cart",
