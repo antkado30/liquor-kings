@@ -72,6 +72,104 @@ function escapeIlikeOrToken(s) {
     .replace(/,/g, "");
 }
 
+/**
+ * Lowercase, strip punctuation (non-alphanumeric except spaces), collapse spaces, trim.
+ * Matches DB name_normalized semantics for fuzzy search.
+ */
+function normalizeSearchTerm(str) {
+  return String(str)
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Strip % and _ from external strings used inside ilike patterns (defense in depth). */
+function sanitizeIlikeValue(s) {
+  return String(s).replace(/%/g, "").replace(/_/g, "");
+}
+
+router.get("/upc/:upc", async (req, res) => {
+  try {
+    const upc = String(req.params.upc ?? "").trim();
+    if (!upc) {
+      return res.status(400).json({ ok: false, error: "upc_required" });
+    }
+    console.log("[price-book-upc] lookup", upc);
+
+    const { data: localRow, error: localErr } = await supabase
+      .from("mlcc_items")
+      .select("*")
+      .eq("upc", upc)
+      .limit(1)
+      .maybeSingle();
+
+    if (localErr) {
+      console.log("[price-book-upc] db error", localErr.message);
+      return res.status(500).json({ ok: false, error: localErr.message });
+    }
+    if (localRow) {
+      console.log("[price-book-upc] local match", localRow.id);
+      return res.json({ ok: true, product: localRow });
+    }
+
+    let offJson;
+    try {
+      const ctrl = AbortSignal.timeout(5000);
+      const offRes = await fetch(
+        `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(upc)}.json`,
+        { signal: ctrl },
+      );
+      offJson = await offRes.json();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.log("[price-book-upc] openfoodfacts fetch failed", msg);
+      return res.json({ ok: false, error: "upc_not_found" });
+    }
+
+    if (offJson?.status != 1 || !offJson.product) {
+      console.log("[price-book-upc] openfoodfacts no product");
+      return res.json({ ok: false, error: "upc_not_found" });
+    }
+
+    const p = offJson.product;
+    const nameGuess =
+      (typeof p.product_name === "string" && p.product_name.trim()) ||
+      (typeof p.brands === "string" && p.brands.trim()) ||
+      "";
+    if (!nameGuess) {
+      console.log("[price-book-upc] openfoodfacts missing name/brands");
+      return res.json({ ok: false, error: "upc_not_found" });
+    }
+
+    const term = sanitizeIlikeValue(nameGuess.trim().slice(0, 120));
+    console.log("[price-book-upc] searching by name from OFF:", term);
+
+    const { data: nameRows, error: nameErr } = await supabase
+      .from("mlcc_items")
+      .select("*")
+      .ilike("name", `%${term}%`)
+      .order("code", { ascending: true })
+      .limit(1);
+
+    if (nameErr) {
+      console.log("[price-book-upc] name search error", nameErr.message);
+      return res.status(500).json({ ok: false, error: nameErr.message });
+    }
+    const hit = nameRows?.[0];
+    if (!hit) {
+      console.log("[price-book-upc] no mlcc match for name");
+      return res.json({ ok: false, error: "upc_not_found" });
+    }
+    console.log("[price-book-upc] matched mlcc item", hit.id);
+    return res.json({ ok: true, product: hit });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.log("[price-book-upc] unexpected", msg);
+    return res.json({ ok: false, error: "upc_not_found" });
+  }
+});
+
 router.get("/items", async (req, res) => {
   try {
     let page = Number.parseInt(String(req.query.page || "1"), 10);
@@ -120,8 +218,17 @@ router.get("/items", async (req, res) => {
     let q = supabase.from("mlcc_items").select("*", { count: "exact" });
 
     if (search) {
-      const token = escapeIlikeOrToken(search);
-      q = q.or(`name.ilike.%${token}%,code.ilike.%${token}%`);
+      const original = escapeIlikeOrToken(search);
+      const normalized = escapeIlikeOrToken(normalizeSearchTerm(search));
+      if (normalized && normalized !== original) {
+        q = q.or(
+          `name.ilike.%${original}%,name.ilike.%${normalized}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%`,
+        );
+      } else if (normalized) {
+        q = q.or(`name.ilike.%${original}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%`);
+      } else {
+        q = q.or(`name.ilike.%${original}%,code.ilike.%${original}%`);
+      }
     }
 
     q = applyMlccItemsFilters(q, adaNumber, isNewItemQ);

@@ -1,3 +1,7 @@
+/**
+ * Barcodes on bottles are UPCs. Barcodes on MLCC shelf tags are MLCC codes (numeric, 3–5 digits).
+ * Both are handled by getProductByCode in api/catalog.ts, which resolves MLCC code first then UPC fallback.
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type BarcodeScannerProps = {

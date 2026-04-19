@@ -55,12 +55,30 @@ export async function searchProducts(
   }
 }
 
+export async function getProductByUpc(upc: string): Promise<MlccProduct | null> {
+  const u = upc.trim();
+  if (!u) return null;
+  try {
+    const res = await fetch(`${BASE}/upc/${encodeURIComponent(u)}`, { credentials: "same-origin" });
+    const data = (await res.json()) as { ok?: boolean; product?: unknown; error?: string };
+    if (!res.ok || !data.ok || !data.product) return null;
+    return mapRow(data.product as Record<string, unknown>);
+  } catch {
+    return null;
+  }
+}
+
 export async function getProductByCode(mlccCode: string): Promise<MlccProduct | null> {
   const code = mlccCode.trim();
   if (!code) return null;
   const items = await searchProducts(code, { limit: 50 });
   const exact = items.find((i) => i.code === code);
-  return exact ?? null;
+  if (exact) return exact;
+  if (/^\d+$/.test(code) && code.length >= 8) {
+    const viaUpc = await getProductByUpc(code);
+    if (viaUpc) return viaUpc;
+  }
+  return null;
 }
 
 function dedupeById(products: MlccProduct[]): MlccProduct[] {
