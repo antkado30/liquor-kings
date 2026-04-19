@@ -19,3 +19,5 @@ tmp/
 .env.staging
 .env.production
 .env.*.local
+supabase/.temp/
+supabase/.branches/
