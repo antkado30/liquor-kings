@@ -36,37 +36,69 @@ describe("mlcc-price-book-parser", () => {
   });
 
   describe("parseMlccPriceBookExcel", () => {
-    it("parses a minimal workbook built with xlsx", () => {
+    it("parses a minimal workbook built with xlsx using MLCC column headers", () => {
       const header = [
-        "ADA NUMBER",
-        "LIQUOR CODE",
-        "BRAND NAME - FINAL",
+        "Liquor Type",
+        "MI",
+        "ADA #",
+        "Liqour Code",
+        "Brand Name  - Final",
         "PROOF",
-        "BOTTLE SIZE",
-        "CASE SIZE",
+        "Bottle Size",
+        "Case Size",
         "BASE PRICE",
         "LICENSEE PRICE",
-        "MINIMUM SHELF PRICE",
-        "FLAG",
+        "Minimum Shelf Price",
+        "NEW/CHNG",
       ];
       const rows = [
         header,
-        ["141", "1001", "Alpha Vodka", "80", "750 ML", "12", "20.5", "18", "22", "NEW"],
-        ["221", "1002", "Beta Gin", "90", "1000 ML", "6", "30", "28", "35", ""],
+        ["1 -AMERICAN BLEND", "", "", "", "", "", "", "", "", "", "", ""],
+        [
+          "1 -AMERICAN BLEND",
+          "",
+          "141",
+          "1001",
+          "Alpha Vodka",
+          "80",
+          "750 ML",
+          "12",
+          "20.5",
+          "18",
+          "22",
+          "NEW",
+        ],
+        [
+          "1 -AMERICAN BLEND",
+          "",
+          "221",
+          "1002",
+          "Beta Gin",
+          "90",
+          "1000 ML",
+          "6",
+          "30",
+          "28",
+          "35",
+          "",
+        ],
+        ["", "", "", "BAD", "No Numeric Code", "40", "750 ML", "12", "10", "9", "11", ""],
       ];
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.aoa_to_sheet(rows);
-      XLSX.utils.book_append_sheet(wb, ws, "Data");
+      XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
       const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
       const out = parseMlccPriceBookExcel(buffer);
       expect(out.ok).toBe(true);
       expect(out.errors).toEqual([]);
+      expect(out.priceBookDate).toBeInstanceOf(Date);
       expect(out.items).toHaveLength(2);
       expect(out.items[0]).toMatchObject({
         adaNumber: "141",
         mlccCode: "1001",
         brandName: "Alpha Vodka",
+        category: "1 -AMERICAN BLEND",
         proof: 80,
         bottleSizeLabel: "750 ML",
         bottleSizeMl: 750,
@@ -79,6 +111,8 @@ describe("mlcc-price-book-parser", () => {
       expect(out.items[1]).toMatchObject({
         adaNumber: "221",
         mlccCode: "1002",
+        brandName: "Beta Gin",
+        category: "1 -AMERICAN BLEND",
         isNewItem: false,
         bottleSizeMl: 1000,
       });

@@ -1,17 +1,5 @@
 import XLSX from "xlsx";
 
-const COL = {
-  ADA_NUMBER: "ADA NUMBER",
-  LIQUOR_CODE: "LIQUOR CODE",
-  BRAND_NAME: "BRAND NAME - FINAL",
-  PROOF: "PROOF",
-  BOTTLE_SIZE: "BOTTLE SIZE",
-  CASE_SIZE: "CASE SIZE",
-  BASE_PRICE: "BASE PRICE",
-  LICENSEE_PRICE: "LICENSEE PRICE",
-  MINIMUM_SHELF_PRICE: "MINIMUM SHELF PRICE",
-};
-
 /**
  * @param {string | null | undefined} adaNumber
  * @returns {string}
@@ -49,175 +37,272 @@ export function parseBottleSizeMl(sizeLabel) {
   return null;
 }
 
-function normalizeHeader(cell) {
-  if (cell == null) return "";
-  return String(cell).replace(/\s+/g, " ").trim().toUpperCase();
+/**
+ * @param {unknown} cell
+ */
+function normalizeHeaderCell(cell) {
+  return String(cell ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
-function buildHeaderMap(headerRow) {
-  /** @type {Record<string, number>} */
-  const map = {};
-  if (!Array.isArray(headerRow)) return map;
-  headerRow.forEach((cell, idx) => {
-    const key = normalizeHeader(cell);
-    if (key) map[key] = idx;
-  });
-  return map;
+/**
+ * @param {unknown[]} headerRow
+ * @returns {{
+ *   mlccCodeIdx: number,
+ *   brandNameIdx: number,
+ *   adaNumberIdx?: number,
+ *   liquorTypeIdx: number,
+ *   proofIdx?: number,
+ *   bottleSizeIdx?: number,
+ *   caseSizeIdx?: number,
+ *   basePriceIdx?: number,
+ *   licenseePriceIdx?: number,
+ *   minShelfPriceIdx?: number,
+ *   newChngIdx?: number,
+ * } | null}
+ */
+function resolveColumnIndices(headerRow) {
+  if (!Array.isArray(headerRow)) return null;
+
+  /** @type {Record<string, number | undefined>} */
+  const idx = {};
+
+  for (let i = 0; i < headerRow.length; i++) {
+    const h = normalizeHeaderCell(headerRow[i]);
+    if (!h) continue;
+
+    if (idx.mlccCode === undefined && h.includes("liqour") && h.includes("code")) {
+      idx.mlccCode = i;
+      continue;
+    }
+    if (idx.mlccCode === undefined && h.includes("liquor") && h.includes("code")) {
+      idx.mlccCode = i;
+      continue;
+    }
+
+    if (idx.brandName === undefined && h.includes("brand name")) {
+      idx.brandName = i;
+      continue;
+    }
+
+    if (idx.adaNumber === undefined && (h.includes("ada #") || h.includes("ada number"))) {
+      idx.adaNumber = i;
+      continue;
+    }
+
+    if (idx.liquorType === undefined && h.includes("liquor type")) {
+      idx.liquorType = i;
+      continue;
+    }
+
+    if (idx.proof === undefined && h === "proof") {
+      idx.proof = i;
+      continue;
+    }
+
+    if (idx.bottleSize === undefined && h.includes("bottle size")) {
+      idx.bottleSize = i;
+      continue;
+    }
+
+    if (idx.caseSize === undefined && h.includes("case size")) {
+      idx.caseSize = i;
+      continue;
+    }
+
+    if (idx.basePrice === undefined && h.includes("base price")) {
+      idx.basePrice = i;
+      continue;
+    }
+
+    if (idx.licenseePrice === undefined && h.includes("licensee price")) {
+      idx.licenseePrice = i;
+      continue;
+    }
+
+    if (
+      idx.minShelfPrice === undefined &&
+      (h.includes("minimum shelf price") || h.includes("min shelf price"))
+    ) {
+      idx.minShelfPrice = i;
+      continue;
+    }
+
+    if (
+      idx.newChng === undefined &&
+      (h.includes("new/chng") ||
+        h.includes("new/chg") ||
+        h === "new" ||
+        /^new\s*\/\s*ch/i.test(h))
+    ) {
+      idx.newChng = i;
+      continue;
+    }
+  }
+
+  if (idx.mlccCode === undefined || idx.brandName === undefined) {
+    return null;
+  }
+
+  const liquorTypeIdx = idx.liquorType !== undefined ? idx.liquorType : 0;
+
+  return {
+    mlccCodeIdx: idx.mlccCode,
+    brandNameIdx: idx.brandName,
+    adaNumberIdx: idx.adaNumber,
+    liquorTypeIdx,
+    proofIdx: idx.proof,
+    bottleSizeIdx: idx.bottleSize,
+    caseSizeIdx: idx.caseSize,
+    basePriceIdx: idx.basePrice,
+    licenseePriceIdx: idx.licenseePrice,
+    minShelfPriceIdx: idx.minShelfPrice,
+    newChngIdx: idx.newChng,
+  };
 }
 
-function cell(row, headerMap, canonical) {
-  const idx = headerMap[normalizeHeader(canonical)];
-  if (idx === undefined) return undefined;
-  return row[idx];
+/**
+ * @param {unknown} val
+ */
+function cellStr(row, colIdx) {
+  if (colIdx === undefined || !Array.isArray(row)) return "";
+  const v = row[colIdx];
+  return String(v ?? "").trim();
 }
 
-function parseNumber(val) {
+/**
+ * @param {unknown} val
+ */
+function parseFloatOrNull(val) {
   if (val == null || val === "") return null;
   if (typeof val === "number" && Number.isFinite(val)) return val;
   const n = Number.parseFloat(String(val).replace(/[$,]/g, "").trim());
   return Number.isFinite(n) ? n : null;
 }
 
-function parseInteger(val) {
-  const n = parseNumber(val);
-  if (n == null) return null;
-  const i = Math.round(n);
-  return Number.isFinite(i) ? i : null;
+/**
+ * @param {unknown} val
+ */
+function parseIntOrNull(val) {
+  if (val == null || val === "") return null;
+  if (typeof val === "number" && Number.isFinite(val)) return Math.round(val);
+  const n = Number.parseInt(String(val).replace(/[,]/g, "").trim(), 10);
+  return Number.isFinite(n) ? n : null;
 }
 
-function rowLooksLikeSectionMarker(row) {
-  if (!Array.isArray(row) || row.length === 0) return false;
-  const first = String(row[0] ?? "").trim().toUpperCase();
-  if (!first) return false;
-  return (
-    first.includes("NEW ITEM") ||
-    first.includes("NEW PRODUCTS") ||
-    first === "NEW" ||
-    first.startsWith("SECTION")
-  );
-}
-
-function rowHasLiquorData(row, headerMap) {
-  const code = cell(row, headerMap, COL.LIQUOR_CODE);
-  return code != null && String(code).trim() !== "";
-}
-
-function detectNewFromFlag(row, headerMap) {
-  for (const key of Object.keys(headerMap)) {
-    if (key.includes("NEW ITEM")) continue;
-    if (key === "NEW" || key === "CHNG" || key === "CHG" || key === "FLAG" || key === "STATUS" || key === "ITEM STATUS") {
-      const v = String(row[headerMap[key]] ?? "").trim().toUpperCase();
-      if (v === "NEW" || v === "CHNG" || v === "CHG" || v === "CHANGE" || v === "Y") return true;
-    }
-  }
-  const joined = Array.isArray(row) ? row.map((c) => String(c ?? "").toUpperCase()).join(" ") : "";
-  if (/\bNEW\b/.test(joined) && /\bCHNG\b/.test(joined)) return true;
+/**
+ * Category rows: non-empty liquor type cell that looks like a section header.
+ * @param {string} s
+ */
+function looksLikeCategoryHeader(s) {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^\d/.test(t)) return true;
+  if (t.includes("-")) return true;
   return false;
 }
 
 /**
+ * MLCC liquor codes in the price book are numeric strings.
+ * @param {string} code
+ */
+function isNumericMlccCode(code) {
+  return /^\d+$/.test(code.trim());
+}
+
+/**
  * @param {Buffer} buffer
- * @returns {{ ok: true, items: object[], priceBookDate: Date | null, errors: string[] } | { ok: false, items: [], errors: string[] }}
+ * @returns {{ ok: true, items: object[], priceBookDate: Date, errors: string[] } | { ok: false, items: [], errors: string[] }}
  */
 export function parseMlccPriceBookExcel(buffer) {
-  const errors = [];
   try {
     if (buffer == null || !(buffer instanceof Buffer) || buffer.length === 0) {
-      errors.push("Invalid or empty Excel buffer");
-      return { ok: false, items: [], errors };
+      return { ok: false, items: [], errors: ["Invalid or empty Excel buffer"] };
     }
 
     let workbook;
     try {
       workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
     } catch (e) {
-      errors.push(e instanceof Error ? e.message : String(e));
-      return { ok: false, items: [], errors };
+      return { ok: false, items: [], errors: [e instanceof Error ? e.message : String(e)] };
     }
 
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) {
-      errors.push("Workbook has no sheets");
-      return { ok: false, items: [], errors };
+      return { ok: false, items: [], errors: ["Workbook has no sheets"] };
     }
 
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) {
-      errors.push("First sheet is missing");
-      return { ok: false, items: [], errors };
+      return { ok: false, items: [], errors: ["First sheet is missing"] };
     }
 
     /** @type {unknown[][]} */
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
     if (!rows.length) {
-      errors.push("Sheet is empty");
-      return { ok: false, items: [], errors };
+      return { ok: false, items: [], errors: ["Sheet is empty"] };
     }
 
-    let headerMap = null;
-    let headerRowIndex = -1;
-    let inNewItemsSection = false;
-    /** @type {Date | null} */
-    let priceBookDate = null;
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      if (!Array.isArray(row)) continue;
-
-      if (rowLooksLikeSectionMarker(row)) {
-        if (String(row[0] ?? "").toUpperCase().includes("NEW")) inNewItemsSection = true;
-        continue;
-      }
-
-      const trialMap = buildHeaderMap(row);
-      if (trialMap[normalizeHeader(COL.LIQUOR_CODE)] !== undefined && trialMap[normalizeHeader(COL.BRAND_NAME)] !== undefined) {
-        headerMap = trialMap;
-        headerRowIndex = i;
-        break;
-      }
-
-      const line = row.map((c) => String(c ?? "").trim()).filter(Boolean).join(" ");
-      const dateMatch = line.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
-      if (dateMatch) {
-        const d = new Date(Number(dateMatch[3]), Number(dateMatch[1]) - 1, Number(dateMatch[2]));
-        if (!Number.isNaN(d.getTime())) priceBookDate = d;
-      }
+    const headerRow = rows[0];
+    const cols = resolveColumnIndices(headerRow);
+    if (!cols) {
+      return { ok: false, items: [], errors: ["Could not find required columns"] };
     }
 
-    if (!headerMap || headerRowIndex < 0) {
-      errors.push("Could not find a header row with LIQUOR CODE and BRAND NAME - FINAL");
-      return { ok: false, items: [], errors };
-    }
+    const {
+      mlccCodeIdx,
+      brandNameIdx,
+      adaNumberIdx,
+      liquorTypeIdx,
+      proofIdx,
+      bottleSizeIdx,
+      caseSizeIdx,
+      basePriceIdx,
+      licenseePriceIdx,
+      minShelfPriceIdx,
+      newChngIdx,
+    } = cols;
 
+    let currentCategory = "";
     const items = [];
-    for (let i = headerRowIndex + 1; i < rows.length; i++) {
-      const row = rows[i];
+
+    for (let r = 1; r < rows.length; r++) {
+      const row = rows[r];
       if (!Array.isArray(row)) continue;
-      if (rowLooksLikeSectionMarker(row)) {
-        if (String(row[0] ?? "").toUpperCase().includes("NEW")) inNewItemsSection = true;
+
+      const typeCell = cellStr(row, liquorTypeIdx);
+      if (typeCell && looksLikeCategoryHeader(typeCell)) {
+        currentCategory = typeCell;
+      }
+
+      const mlccCode = cellStr(row, mlccCodeIdx);
+      if (!mlccCode || !isNumericMlccCode(mlccCode)) {
         continue;
       }
-      if (!rowHasLiquorData(row, headerMap)) continue;
 
-      const adaNumber = String(cell(row, headerMap, COL.ADA_NUMBER) ?? "").trim();
-      const mlccCode = String(cell(row, headerMap, COL.LIQUOR_CODE) ?? "").trim();
-      const brandName = String(cell(row, headerMap, COL.BRAND_NAME) ?? "").trim();
-      const bottleSizeLabel = String(cell(row, headerMap, COL.BOTTLE_SIZE) ?? "").trim();
+      const brandName = cellStr(row, brandNameIdx);
+      if (!brandName) {
+        continue;
+      }
 
-      const proof = parseNumber(cell(row, headerMap, COL.PROOF));
+      const adaNumber = adaNumberIdx !== undefined ? cellStr(row, adaNumberIdx) : "";
+      const bottleSizeLabel = bottleSizeIdx !== undefined ? cellStr(row, bottleSizeIdx) : "";
+      const proof = proofIdx !== undefined ? parseFloatOrNull(row[proofIdx]) : null;
       const bottleSizeMl = parseBottleSizeMl(bottleSizeLabel);
-      const caseSize = parseInteger(cell(row, headerMap, COL.CASE_SIZE));
-      const basePrice = parseNumber(cell(row, headerMap, COL.BASE_PRICE));
-      const licenseePrice = parseNumber(cell(row, headerMap, COL.LICENSEE_PRICE));
-      const minShelfPrice = parseNumber(cell(row, headerMap, COL.MINIMUM_SHELF_PRICE));
-
-      const flagNew = detectNewFromFlag(row, headerMap);
-      const isNewItem = inNewItemsSection || flagNew;
+      const caseSize = caseSizeIdx !== undefined ? parseIntOrNull(row[caseSizeIdx]) : null;
+      const basePrice = basePriceIdx !== undefined ? parseFloatOrNull(row[basePriceIdx]) : null;
+      const licenseePrice = licenseePriceIdx !== undefined ? parseFloatOrNull(row[licenseePriceIdx]) : null;
+      const minShelfPrice = minShelfPriceIdx !== undefined ? parseFloatOrNull(row[minShelfPriceIdx]) : null;
+      const isNewItem =
+        newChngIdx !== undefined ? String(row[newChngIdx] ?? "").trim().length > 0 : false;
 
       items.push({
-        adaNumber,
         mlccCode,
         brandName,
+        adaNumber,
+        category: currentCategory,
         proof,
         bottleSizeLabel,
         bottleSizeMl,
@@ -229,9 +314,8 @@ export function parseMlccPriceBookExcel(buffer) {
       });
     }
 
-    return { ok: true, items, priceBookDate, errors: [] };
+    return { ok: true, items, priceBookDate: new Date(), errors: [] };
   } catch (e) {
-    errors.push(e instanceof Error ? e.message : String(e));
-    return { ok: false, items: [], errors };
+    return { ok: false, items: [], errors: [e instanceof Error ? e.message : String(e)] };
   }
 }
