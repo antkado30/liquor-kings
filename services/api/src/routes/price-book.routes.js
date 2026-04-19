@@ -64,6 +64,40 @@ function applyMlccItemsFilters(q, adaNumber, isNewItemQ) {
   return query;
 }
 
+/** Same semantics as `applyMlccItemsFilters` for in-memory rows (e.g. RPC results). */
+function filterMlccRowsClientSide(rows, adaNumber, isNewItemQ) {
+  return (rows ?? []).filter((row) => {
+    if (adaNumber && String(row.ada_number ?? "").trim() !== adaNumber) return false;
+    if (isNewItemQ === "true" && row.is_new_item !== true) return false;
+    if (isNewItemQ === "false" && row.is_new_item !== false) return false;
+    return true;
+  });
+}
+
+/** Applies the legacy name / name_normalized / code OR filter for non-brand-key text search. */
+function applyItemsOrSearchToQuery(q, search) {
+  const original = escapeIlikeOrToken(search);
+  const normalizedRaw = normalizeSearchTerm(search);
+  const normalized = escapeIlikeOrToken(normalizedRaw);
+  const aliasTerms = resolveSearchAliases(normalizedRaw);
+  const aliasOrParts = aliasTerms.map(
+    (t) => `name_normalized.ilike.%${escapeIlikeOrToken(t)}%`,
+  );
+  const aliasOrSuffix = aliasOrParts.length ? `,${aliasOrParts.join(",")}` : "";
+
+  if (normalized && normalized !== original) {
+    return q.or(
+      `name.ilike.%${original}%,name.ilike.%${normalized}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%${aliasOrSuffix}`,
+    );
+  }
+  if (normalized) {
+    return q.or(
+      `name.ilike.%${original}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%${aliasOrSuffix}`,
+    );
+  }
+  return q.or(`name.ilike.%${original}%,code.ilike.%${original}%${aliasOrSuffix}`);
+}
+
 /** Escape %, _, \\ for ilike patterns; strip commas so .or() filter stays valid. */
 function escapeIlikeOrToken(s) {
   return String(s)
@@ -316,8 +350,32 @@ router.get("/items", async (req, res) => {
             mergeErr instanceof Error ? mergeErr.message : String(mergeErr?.message ?? mergeErr);
           return res.status(500).json({ ok: false, error: msg });
         }
-        const total = mergedRows.length;
-        const items = mergedRows.slice(from, from + limit);
+
+        if (mergedRows.length >= 3) {
+          const total = mergedRows.length;
+          const items = mergedRows.slice(from, from + limit);
+          return res.json({
+            ok: true,
+            items,
+            total,
+            page,
+          });
+        }
+
+        const { data: fuzzyRows, error: fuzzyErr } = await supabase.rpc("search_mlcc_items_fuzzy", {
+          search_query: search,
+          match_threshold: 0.15,
+          result_limit: limit * 3,
+        });
+        if (fuzzyErr) {
+          return res.status(500).json({ ok: false, error: fuzzyErr.message });
+        }
+        let filtered = filterMlccRowsClientSide(fuzzyRows, adaNumber, isNewItemQ);
+        filtered.sort((a, b) =>
+          String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true }),
+        );
+        const total = filtered.length;
+        const items = filtered.slice(from, from + limit);
         return res.json({
           ok: true,
           items,
@@ -325,32 +383,59 @@ router.get("/items", async (req, res) => {
           page,
         });
       }
+
+      let qOrHead = supabase.from("mlcc_items").select("*", { count: "exact", head: true });
+      qOrHead = applyItemsOrSearchToQuery(qOrHead, search);
+      qOrHead = applyMlccItemsFilters(qOrHead, adaNumber, isNewItemQ);
+      const { count: orCount, error: orHeadErr } = await qOrHead;
+      if (orHeadErr) {
+        return res.status(500).json({ ok: false, error: orHeadErr.message });
+      }
+
+      if (orCount != null && orCount >= 3) {
+        let qOr = supabase.from("mlcc_items").select("*", { count: "exact" });
+        qOr = applyItemsOrSearchToQuery(qOr, search);
+        qOr = applyMlccItemsFilters(qOr, adaNumber, isNewItemQ);
+        const { data: orItems, error: orErr, count } = await qOr
+          .order("code", { ascending: true })
+          .range(from, to);
+        if (orErr) {
+          return res.status(500).json({ ok: false, error: orErr.message });
+        }
+        return res.json({
+          ok: true,
+          items: orItems || [],
+          total: count ?? 0,
+          page,
+        });
+      }
+
+      const { data: fuzzyRowsNoBrand, error: fuzzyErrNoBrand } = await supabase.rpc(
+        "search_mlcc_items_fuzzy",
+        {
+          search_query: search,
+          match_threshold: 0.15,
+          result_limit: limit * 3,
+        },
+      );
+      if (fuzzyErrNoBrand) {
+        return res.status(500).json({ ok: false, error: fuzzyErrNoBrand.message });
+      }
+      let filteredNoBrand = filterMlccRowsClientSide(fuzzyRowsNoBrand, adaNumber, isNewItemQ);
+      filteredNoBrand.sort((a, b) =>
+        String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true }),
+      );
+      const totalNb = filteredNoBrand.length;
+      const itemsNb = filteredNoBrand.slice(from, from + limit);
+      return res.json({
+        ok: true,
+        items: itemsNb,
+        total: totalNb,
+        page,
+      });
     }
 
     let q = supabase.from("mlcc_items").select("*", { count: "exact" });
-
-    if (search) {
-      const original = escapeIlikeOrToken(search);
-      const normalizedRaw = normalizeSearchTerm(search);
-      const normalized = escapeIlikeOrToken(normalizedRaw);
-      const aliasTerms = resolveSearchAliases(normalizedRaw);
-      const aliasOrParts = aliasTerms.map(
-        (t) => `name_normalized.ilike.%${escapeIlikeOrToken(t)}%`,
-      );
-      const aliasOrSuffix = aliasOrParts.length ? `,${aliasOrParts.join(",")}` : "";
-
-      if (normalized && normalized !== original) {
-        q = q.or(
-          `name.ilike.%${original}%,name.ilike.%${normalized}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%${aliasOrSuffix}`,
-        );
-      } else if (normalized) {
-        q = q.or(
-          `name.ilike.%${original}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%${aliasOrSuffix}`,
-        );
-      } else {
-        q = q.or(`name.ilike.%${original}%,code.ilike.%${original}%${aliasOrSuffix}`);
-      }
-    }
 
     q = applyMlccItemsFilters(q, adaNumber, isNewItemQ);
 
