@@ -101,5 +101,5 @@ jobs:
 
       - name: Run smoke tests against staging
         run: |
-          npm exec --prefix services/api -- vitest run -r services/api \
-            --testPathPattern="**/*.smoke.test.js"
+          npm exec --prefix services/api -- vitest run \
+            services/api/tests/mlcc-readiness-contract.routes.smoke.test.js
