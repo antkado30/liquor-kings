@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../config/supabase.js";
+import { BRAND_ALIAS_MAP, resolveSearchAliases } from "../mlcc/mlcc-brand-aliases.js";
 import { getLatestPriceBookRun, ingestMlccPriceBook } from "../mlcc/mlcc-price-book-ingestor.js";
 
 const router = express.Router();
@@ -89,7 +90,88 @@ function sanitizeIlikeValue(s) {
   return String(s).replace(/%/g, "").replace(/_/g, "");
 }
 
-router.get("/upc/:upc", async (req, res) => {
+/** Longest `BRAND_ALIAS_MAP` key contained in `normalizedRaw` (substring match). */
+function findLongestContainedBrandKey(normalizedRaw) {
+  const term = String(normalizedRaw ?? "").trim();
+  if (!term) return null;
+  let best = null;
+  let bestLen = -1;
+  for (const key of BRAND_ALIAS_MAP.keys()) {
+    if (!key || term.length < key.length) continue;
+    if (!term.includes(key)) continue;
+    if (key.length > bestLen) {
+      bestLen = key.length;
+      best = key;
+    }
+  }
+  return best;
+}
+
+function removeFirstSubstring(haystack, needle) {
+  const h = String(haystack ?? "");
+  const n = String(needle ?? "");
+  if (!n) return h.trim();
+  const i = h.indexOf(n);
+  if (i < 0) return h.replace(/\s+/g, " ").trim();
+  return (h.slice(0, i) + h.slice(i + n.length)).replace(/\s+/g, " ").trim();
+}
+
+const MULTI_TERM_BRAND_FETCH_CAP = 500;
+
+/**
+ * One query per MLCC-style brand variant; each row must match brand phrase and every suffix word on name_normalized.
+ * @returns {Promise<{ rows: object[], error: Error | null }>}
+ */
+async function multiTermBrandSearch({
+  supabase,
+  brandKey,
+  normalizedRaw,
+  adaNumber,
+  isNewItemQ,
+}) {
+  const suffixRaw = removeFirstSubstring(normalizedRaw, brandKey);
+  const suffixWords = suffixRaw
+    ? suffixRaw
+        .split(/\s+/)
+        .map((w) => sanitizeIlikeValue(w))
+        .filter(Boolean)
+    : [];
+
+  const variants = BRAND_ALIAS_MAP.get(brandKey) ?? [];
+  const brandCandidates = [];
+  const seenBrand = new Set();
+  for (const b of [brandKey, ...variants]) {
+    const t = sanitizeIlikeValue(b);
+    if (!t || seenBrand.has(t)) continue;
+    seenBrand.add(t);
+    brandCandidates.push(t);
+  }
+
+  const rowsById = new Map();
+
+  for (const brandPart of brandCandidates) {
+    let q = supabase.from("mlcc_items").select("*");
+    q = applyMlccItemsFilters(q, adaNumber, isNewItemQ);
+    q = q.ilike("name_normalized", `%${brandPart}%`);
+    for (const w of suffixWords) {
+      q = q.ilike("name_normalized", `%${w}%`);
+    }
+    const { data, error } = await q
+      .order("code", { ascending: true })
+      .limit(MULTI_TERM_BRAND_FETCH_CAP);
+    if (error) return { rows: [], error };
+    for (const row of data ?? []) {
+      if (row?.id && !rowsById.has(row.id)) rowsById.set(row.id, row);
+    }
+  }
+
+  const merged = [...rowsById.values()].sort((a, b) =>
+    String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true }),
+  );
+  return { rows: merged, error: null };
+}
+
+export async function priceBookUpcHandler(req, res) {
   try {
     const upc = String(req.params.upc ?? "").trim();
     if (!upc) {
@@ -168,7 +250,9 @@ router.get("/upc/:upc", async (req, res) => {
     console.log("[price-book-upc] unexpected", msg);
     return res.json({ ok: false, error: "upc_not_found" });
   }
-});
+}
+
+router.get("/upc/:upc", priceBookUpcHandler);
 
 router.get("/items", async (req, res) => {
   try {
@@ -215,19 +299,56 @@ router.get("/items", async (req, res) => {
       });
     }
 
+    if (search) {
+      const normalizedRaw = normalizeSearchTerm(search);
+      const brandKey = findLongestContainedBrandKey(normalizedRaw);
+
+      if (brandKey) {
+        const { rows: mergedRows, error: mergeErr } = await multiTermBrandSearch({
+          supabase,
+          brandKey,
+          normalizedRaw,
+          adaNumber,
+          isNewItemQ,
+        });
+        if (mergeErr) {
+          const msg =
+            mergeErr instanceof Error ? mergeErr.message : String(mergeErr?.message ?? mergeErr);
+          return res.status(500).json({ ok: false, error: msg });
+        }
+        const total = mergedRows.length;
+        const items = mergedRows.slice(from, from + limit);
+        return res.json({
+          ok: true,
+          items,
+          total,
+          page,
+        });
+      }
+    }
+
     let q = supabase.from("mlcc_items").select("*", { count: "exact" });
 
     if (search) {
       const original = escapeIlikeOrToken(search);
-      const normalized = escapeIlikeOrToken(normalizeSearchTerm(search));
+      const normalizedRaw = normalizeSearchTerm(search);
+      const normalized = escapeIlikeOrToken(normalizedRaw);
+      const aliasTerms = resolveSearchAliases(normalizedRaw);
+      const aliasOrParts = aliasTerms.map(
+        (t) => `name_normalized.ilike.%${escapeIlikeOrToken(t)}%`,
+      );
+      const aliasOrSuffix = aliasOrParts.length ? `,${aliasOrParts.join(",")}` : "";
+
       if (normalized && normalized !== original) {
         q = q.or(
-          `name.ilike.%${original}%,name.ilike.%${normalized}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%`,
+          `name.ilike.%${original}%,name.ilike.%${normalized}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%${aliasOrSuffix}`,
         );
       } else if (normalized) {
-        q = q.or(`name.ilike.%${original}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%`);
+        q = q.or(
+          `name.ilike.%${original}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%${aliasOrSuffix}`,
+        );
       } else {
-        q = q.or(`name.ilike.%${original}%,code.ilike.%${original}%`);
+        q = q.or(`name.ilike.%${original}%,code.ilike.%${original}%${aliasOrSuffix}`);
       }
     }
 

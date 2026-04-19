@@ -12,7 +12,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import operatorReviewRouter from "./routes/operator-review.routes.js";
-import priceBookRouter from "./routes/price-book.routes.js";
+import priceBookRouter, { priceBookUpcHandler } from "./routes/price-book.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -29,6 +29,9 @@ const operatorAdminDistReady = fs.existsSync(operatorAdminIndexHtml);
 app.use(cors());
 /** Large enough for MLCC browser worker finalize payloads (step screenshots + boundary evidence). */
 app.use(express.json({ limit: "12mb" }));
+
+/** App-level registration so GET /price-book/upc/:upc always resolves (not only via mounted router). */
+app.get("/price-book/upc/:upc", priceBookUpcHandler);
 
 app.use(
   "/cart",
