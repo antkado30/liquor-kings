@@ -61,3 +61,45 @@ jobs:
 
       - name: RPA safety checks (static checks + SAFE MODE invariant)
         run: npm run verify:lk:rpa-safety
+
+  smoke-tests-staging:
+    name: Smoke tests (staging DB — readiness contract)
+    runs-on: ubuntu-latest
+    needs: safe-mode-tests
+    timeout-minutes: 10
+    if: github.ref == 'refs/heads/main'
+    env:
+      CI: "true"
+      SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+      PORT: "4000"
+      MLCC_PASSWORD: "staging-not-real"
+      MLCC_SEED_STORE_USERNAME: "staging-not-real"
+      MLCC_LOGIN_URL: "https://ci-safe.example.invalid/mlcc/login"
+      MLCC_SAFE_TARGET_URL: "https://ci-safe.example.invalid/mlcc/safe"
+      MLCC_ORDERING_ENTRY_URL: "https://ci-safe.example.invalid/mlcc/products"
+      MLCC_RECON_MODE: "true"
+      SAFEMODE: "true"
+      MLCC_SUBMISSION_ARMED: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            services/api/package-lock.json
+
+      - name: Install API dependencies
+        run: npm ci --prefix services/api
+
+      - name: Run smoke tests against staging
+        run: |
+          npm exec --prefix services/api -- vitest run -r services/api \
+            --testPathPattern="**/*.smoke.test.js"
