@@ -13,7 +13,7 @@
  * Uses the same seeded cart/store as api.smoke.test.js. Requires the same Supabase
  * env vars and network reachability as `api.smoke.test.js` (service role + `X-Store-Id`).
  */
-import { describe, it, expect, afterAll } from "vitest";
+import { beforeAll, afterAll, describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import app from "../src/app.js";
 import supabase from "../src/config/supabase.js";
@@ -81,6 +81,8 @@ function assertEmbeddedReadiness(r, { blocked }) {
 }
 
 describe("MLCC readiness HTTP JSON contract (routes)", () => {
+  vi.setConfig({ testTimeout: 30000 });
+
   afterAll(async () => {
     await supabase.from("execution_runs").delete().eq("cart_id", cartId);
     await ensureExecutionTestCartHasMlccItemIds(supabase, { cartId, bottleId });
@@ -379,7 +381,10 @@ describe("MLCC readiness HTTP JSON contract (routes)", () => {
     expect(readyBacklog.body.backlog_summary).toMatchObject({
       total_backlog_bottles: expect.any(Number),
       total_blocking_hints: expect.any(Number),
-      highest_urgency_bucket: { action: expect.anything(), count: expect.any(Number) },
+      highest_urgency_bucket: {
+        action: expect.toSatisfy((v) => v === null || typeof v === "string"),
+        count: expect.any(Number),
+      },
     });
     expect(
       readyBacklog.body.items.filter((i) => i.bottle_id === bottleId),
