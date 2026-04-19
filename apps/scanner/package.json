@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@sentry/react": "^8.0.0",
     "@zxing/browser": "^0.1.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

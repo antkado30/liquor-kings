@@ -17,6 +17,8 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@sentry/node": "^8.0.0",
+    "@sentry/react": "^10.49.0",
     "@supabase/supabase-js": "^2.49.1",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",

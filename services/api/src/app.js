@@ -4,6 +4,7 @@ import cartLifecycleRouter from "./routes/cart-lifecycle.routes.js";
 import executionRunsRouter from "./routes/execution-runs.routes.js";
 import express from "express";
 import cors from "cors";
+import { Sentry } from "./lib/sentry.js";
 import supabase from "./config/supabase.js";
 import bottlesRouter from "./routes/bottles.routes.js";
 import inventoryRouter from "./routes/inventory.routes.js";
@@ -29,6 +30,11 @@ const operatorAdminDistReady = fs.existsSync(operatorAdminIndexHtml);
 app.use(cors());
 /** Large enough for MLCC browser worker finalize payloads (step screenshots + boundary evidence). */
 app.use(express.json({ limit: "12mb" }));
+/**
+ * Sentry Node SDK v8: request and trace context for Express are set up when `initSentry()`
+ * runs in `index.js` before this module is loaded. Legacy `Sentry.Handlers.requestHandler` /
+ * `tracingHandler` are not used in v8; use `setupExpressErrorHandler` at the end of this file.
+ */
 
 /** App-level registration so GET /price-book/upc/:upc always resolves (not only via mounted router). */
 app.get("/price-book/upc/:upc", priceBookUpcHandler);
@@ -118,5 +124,7 @@ app.get("/test-bottles", async (req, res) => {
 
   res.json({ success: true, data });
 });
+
+Sentry.setupExpressErrorHandler(app);
 
 export default app;
