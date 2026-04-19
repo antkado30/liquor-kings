@@ -50,6 +50,28 @@ router.post("/ingest", async (req, res) => {
   }
 });
 
+function applyMlccItemsFilters(q, adaNumber, isNewItemQ) {
+  let query = q;
+  if (adaNumber) {
+    query = query.eq("ada_number", adaNumber);
+  }
+  if (isNewItemQ === "true") {
+    query = query.eq("is_new_item", true);
+  } else if (isNewItemQ === "false") {
+    query = query.eq("is_new_item", false);
+  }
+  return query;
+}
+
+/** Escape %, _, \\ for ilike patterns; strip commas so .or() filter stays valid. */
+function escapeIlikeOrToken(s) {
+  return String(s)
+    .replace(/\\/g, "\\\\")
+    .replace(/%/g, "\\%")
+    .replace(/_/g, "\\_")
+    .replace(/,/g, "");
+}
+
 router.get("/items", async (req, res) => {
   try {
     let page = Number.parseInt(String(req.query.page || "1"), 10);
@@ -65,19 +87,44 @@ router.get("/items", async (req, res) => {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
+    if (search && /^\d+$/.test(search)) {
+      let qExact = supabase.from("mlcc_items").select("*", { count: "exact" }).eq("code", search);
+      qExact = applyMlccItemsFilters(qExact, adaNumber, isNewItemQ);
+      const exactRes = await qExact.order("code", { ascending: true }).range(from, to);
+      if (exactRes.error) {
+        return res.status(500).json({ ok: false, error: exactRes.error.message });
+      }
+      if (exactRes.data?.length) {
+        return res.json({
+          ok: true,
+          items: exactRes.data,
+          total: exactRes.count ?? 0,
+          page,
+        });
+      }
+
+      let qName = supabase.from("mlcc_items").select("*", { count: "exact" }).ilike("name", `%${search}%`);
+      qName = applyMlccItemsFilters(qName, adaNumber, isNewItemQ);
+      const nameRes = await qName.order("code", { ascending: true }).range(from, to);
+      if (nameRes.error) {
+        return res.status(500).json({ ok: false, error: nameRes.error.message });
+      }
+      return res.json({
+        ok: true,
+        items: nameRes.data || [],
+        total: nameRes.count ?? 0,
+        page,
+      });
+    }
+
     let q = supabase.from("mlcc_items").select("*", { count: "exact" });
 
     if (search) {
-      q = q.ilike("name", `%${search}%`);
+      const token = escapeIlikeOrToken(search);
+      q = q.or(`name.ilike.%${token}%,code.ilike.%${token}%`);
     }
-    if (adaNumber) {
-      q = q.eq("ada_number", adaNumber);
-    }
-    if (isNewItemQ === "true") {
-      q = q.eq("is_new_item", true);
-    } else if (isNewItemQ === "false") {
-      q = q.eq("is_new_item", false);
-    }
+
+    q = applyMlccItemsFilters(q, adaNumber, isNewItemQ);
 
     const { data: items, error, count } = await q.order("code", { ascending: true }).range(from, to);
 

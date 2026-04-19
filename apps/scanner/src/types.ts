@@ -1,0 +1,32 @@
+export interface MlccProduct {
+  id: string;
+  code: string;
+  name: string;
+  brand_family: string | null;
+  category: string | null;
+  ada_number: string;
+  ada_name: string;
+  proof: number | null;
+  bottle_size_label: string | null;
+  bottle_size_ml: number | null;
+  case_size: number | null;
+  licensee_price: number | null;
+  min_shelf_price: number | null;
+  base_price: number | null;
+  is_new_item: boolean;
+}
+
+export interface ProductFamily {
+  baseName: string;
+  sizes: MlccProduct[];
+}
+
+export interface CartItem {
+  product: MlccProduct;
+  quantity: number;
+}
+
+export interface Cart {
+  items: CartItem[];
+  storeId: string | null;
+}

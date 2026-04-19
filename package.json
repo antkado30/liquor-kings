@@ -4,12 +4,15 @@
   "type": "module",
   "description": "Liquor Kings monorepo — root scripts for diagnostics",
   "workspaces": [
-    "apps/admin"
+    "apps/admin",
+    "apps/scanner"
   ],
   "scripts": {
     "test:ci": "npm ci --prefix services/api && npm exec --prefix services/api -- playwright install chromium && env SUPABASE_URL=https://ci-safe.example.invalid/supabase SUPABASE_ANON_KEY=ci-invalid-anon-key SUPABASE_SERVICE_ROLE_KEY=ci-invalid-service-role npm exec --prefix services/api -- vitest run -r services/api --exclude \"**/*.smoke.test.js\"",
     "dev:admin": "npm run dev -w lk-admin",
     "build:admin": "npm run build -w lk-admin",
+    "dev:scanner": "npm run dev -w lk-scanner",
+    "build:scanner": "npm run build -w lk-scanner",
     "audit:lk": "node scripts/lk-audit/run-full-audit.mjs",
     "audit:lk:repo": "node scripts/lk-audit/audit-repo.mjs",
     "audit:lk:supabase": "node scripts/lk-audit/audit-supabase.mjs",

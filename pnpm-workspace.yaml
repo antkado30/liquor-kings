@@ -1,5 +1,5 @@
 packages:
-  - "apps/*"
+  - "apps/*" # includes apps/admin, apps/scanner, etc.
   - "packages/*"
   - "services/*"
   - "supabase/*"
