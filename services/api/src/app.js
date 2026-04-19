@@ -12,6 +12,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import operatorReviewRouter from "./routes/operator-review.routes.js";
+import priceBookRouter from "./routes/price-book.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -40,6 +41,7 @@ app.use("/inventory", resolveAuthenticatedStore, inventoryRouter);
 app.use("/bottles", resolveAuthenticatedStore, bottlesRouter);
 app.use("/execution-runs", resolveAuthenticatedStore, executionRunsRouter);
 app.use("/operator-review", operatorReviewRouter);
+app.use("/price-book", priceBookRouter);
 
 /**
  * Operator admin SPA (built apps/admin). Same origin as session + API under /operator-review/*.
