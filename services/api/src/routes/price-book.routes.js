@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../config/supabase.js";
+import { findMlccCandidatesForUpc, lookupUpcFromUpcitemdb } from "../lib/upcitemdb.js";
 import { BRAND_ALIAS_MAP, resolveSearchAliases } from "../mlcc/mlcc-brand-aliases.js";
 import { getLatestPriceBookRun, ingestMlccPriceBook } from "../mlcc/mlcc-price-book-ingestor.js";
 
@@ -205,6 +206,20 @@ async function multiTermBrandSearch({
   return { rows: merged, error: null };
 }
 
+function queueUpcLookupLog(row) {
+  try {
+    void supabase
+      .from("upc_lookups")
+      .insert(row)
+      .then(({ error }) => {
+        if (error) console.log("[price-book-upc] upc_lookups log failed", error.message);
+      });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    console.log("[price-book-upc] upc_lookups log exception", m);
+  }
+}
+
 export async function priceBookUpcHandler(req, res) {
   try {
     const upc = String(req.params.upc ?? "").trim();
@@ -226,7 +241,81 @@ export async function priceBookUpcHandler(req, res) {
     }
     if (localRow) {
       console.log("[price-book-upc] local match", localRow.id);
+      queueUpcLookupLog({
+        upc,
+        matched_mlcc_code: localRow.code ?? null,
+        matched_product_name: localRow.name ?? null,
+        source: "local_cache",
+        raw_api_response: null,
+      });
       return res.json({ ok: true, product: localRow });
+    }
+
+    const upcDb = await lookupUpcFromUpcitemdb(upc);
+    if (upcDb.ok && upcDb.product) {
+      const upcItem = upcDb.product;
+      const mlcc = await findMlccCandidatesForUpc(supabase, upcItem);
+      if (mlcc.confident && mlcc.candidates.length === 1) {
+        const match = mlcc.candidates[0];
+        const { error: upErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", match.id);
+        if (upErr) {
+          console.log("[price-book-upc] mlcc_items upc cache update failed", upErr.message);
+        }
+        const { data: refreshed } = await supabase.from("mlcc_items").select("*").eq("id", match.id).maybeSingle();
+        const product = refreshed ?? { ...match, upc };
+        queueUpcLookupLog({
+          upc,
+          matched_mlcc_code: product.code ?? null,
+          matched_product_name: product.name ?? null,
+          source: "upcitemdb",
+          raw_api_response: upcDb.raw ?? null,
+        });
+        console.log("[price-book-upc] matched via upcitemdb (confident)", product.id);
+        return res.json({ ok: true, product, matchMode: "confident" });
+      }
+      if (mlcc.candidates.length > 1) {
+        queueUpcLookupLog({
+          upc,
+          matched_mlcc_code: null,
+          matched_product_name: null,
+          source: "upcitemdb",
+          raw_api_response: upcDb.raw ?? null,
+        });
+        return res.json({
+          ok: true,
+          needsUserConfirmation: true,
+          matchMode: "ambiguous",
+          candidates: mlcc.candidates,
+          upcProductName: upcItem.name,
+          upcBrand: upcItem.brand,
+          message: "Multiple products match. User must select.",
+        });
+      }
+      queueUpcLookupLog({
+        upc,
+        matched_mlcc_code: null,
+        matched_product_name: null,
+        source: "upcitemdb",
+        raw_api_response: upcDb.raw ?? null,
+      });
+      return res.json({
+        ok: false,
+        error: "upc_found_but_no_mlcc_match",
+        productName: upcItem.name,
+        hint: "search_by_name",
+      });
+    }
+
+    const tryOff = upcDb.error === "not_found";
+    if (!tryOff) {
+      queueUpcLookupLog({
+        upc,
+        matched_mlcc_code: null,
+        matched_product_name: null,
+        source: "upcitemdb",
+        raw_api_response: { error: upcDb.error },
+      });
+      return res.json({ ok: false, error: "upc_not_found" });
     }
 
     let offJson;
@@ -240,11 +329,25 @@ export async function priceBookUpcHandler(req, res) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.log("[price-book-upc] openfoodfacts fetch failed", msg);
+      queueUpcLookupLog({
+        upc,
+        matched_mlcc_code: null,
+        matched_product_name: null,
+        source: "not_found",
+        raw_api_response: { open_food_facts: "fetch_failed", message: msg },
+      });
       return res.json({ ok: false, error: "upc_not_found" });
     }
 
     if (offJson?.status != 1 || !offJson.product) {
       console.log("[price-book-upc] openfoodfacts no product");
+      queueUpcLookupLog({
+        upc,
+        matched_mlcc_code: null,
+        matched_product_name: null,
+        source: "not_found",
+        raw_api_response: { open_food_facts: offJson ?? null },
+      });
       return res.json({ ok: false, error: "upc_not_found" });
     }
 
@@ -255,36 +358,136 @@ export async function priceBookUpcHandler(req, res) {
       "";
     if (!nameGuess) {
       console.log("[price-book-upc] openfoodfacts missing name/brands");
+      queueUpcLookupLog({
+        upc,
+        matched_mlcc_code: null,
+        matched_product_name: null,
+        source: "not_found",
+        raw_api_response: { open_food_facts: "no_name" },
+      });
       return res.json({ ok: false, error: "upc_not_found" });
     }
 
-    const term = sanitizeIlikeValue(nameGuess.trim().slice(0, 120));
-    console.log("[price-book-upc] searching by name from OFF:", term);
-
-    const { data: nameRows, error: nameErr } = await supabase
-      .from("mlcc_items")
-      .select("*")
-      .ilike("name", `%${term}%`)
-      .order("code", { ascending: true })
-      .limit(1);
-
-    if (nameErr) {
-      console.log("[price-book-upc] name search error", nameErr.message);
-      return res.status(500).json({ ok: false, error: nameErr.message });
+    const offBrands = typeof p.brands === "string" ? p.brands.trim() : "";
+    const offUpcItem = {
+      name: nameGuess.trim(),
+      brand: offBrands,
+      category: "",
+      images: [],
+    };
+    const offMlcc = await findMlccCandidatesForUpc(supabase, offUpcItem);
+    if (offMlcc.confident && offMlcc.candidates.length === 1) {
+      const offMatch = offMlcc.candidates[0];
+      const { error: offUpErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", offMatch.id);
+      if (offUpErr) {
+        console.log("[price-book-upc] mlcc_items upc cache update (off) failed", offUpErr.message);
+      }
+      const { data: offRefreshed } = await supabase
+        .from("mlcc_items")
+        .select("*")
+        .eq("id", offMatch.id)
+        .maybeSingle();
+      const product = offRefreshed ?? { ...offMatch, upc };
+      queueUpcLookupLog({
+        upc,
+        matched_mlcc_code: product.code ?? null,
+        matched_product_name: product.name ?? null,
+        source: "open_food_facts",
+        raw_api_response: offJson,
+      });
+      console.log("[price-book-upc] matched via open food facts (confident)", product.id);
+      return res.json({ ok: true, product, matchMode: "confident" });
     }
-    const hit = nameRows?.[0];
-    if (!hit) {
-      console.log("[price-book-upc] no mlcc match for name");
-      return res.json({ ok: false, error: "upc_not_found" });
+    if (offMlcc.candidates.length > 1) {
+      queueUpcLookupLog({
+        upc,
+        matched_mlcc_code: null,
+        matched_product_name: null,
+        source: "open_food_facts",
+        raw_api_response: offJson,
+      });
+      return res.json({
+        ok: true,
+        needsUserConfirmation: true,
+        matchMode: "ambiguous",
+        candidates: offMlcc.candidates,
+        upcProductName: offUpcItem.name,
+        upcBrand: offUpcItem.brand,
+        message: "Multiple products match. User must select.",
+      });
     }
-    console.log("[price-book-upc] matched mlcc item", hit.id);
-    return res.json({ ok: true, product: hit });
+
+    console.log("[price-book-upc] no mlcc match for off name");
+    queueUpcLookupLog({
+      upc,
+      matched_mlcc_code: null,
+      matched_product_name: null,
+      source: "open_food_facts",
+      raw_api_response: offJson,
+    });
+    return res.json({
+      ok: false,
+      error: "upc_found_but_no_mlcc_match",
+      productName: nameGuess.trim(),
+      hint: "search_by_name",
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.log("[price-book-upc] unexpected", msg);
     return res.json({ ok: false, error: "upc_not_found" });
   }
 }
+
+router.post("/upc/:upc/confirm", async (req, res) => {
+  if (!requireServiceRole(req, res)) return;
+  try {
+    const upc = String(req.params.upc ?? "").trim();
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const mlccCode = typeof body.mlccCode === "string" ? body.mlccCode.trim() : "";
+    if (!upc || !mlccCode) {
+      return res.status(400).json({ ok: false, error: "upc_and_mlccCode_required" });
+    }
+
+    const { data: rows, error: selErr } = await supabase
+      .from("mlcc_items")
+      .select("*")
+      .eq("code", mlccCode)
+      .limit(1);
+
+    if (selErr) {
+      return res.status(500).json({ ok: false, error: selErr.message });
+    }
+    const row = rows?.[0];
+    if (!row) {
+      return res.json({ ok: false, error: "mlcc_code_not_found" });
+    }
+
+    const { error: upErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", row.id);
+    if (upErr) {
+      return res.status(500).json({ ok: false, error: upErr.message });
+    }
+
+    const { data: refreshed } = await supabase.from("mlcc_items").select("*").eq("id", row.id).maybeSingle();
+    const product = refreshed ?? { ...row, upc };
+
+    const upcProductName =
+      typeof body.upcProductName === "string" ? body.upcProductName.trim() || null : null;
+    const upcBrand = typeof body.upcBrand === "string" ? body.upcBrand.trim() || null : null;
+    queueUpcLookupLog({
+      upc,
+      matched_mlcc_code: product.code ?? null,
+      matched_product_name: product.name ?? null,
+      source: "manual_confirm",
+      raw_api_response:
+        upcProductName || upcBrand ? { upcProductName, upcBrand } : null,
+    });
+
+    return res.json({ ok: true, product });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return res.status(500).json({ ok: false, error: msg });
+  }
+});
 
 router.get("/upc/:upc", priceBookUpcHandler);
 
