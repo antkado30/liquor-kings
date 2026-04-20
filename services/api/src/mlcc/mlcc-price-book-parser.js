@@ -1,4 +1,11 @@
-import XLSX from "xlsx";
+import ExcelJS from "exceljs";
+import {
+  Worker,
+  isMainThread,
+  workerData,
+  receiveMessageOnPort,
+  MessageChannel,
+} from "node:worker_threads";
 
 /**
  * @param {string | null | undefined} adaNumber
@@ -166,81 +173,83 @@ function resolveColumnIndices(headerRow) {
 /**
  * @param {unknown} val
  */
-function cellStr(row, colIdx) {
-  if (colIdx === undefined || !Array.isArray(row)) return "";
-  const v = row[colIdx];
-  return String(v ?? "").trim();
+function normalizeExcelCellValue(val) {
+  if (val == null) return "";
+  if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") {
+    return val;
+  }
+  if (val instanceof Date) {
+    return val;
+  }
+  if (typeof val === "object") {
+    const o = /** @type {{ richText?: { text?: string }[]; text?: unknown; result?: unknown }} */ (val);
+    if (Array.isArray(o.richText)) {
+      return o.richText.map((t) => String(t.text ?? "")).join("");
+    }
+    if (o.text != null) {
+      return o.text;
+    }
+    if (o.result !== undefined && o.result !== null) {
+      return o.result;
+    }
+  }
+  return val;
 }
 
 /**
- * @param {unknown} val
+ * @param {import("exceljs").Row} row
+ * @param {number} width
+ * @returns {unknown[]}
  */
-function parseFloatOrNull(val) {
-  if (val == null || val === "") return null;
-  if (typeof val === "number" && Number.isFinite(val)) return val;
-  const n = Number.parseFloat(String(val).replace(/[$,]/g, "").trim());
-  return Number.isFinite(n) ? n : null;
+function excelRowTo0BasedArray(row, width) {
+  const arr = /** @type {unknown[]} */ ([]);
+  for (let c = 1; c <= width; c++) {
+    arr[c - 1] = normalizeExcelCellValue(row.getCell(c).value);
+  }
+  return arr;
 }
 
 /**
- * @param {unknown} val
+ * @param {import("exceljs").Worksheet} worksheet
+ * @returns {unknown[][]}
  */
-function parseIntOrNull(val) {
-  if (val == null || val === "") return null;
-  if (typeof val === "number" && Number.isFinite(val)) return Math.round(val);
-  const n = Number.parseInt(String(val).replace(/[,]/g, "").trim(), 10);
-  return Number.isFinite(n) ? n : null;
-}
+function worksheetToRowArrays(worksheet) {
+  const rowCount = worksheet.rowCount;
+  if (!rowCount) return [];
 
-/**
- * Category rows: non-empty liquor type cell that looks like a section header.
- * @param {string} s
- */
-function looksLikeCategoryHeader(s) {
-  const t = s.trim();
-  if (!t) return false;
-  if (/^\d/.test(t)) return true;
-  if (t.includes("-")) return true;
-  return false;
-}
+  const widthFromSheet = worksheet.columnCount || 0;
+  const headerRow = worksheet.getRow(1);
+  const headerSpan = headerRow.values && headerRow.values.length > 1 ? headerRow.values.length - 1 : 0;
+  const width = Math.max(widthFromSheet, headerSpan, 1);
 
-/**
- * MLCC liquor codes in the price book are numeric strings.
- * @param {string} code
- */
-function isNumericMlccCode(code) {
-  return /^\d+$/.test(code.trim());
+  /** @type {unknown[][]} */
+  const rows = [];
+  for (let r = 1; r <= rowCount; r++) {
+    rows.push(excelRowTo0BasedArray(worksheet.getRow(r), width));
+  }
+  return rows;
 }
 
 /**
  * @param {Buffer} buffer
- * @returns {{ ok: true, items: object[], priceBookDate: Date, errors: string[] } | { ok: false, items: [], errors: string[] }}
+ * @returns {Promise<{ ok: true, items: object[], priceBookDate: Date, errors: string[] } | { ok: false, items: [], errors: string[] }>}
  */
-export function parseMlccPriceBookExcel(buffer) {
+async function parseMlccPriceBookExcelAsync(buffer) {
   try {
-    if (buffer == null || !(buffer instanceof Buffer) || buffer.length === 0) {
-      return { ok: false, items: [], errors: ["Invalid or empty Excel buffer"] };
-    }
-
     let workbook;
     try {
-      workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+      workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer);
     } catch (e) {
       return { ok: false, items: [], errors: [e instanceof Error ? e.message : String(e)] };
     }
 
-    const sheetName = workbook.SheetNames[0];
-    if (!sheetName) {
+    const worksheet = workbook.getWorksheet(1) ?? workbook.worksheets[0];
+    if (!worksheet) {
       return { ok: false, items: [], errors: ["Workbook has no sheets"] };
     }
 
-    const sheet = workbook.Sheets[sheetName];
-    if (!sheet) {
-      return { ok: false, items: [], errors: ["First sheet is missing"] };
-    }
-
-    /** @type {unknown[][]} */
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
+    const rows = worksheetToRowArrays(worksheet);
     if (!rows.length) {
       return { ok: false, items: [], errors: ["Sheet is empty"] };
     }
@@ -315,6 +324,112 @@ export function parseMlccPriceBookExcel(buffer) {
     }
 
     return { ok: true, items, priceBookDate: new Date(), errors: [] };
+  } catch (e) {
+    return { ok: false, items: [], errors: [e instanceof Error ? e.message : String(e)] };
+  }
+}
+
+/**
+ * @param {unknown} val
+ */
+function cellStr(row, colIdx) {
+  if (colIdx === undefined || !Array.isArray(row)) return "";
+  const v = row[colIdx];
+  return String(v ?? "").trim();
+}
+
+/**
+ * @param {unknown} val
+ */
+function parseFloatOrNull(val) {
+  if (val == null || val === "") return null;
+  if (typeof val === "number" && Number.isFinite(val)) return val;
+  const n = Number.parseFloat(String(val).replace(/[$,]/g, "").trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * @param {unknown} val
+ */
+function parseIntOrNull(val) {
+  if (val == null || val === "") return null;
+  if (typeof val === "number" && Number.isFinite(val)) return Math.round(val);
+  const n = Number.parseInt(String(val).replace(/[,]/g, "").trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Category rows: non-empty liquor type cell that looks like a section header.
+ * @param {string} s
+ */
+function looksLikeCategoryHeader(s) {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^\d/.test(t)) return true;
+  if (t.includes("-")) return true;
+  return false;
+}
+
+/**
+ * MLCC liquor codes in the price book are numeric strings.
+ * @param {string} code
+ */
+function isNumericMlccCode(code) {
+  return /^\d+$/.test(code.trim());
+}
+
+if (!isMainThread) {
+  const wd = /** @type {{ port: import("node:worker_threads").MessagePort; buffer: Buffer }} */ (
+    workerData
+  );
+  const { port, buffer } = wd;
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  parseMlccPriceBookExcelAsync(buf).then(
+    (res) => {
+      port.postMessage(res);
+    },
+    (e) => {
+      port.postMessage({
+        ok: false,
+        items: [],
+        errors: [e instanceof Error ? e.message : String(e)],
+      });
+    }
+  );
+}
+
+/**
+ * @param {Buffer} buffer
+ * @returns {{ ok: true, items: object[], priceBookDate: Date, errors: string[] } | { ok: false, items: [], errors: string[] }}
+ */
+export function parseMlccPriceBookExcel(buffer) {
+  try {
+    if (buffer == null || !(buffer instanceof Buffer) || buffer.length === 0) {
+      return { ok: false, items: [], errors: ["Invalid or empty Excel buffer"] };
+    }
+
+    if (!isMainThread) {
+      return { ok: false, items: [], errors: ["parseMlccPriceBookExcel must run on the main thread"] };
+    }
+
+    const { port1, port2 } = new MessageChannel();
+    const worker = new Worker(new URL(import.meta.url), {
+      workerData: { port: port2, buffer },
+      transferList: [port2],
+    });
+
+    /** @type {{ message: unknown } | undefined} */
+    let received;
+    while ((received = receiveMessageOnPort(port1)) === undefined) {
+      // Worker runs parseMlccPriceBookExcelAsync on another thread; busy-wait until postMessage.
+    }
+
+    void worker.terminate();
+
+    const payload = /** @type {{ ok: boolean, items: object[], priceBookDate?: Date, errors: string[] }} */ (
+      received.message
+    );
+    return payload;
   } catch (e) {
     return { ok: false, items: [], errors: [e instanceof Error ? e.message : String(e)] };
   }

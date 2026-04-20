@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import {
   deriveAdaName,
   parseBottleSizeMl,
@@ -36,7 +36,7 @@ describe("mlcc-price-book-parser", () => {
   });
 
   describe("parseMlccPriceBookExcel", () => {
-    it("parses a minimal workbook built with xlsx using MLCC column headers", () => {
+    it("parses a minimal workbook built with exceljs using MLCC column headers", async () => {
       const header = [
         "Liquor Type",
         "MI",
@@ -84,10 +84,12 @@ describe("mlcc-price-book-parser", () => {
         ],
         ["", "", "", "BAD", "No Numeric Code", "40", "750 ML", "12", "10", "9", "11", ""],
       ];
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.aoa_to_sheet(rows);
-      XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-      const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+      for (const row of rows) {
+        ws.addRow(row);
+      }
+      const buffer = Buffer.from(await wb.xlsx.writeBuffer());
 
       const out = parseMlccPriceBookExcel(buffer);
       expect(out.ok).toBe(true);
