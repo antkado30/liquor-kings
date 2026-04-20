@@ -68,7 +68,7 @@ export function ScannerPage() {
 
       const upcRes: UpcLookupResponse = await getProductByUpc(trimmed);
 
-      if (upcRes.matchMode === "confident" && upcRes.product) {
+      if (upcRes.ok && upcRes.product && !upcRes.needsUserConfirmation) {
         const fam = await getProductFamily(upcRes.product.code);
         if (fam) {
           setCurrentFamily(fam);

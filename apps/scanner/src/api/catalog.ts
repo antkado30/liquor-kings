@@ -138,7 +138,7 @@ export async function getProductByCode(mlccCode: string): Promise<MlccProduct | 
   if (exact) return exact;
   if (/^\d+$/.test(code) && code.length >= 8) {
     const upcRes = await getProductByUpc(code);
-    if (upcRes.matchMode === "confident" && upcRes.product) return upcRes.product;
+    if (upcRes.ok && upcRes.product && !upcRes.needsUserConfirmation) return upcRes.product;
   }
   return null;
 }
