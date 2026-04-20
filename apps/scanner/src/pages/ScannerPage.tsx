@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getProductByCode, getProductFamily } from "../api/catalog";
+import { getProductByCode, getProductByUpc, getProductFamily } from "../api/catalog";
 import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
 import { ProductCard } from "../components/ProductCard";
+import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
 import { SearchBar } from "../components/SearchBar";
 import { useCart } from "../hooks/useCart";
 import { useCatalogSearch } from "../hooks/useCatalogSearch";
-import type { MlccProduct, ProductFamily } from "../types";
+import type { MlccProduct, ProductFamily, UpcLookupResponse } from "../types";
 
 function money(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -25,6 +26,12 @@ export function ScannerPage() {
   const [showCart, setShowCart] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [notFoundMsg, setNotFoundMsg] = useState(false);
+  const [upcCandidates, setUpcCandidates] = useState<{
+    candidates: MlccProduct[];
+    upc: string;
+    upcProductName: string;
+    upcBrand?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -48,18 +55,53 @@ export function ScannerPage() {
 
   const handleScan = useCallback(
     async (code: string) => {
-      const found = await getProductByCode(code.trim());
-      if (!found) {
+      const trimmed = code.trim();
+      const found = await getProductByCode(trimmed);
+      if (found) {
+        const fam = await getProductFamily(found.code);
+        if (fam) {
+          setCurrentFamily(fam);
+          setShowProductCard(true);
+        }
+        return;
+      }
+
+      const upcRes: UpcLookupResponse = await getProductByUpc(trimmed);
+
+      if (upcRes.matchMode === "confident" && upcRes.product) {
+        const fam = await getProductFamily(upcRes.product.code);
+        if (fam) {
+          setCurrentFamily(fam);
+          setShowProductCard(true);
+        }
+        return;
+      }
+
+      if (upcRes.needsUserConfirmation && upcRes.candidates && upcRes.candidates.length > 0) {
+        setUpcCandidates({
+          candidates: upcRes.candidates,
+          upc: trimmed,
+          upcProductName: upcRes.upcProductName ?? "",
+          upcBrand: upcRes.upcBrand,
+        });
+        return;
+      }
+
+      if (upcRes.error === "upc_found_but_no_mlcc_match") {
+        const name = upcRes.productName ?? "";
+        setToast(`Found bottle but no MLCC match. Try searching: ${name}`);
+        search.setQuery(name);
+        return;
+      }
+
+      if (upcRes.error === "upc_not_found") {
         setNotFoundMsg(true);
         return;
       }
-      const fam = await getProductFamily(found.code);
-      if (fam) {
-        setCurrentFamily(fam);
-        setShowProductCard(true);
-      }
+
+      setNotFoundMsg(true);
     },
-    [],
+    [search.setQuery, openFamily],
   );
 
   return (
@@ -133,6 +175,20 @@ export function ScannerPage() {
           onSubmit={() => {
             setShowCart(false);
             navigate("/cart");
+          }}
+        />
+      ) : null}
+
+      {upcCandidates ? (
+        <UpcCandidatePicker
+          upc={upcCandidates.upc}
+          candidates={upcCandidates.candidates}
+          upcProductName={upcCandidates.upcProductName}
+          upcBrand={upcCandidates.upcBrand}
+          onCancel={() => setUpcCandidates(null)}
+          onSelect={(product) => {
+            setUpcCandidates(null);
+            void openFamily(product);
           }}
         />
       ) : null}

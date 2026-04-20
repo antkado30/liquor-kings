@@ -1,4 +1,4 @@
-import type { MlccProduct, ProductFamily } from "../types";
+import type { MlccProduct, ProductFamily, UpcLookupResponse } from "../types";
 
 const BASE = "/price-book";
 
@@ -55,13 +55,75 @@ export async function searchProducts(
   }
 }
 
-export async function getProductByUpc(upc: string): Promise<MlccProduct | null> {
+function mapUpcLookupBody(raw: Record<string, unknown>, resOk: boolean): UpcLookupResponse {
+  const out: UpcLookupResponse = {
+    ok: Boolean(raw.ok),
+    matchMode:
+      raw.matchMode === "confident" || raw.matchMode === "ambiguous"
+        ? raw.matchMode
+        : undefined,
+    needsUserConfirmation: Boolean(raw.needsUserConfirmation),
+    message: raw.message != null ? String(raw.message) : undefined,
+    error: raw.error != null ? String(raw.error) : undefined,
+    productName: raw.productName != null ? String(raw.productName) : undefined,
+    hint: raw.hint != null ? String(raw.hint) : undefined,
+    upcProductName: raw.upcProductName != null ? String(raw.upcProductName) : undefined,
+    upcBrand: raw.upcBrand != null ? String(raw.upcBrand) : undefined,
+  };
+  if (raw.product && typeof raw.product === "object") {
+    out.product = mapRow(raw.product as Record<string, unknown>);
+  }
+  if (Array.isArray(raw.candidates)) {
+    out.candidates = raw.candidates.map((c) => mapRow(c as Record<string, unknown>));
+  }
+  if (!resOk && !out.error) {
+    out.ok = false;
+    out.error = "network_error";
+  }
+  return out;
+}
+
+export async function getProductByUpc(upc: string): Promise<UpcLookupResponse> {
   const u = upc.trim();
-  if (!u) return null;
+  if (!u) return { ok: false, error: "invalid_upc" };
   try {
     const res = await fetch(`${BASE}/upc/${encodeURIComponent(u)}`, { credentials: "same-origin" });
-    const data = (await res.json()) as { ok?: boolean; product?: unknown; error?: string };
-    if (!res.ok || !data.ok || !data.product) return null;
+    let raw: Record<string, unknown>;
+    try {
+      raw = (await res.json()) as Record<string, unknown>;
+    } catch {
+      return { ok: false, error: "network_error" };
+    }
+    return mapUpcLookupBody(raw, res.ok);
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
+}
+
+export async function confirmUpcMapping(
+  upc: string,
+  mlccCode: string,
+  upcProductName?: string,
+  upcBrand?: string,
+): Promise<MlccProduct | null> {
+  const u = upc.trim();
+  if (!u) return null;
+  const token = import.meta.env.VITE_UPC_CONFIRM_TOKEN as string | undefined;
+  /** @type {Record<string, string>} */
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token != null && String(token).trim() !== "") {
+    const t = String(token).trim();
+    headers.Authorization = t.startsWith("Bearer ") ? t : `Bearer ${t}`;
+  }
+  try {
+    const res = await fetch(`${BASE}/upc/${encodeURIComponent(u)}/confirm`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers,
+      body: JSON.stringify({ mlccCode, upcProductName, upcBrand }),
+    });
+    const data = (await res.json()) as { ok?: boolean; product?: unknown };
+    if (!res.ok || !data.ok || !data.product || typeof data.product !== "object") return null;
     return mapRow(data.product as Record<string, unknown>);
   } catch {
     return null;
@@ -75,8 +137,8 @@ export async function getProductByCode(mlccCode: string): Promise<MlccProduct | 
   const exact = items.find((i) => i.code === code);
   if (exact) return exact;
   if (/^\d+$/.test(code) && code.length >= 8) {
-    const viaUpc = await getProductByUpc(code);
-    if (viaUpc) return viaUpc;
+    const upcRes = await getProductByUpc(code);
+    if (upcRes.matchMode === "confident" && upcRes.product) return upcRes.product;
   }
   return null;
 }

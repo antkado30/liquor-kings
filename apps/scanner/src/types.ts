@@ -21,6 +21,20 @@ export interface ProductFamily {
   sizes: MlccProduct[];
 }
 
+export interface UpcLookupResponse {
+  ok: boolean;
+  product?: MlccProduct;
+  matchMode?: "confident" | "ambiguous";
+  needsUserConfirmation?: boolean;
+  candidates?: MlccProduct[];
+  upcProductName?: string;
+  upcBrand?: string;
+  message?: string;
+  error?: string;
+  productName?: string;
+  hint?: string;
+}
+
 export interface CartItem {
   product: MlccProduct;
   quantity: number;
