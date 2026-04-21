@@ -12,6 +12,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5174,
+    allowedHosts: [".ngrok-free.dev", ".ngrok.io", ".ngrok-free.app", "localhost", "10.1.10.9"],
     proxy: {
       "/operator-review": {
         target: proxyTarget,

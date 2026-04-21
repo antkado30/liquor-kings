@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { MlccProduct, ProductFamily } from "../types";
-import { ProductSizeSelector } from "./ProductSizeSelector";
+import { pickInitialSizeByCode, ProductSizeSelector } from "./ProductSizeSelector";
 
 function money(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -9,12 +9,16 @@ function money(n: number | null | undefined): string {
 
 type ProductCardProps = {
   family: ProductFamily;
+  /** MLCC code of the product that was scanned or tapped — selects matching size tab on open. */
+  initialSelectedCode?: string;
   onAddToCart: (product: MlccProduct, quantity: number) => void;
   onDismiss: () => void;
 };
 
-export function ProductCard({ family, onAddToCart, onDismiss }: ProductCardProps) {
-  const [selectedProduct, setSelectedProduct] = useState<MlccProduct>(() => family.sizes[0]!);
+export function ProductCard({ family, initialSelectedCode, onAddToCart, onDismiss }: ProductCardProps) {
+  const [selectedProduct, setSelectedProduct] = useState<MlccProduct>(() =>
+    pickInitialSizeByCode(family.sizes, initialSelectedCode),
+  );
   const [quantity, setQuantity] = useState(1);
 
   const bump = (delta: number) => {
@@ -43,7 +47,11 @@ export function ProductCard({ family, onAddToCart, onDismiss }: ProductCardProps
         <p className="product-card-category muted">{cat}</p>
 
         <p className="label">Size</p>
-        <ProductSizeSelector sizes={family.sizes} selected={selectedProduct} onSelect={setSelectedProduct} />
+        <ProductSizeSelector
+          sizes={family.sizes}
+          selected={selectedProduct}
+          onSelect={setSelectedProduct}
+        />
 
         <dl className="product-card-details">
           <div>

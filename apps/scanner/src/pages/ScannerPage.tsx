@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getProductByCode, getProductByUpc, getProductFamily } from "../api/catalog";
+import { Sentry } from "../lib/sentry";
 import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
 import { ProductCard } from "../components/ProductCard";
@@ -23,6 +24,8 @@ export function ScannerPage() {
   const [scannerActive, setScannerActive] = useState(true);
   const [showProductCard, setShowProductCard] = useState(false);
   const [currentFamily, setCurrentFamily] = useState<ProductFamily | null>(null);
+  /** MLCC code of the row that opened the card — drives initial size tab in ProductCard. */
+  const [productCardInitialCode, setProductCardInitialCode] = useState<string | undefined>(undefined);
   const [showCart, setShowCart] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [notFoundMsg, setNotFoundMsg] = useState(false);
@@ -31,6 +34,7 @@ export function ScannerPage() {
     upc: string;
     upcProductName: string;
     upcBrand?: string;
+    confidenceWarning?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -48,6 +52,7 @@ export function ScannerPage() {
   const openFamily = useCallback(async (p: MlccProduct) => {
     const fam = await getProductFamily(p.code);
     if (fam) {
+      setProductCardInitialCode(p.code);
       setCurrentFamily(fam);
       setShowProductCard(true);
     }
@@ -60,6 +65,7 @@ export function ScannerPage() {
       if (found) {
         const fam = await getProductFamily(found.code);
         if (fam) {
+          setProductCardInitialCode(found.code);
           setCurrentFamily(fam);
           setShowProductCard(true);
         }
@@ -69,8 +75,19 @@ export function ScannerPage() {
       const upcRes: UpcLookupResponse = await getProductByUpc(trimmed);
 
       if (upcRes.ok && upcRes.product && !upcRes.needsUserConfirmation) {
+        if (upcRes.confidenceWarning) {
+          const capture = Sentry?.captureMessage;
+          if (typeof capture === "function") {
+            capture("upc_confidence_warning", {
+              level: "info",
+              tags: { upc_confidence_warning: upcRes.confidenceWarning },
+              extra: { upc: trimmed, confidenceWarning: upcRes.confidenceWarning, path: "confident" },
+            });
+          }
+        }
         const fam = await getProductFamily(upcRes.product.code);
         if (fam) {
+          setProductCardInitialCode(upcRes.product.code);
           setCurrentFamily(fam);
           setShowProductCard(true);
         }
@@ -78,11 +95,22 @@ export function ScannerPage() {
       }
 
       if (upcRes.needsUserConfirmation && upcRes.candidates && upcRes.candidates.length > 0) {
+        if (upcRes.confidenceWarning) {
+          const capture = Sentry?.captureMessage;
+          if (typeof capture === "function") {
+            capture("upc_confidence_warning", {
+              level: "info",
+              tags: { upc_confidence_warning: upcRes.confidenceWarning },
+              extra: { upc: trimmed, confidenceWarning: upcRes.confidenceWarning },
+            });
+          }
+        }
         setUpcCandidates({
           candidates: upcRes.candidates,
           upc: trimmed,
           upcProductName: upcRes.upcProductName ?? "",
           upcBrand: upcRes.upcBrand,
+          confidenceWarning: upcRes.confidenceWarning,
         });
         return;
       }
@@ -155,15 +183,18 @@ export function ScannerPage() {
       {showProductCard && currentFamily ? (
         <ProductCard
           family={currentFamily}
+          initialSelectedCode={productCardInitialCode}
           onDismiss={() => {
             setShowProductCard(false);
             setCurrentFamily(null);
+            setProductCardInitialCode(undefined);
           }}
           onAddToCart={(product, quantity) => {
             cart.addItem(product, quantity);
             setToast("Added to cart");
             setShowProductCard(false);
             setCurrentFamily(null);
+            setProductCardInitialCode(undefined);
           }}
         />
       ) : null}
@@ -180,17 +211,36 @@ export function ScannerPage() {
       ) : null}
 
       {upcCandidates ? (
-        <UpcCandidatePicker
-          upc={upcCandidates.upc}
-          candidates={upcCandidates.candidates}
-          upcProductName={upcCandidates.upcProductName}
-          upcBrand={upcCandidates.upcBrand}
-          onCancel={() => setUpcCandidates(null)}
-          onSelect={(product) => {
-            setUpcCandidates(null);
-            void openFamily(product);
-          }}
-        />
+        <>
+          {upcCandidates.confidenceWarning === "category_filter_excluded_all" ? (
+            <p
+              className="muted small"
+              style={{
+                position: "fixed",
+                top: 8,
+                left: 12,
+                right: 12,
+                zIndex: 1001,
+                textAlign: "center",
+                margin: 0,
+                pointerEvents: "none",
+              }}
+            >
+              Best matches — please verify carefully
+            </p>
+          ) : null}
+          <UpcCandidatePicker
+            upc={upcCandidates.upc}
+            candidates={upcCandidates.candidates}
+            upcProductName={upcCandidates.upcProductName}
+            upcBrand={upcCandidates.upcBrand}
+            onCancel={() => setUpcCandidates(null)}
+            onSelect={(product) => {
+              setUpcCandidates(null);
+              void openFamily(product);
+            }}
+          />
+        </>
       ) : null}
     </div>
   );

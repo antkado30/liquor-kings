@@ -609,13 +609,47 @@ select {
   flex-wrap: wrap;
 }
 
-.drawer-qty {
-  width: 56px;
-  min-height: 40px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: var(--bg);
+.qty-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.qty-stepper__btn {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(108, 99, 255, 0.45);
+  background: rgba(108, 99, 255, 0.22);
+  color: var(--text);
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.qty-stepper__btn:active:not(:disabled) {
+  transform: scale(0.96);
+  background: rgba(108, 99, 255, 0.42);
+  border-color: var(--accent);
+}
+
+.qty-stepper__btn:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.qty-stepper__value {
+  min-width: 40px;
   text-align: center;
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+  color: var(--text);
 }
 
 .drawer-line-total {

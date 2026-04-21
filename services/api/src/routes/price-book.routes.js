@@ -4,6 +4,9 @@ import { findMlccCandidatesForUpc, lookupUpcFromUpcitemdb } from "../lib/upcitem
 import { BRAND_ALIAS_MAP, resolveSearchAliases } from "../mlcc/mlcc-brand-aliases.js";
 import { getLatestPriceBookRun, ingestMlccPriceBook } from "../mlcc/mlcc-price-book-ingestor.js";
 
+/** When true, picker confirmations persist UPC onto `mlcc_items` (local cache for future scans). */
+const ENABLE_PICKER_SELECTION_CACHE = false;
+
 const router = express.Router();
 
 function requireServiceRole(req, res) {
@@ -220,6 +223,98 @@ function queueUpcLookupLog(row) {
   }
 }
 
+/**
+ * Category keywords inferred from UPCitemdb / OFF product name for MLCC candidate filtering.
+ * @param {string} productName
+ * @returns {string[]}
+ */
+function extractCategoryHints(productName) {
+  const s = String(productName ?? "").toLowerCase();
+  const hints = [];
+  const add = (h) => {
+    if (h && !hints.includes(h)) hints.push(h);
+  };
+  if (/\b(vodka)\b/.test(s)) add("vodka");
+  if (/\b(whiskey|whisky|bourbon|rye|scotch)\b/.test(s)) add("whiskey");
+  if (/\b(rum)\b/.test(s)) add("rum");
+  if (/\b(gin)\b/.test(s)) add("gin");
+  if (/\b(tequila|mezcal)\b/.test(s)) add("tequila");
+  if (/\b(cognac|brandy|armagnac)\b/.test(s)) add("brandy");
+  if (/\b(liqueur|cordial)\b/.test(s)) add("liqueur");
+  if (/\b(cocktail|premix|prepared)\b/.test(s)) add("cocktail");
+  if (/\b(wine)\b/.test(s)) add("wine");
+  if (/\b(beer|ale|lager)\b/.test(s)) add("beer");
+  return hints;
+}
+
+/**
+ * @param {string | null | undefined} mlccCategory
+ * @param {string[]} hints
+ */
+function matchesCategory(mlccCategory, hints) {
+  if (!hints || hints.length === 0) return true;
+  const cat = String(mlccCategory ?? "").toLowerCase();
+  return hints.some((h) => cat.includes(h));
+}
+
+/**
+ * @param {object[]} candidates mlcc_items rows
+ * @param {string[]} hints from extractCategoryHints
+ */
+function filterMlccCandidatesByCategory(candidates, hints) {
+  if (!hints || hints.length === 0) return [...candidates];
+  const hasVodka = hints.includes("vodka");
+  const hasCocktail = hints.includes("cocktail");
+  return candidates.filter((c) => {
+    const catLower = String(c.category ?? "").toLowerCase();
+    if (hasVodka && !hasCocktail) {
+      if (catLower.includes("prepared cocktails") || catLower.includes("cocktail")) return false;
+    }
+    return matchesCategory(c.category, hints);
+  });
+}
+
+/**
+ * @param {{ candidates?: object[] }} mlcc
+ * @param {string} productName
+ * @returns {{ candidates: object[]; confidenceWarning?: string }}
+ */
+function applyCategoryHintsToCandidates(mlcc, productName) {
+  const unfiltered = [...(mlcc.candidates ?? [])];
+  const hints = extractCategoryHints(productName);
+  let filtered = filterMlccCandidatesByCategory(unfiltered, hints);
+  let confidenceWarning;
+  if (filtered.length === 0 && unfiltered.length > 0) {
+    confidenceWarning = "category_filter_excluded_all";
+    filtered = unfiltered;
+  }
+  return { candidates: filtered, confidenceWarning };
+}
+
+/**
+ * Dedupe repeated words, strip size/proof noise for search auto-fill.
+ * @param {string} name
+ * @returns {string}
+ */
+function cleanProductNameForSearch(name) {
+  const raw = String(name ?? "").trim();
+  const parts = raw.split(/\s+/).filter(Boolean);
+  const out = [];
+  for (const w of parts) {
+    const lw = w.toLowerCase();
+    if (out.length && out[out.length - 1].toLowerCase() === lw) continue;
+    out.push(w);
+  }
+  let s = out.join(" ");
+  s = s.replace(/,\s*\d+(?:\.\d+)?\s*m\s*l\b/gi, "");
+  s = s.replace(/,\s*\d+(?:\.\d+)?\s*l\b/gi, "");
+  s = s.replace(/\(\s*\d+(?:\.\d+)?\s*%\s*abv\s*\)/gi, "");
+  s = s.replace(/\(\s*\d+(?:\.\d+)?\s*proof\s*\)/gi, "");
+  s = s.replace(/\b\d+(?:\.\d+)?\s*proof\b/gi, "");
+  s = s.replace(/\s+/g, " ").replace(/^[, ]+|[, ]+$/g, "").trim();
+  return s;
+}
+
 export async function priceBookUpcHandler(req, res) {
   try {
     const upc = String(req.params.upc ?? "").trim();
@@ -255,8 +350,10 @@ export async function priceBookUpcHandler(req, res) {
     if (upcDb.ok && upcDb.product) {
       const upcItem = upcDb.product;
       const mlcc = await findMlccCandidatesForUpc(supabase, upcItem);
-      if (mlcc.confident && mlcc.candidates.length === 1) {
-        const match = mlcc.candidates[0];
+      const { candidates, confidenceWarning } = applyCategoryHintsToCandidates(mlcc, upcItem.name);
+
+      if (candidates.length === 1) {
+        const match = candidates[0];
         const { error: upErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", match.id);
         if (upErr) {
           console.log("[price-book-upc] mlcc_items upc cache update failed", upErr.message);
@@ -271,9 +368,14 @@ export async function priceBookUpcHandler(req, res) {
           raw_api_response: upcDb.raw ?? null,
         });
         console.log("[price-book-upc] matched via upcitemdb (confident)", product.id);
-        return res.json({ ok: true, product, matchMode: "confident" });
+        return res.json({
+          ok: true,
+          product,
+          matchMode: "confident",
+          ...(confidenceWarning ? { confidenceWarning } : {}),
+        });
       }
-      if (mlcc.candidates.length > 1) {
+      if (candidates.length > 1) {
         queueUpcLookupLog({
           upc,
           matched_mlcc_code: null,
@@ -285,10 +387,11 @@ export async function priceBookUpcHandler(req, res) {
           ok: true,
           needsUserConfirmation: true,
           matchMode: "ambiguous",
-          candidates: mlcc.candidates,
+          candidates,
           upcProductName: upcItem.name,
           upcBrand: upcItem.brand,
           message: "Multiple products match. User must select.",
+          ...(confidenceWarning ? { confidenceWarning } : {}),
         });
       }
       queueUpcLookupLog({
@@ -298,10 +401,12 @@ export async function priceBookUpcHandler(req, res) {
         source: "upcitemdb",
         raw_api_response: upcDb.raw ?? null,
       });
+      const rawName = upcItem.name;
       return res.json({
         ok: false,
         error: "upc_found_but_no_mlcc_match",
-        productName: upcItem.name,
+        productName: cleanProductNameForSearch(rawName),
+        upcProductNameRaw: rawName,
         hint: "search_by_name",
       });
     }
@@ -376,8 +481,13 @@ export async function priceBookUpcHandler(req, res) {
       images: [],
     };
     const offMlcc = await findMlccCandidatesForUpc(supabase, offUpcItem);
-    if (offMlcc.confident && offMlcc.candidates.length === 1) {
-      const offMatch = offMlcc.candidates[0];
+    const {
+      candidates: offCandidates,
+      confidenceWarning: offConfidenceWarning,
+    } = applyCategoryHintsToCandidates(offMlcc, offUpcItem.name);
+
+    if (offCandidates.length === 1) {
+      const offMatch = offCandidates[0];
       const { error: offUpErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", offMatch.id);
       if (offUpErr) {
         console.log("[price-book-upc] mlcc_items upc cache update (off) failed", offUpErr.message);
@@ -396,9 +506,14 @@ export async function priceBookUpcHandler(req, res) {
         raw_api_response: offJson,
       });
       console.log("[price-book-upc] matched via open food facts (confident)", product.id);
-      return res.json({ ok: true, product, matchMode: "confident" });
+      return res.json({
+        ok: true,
+        product,
+        matchMode: "confident",
+        ...(offConfidenceWarning ? { confidenceWarning: offConfidenceWarning } : {}),
+      });
     }
-    if (offMlcc.candidates.length > 1) {
+    if (offCandidates.length > 1) {
       queueUpcLookupLog({
         upc,
         matched_mlcc_code: null,
@@ -410,10 +525,11 @@ export async function priceBookUpcHandler(req, res) {
         ok: true,
         needsUserConfirmation: true,
         matchMode: "ambiguous",
-        candidates: offMlcc.candidates,
+        candidates: offCandidates,
         upcProductName: offUpcItem.name,
         upcBrand: offUpcItem.brand,
         message: "Multiple products match. User must select.",
+        ...(offConfidenceWarning ? { confidenceWarning: offConfidenceWarning } : {}),
       });
     }
 
@@ -425,10 +541,12 @@ export async function priceBookUpcHandler(req, res) {
       source: "open_food_facts",
       raw_api_response: offJson,
     });
+    const rawOffName = nameGuess.trim();
     return res.json({
       ok: false,
       error: "upc_found_but_no_mlcc_match",
-      productName: nameGuess.trim(),
+      productName: cleanProductNameForSearch(rawOffName),
+      upcProductNameRaw: rawOffName,
       hint: "search_by_name",
     });
   } catch (e) {
@@ -462,13 +580,22 @@ router.post("/upc/:upc/confirm", async (req, res) => {
       return res.json({ ok: false, error: "mlcc_code_not_found" });
     }
 
-    const { error: upErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", row.id);
-    if (upErr) {
-      return res.status(500).json({ ok: false, error: upErr.message });
+    let cached = false;
+    if (ENABLE_PICKER_SELECTION_CACHE) {
+      const { error: upErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", row.id);
+      if (upErr) {
+        return res.status(500).json({ ok: false, error: upErr.message });
+      }
+      cached = true;
+    } else {
+      console.log(
+        "[price-book-upc] confirm: picker selection applied for this scan only; UPC not persisted (ENABLE_PICKER_SELECTION_CACHE=false)",
+        { upc, mlccCode },
+      );
     }
 
     const { data: refreshed } = await supabase.from("mlcc_items").select("*").eq("id", row.id).maybeSingle();
-    const product = refreshed ?? { ...row, upc };
+    const product = refreshed ?? (ENABLE_PICKER_SELECTION_CACHE ? { ...row, upc } : row);
 
     const upcProductName =
       typeof body.upcProductName === "string" ? body.upcProductName.trim() || null : null;
@@ -479,10 +606,10 @@ router.post("/upc/:upc/confirm", async (req, res) => {
       matched_product_name: product.name ?? null,
       source: "manual_confirm",
       raw_api_response:
-        upcProductName || upcBrand ? { upcProductName, upcBrand } : null,
+        upcProductName || upcBrand ? { upcProductName, upcBrand, cached } : { cached },
     });
 
-    return res.json({ ok: true, product });
+    return res.json({ ok: true, product, cached });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return res.status(500).json({ ok: false, error: msg });

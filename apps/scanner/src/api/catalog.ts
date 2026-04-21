@@ -66,9 +66,13 @@ function mapUpcLookupBody(raw: Record<string, unknown>, resOk: boolean): UpcLook
     message: raw.message != null ? String(raw.message) : undefined,
     error: raw.error != null ? String(raw.error) : undefined,
     productName: raw.productName != null ? String(raw.productName) : undefined,
+    upcProductNameRaw: raw.upcProductNameRaw != null ? String(raw.upcProductNameRaw) : undefined,
     hint: raw.hint != null ? String(raw.hint) : undefined,
     upcProductName: raw.upcProductName != null ? String(raw.upcProductName) : undefined,
     upcBrand: raw.upcBrand != null ? String(raw.upcBrand) : undefined,
+    confidenceWarning:
+      raw.confidenceWarning != null ? String(raw.confidenceWarning) : undefined,
+    cached: typeof raw.cached === "boolean" ? raw.cached : undefined,
   };
   if (raw.product && typeof raw.product === "object") {
     out.product = mapRow(raw.product as Record<string, unknown>);

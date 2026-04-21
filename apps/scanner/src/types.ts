@@ -32,7 +32,13 @@ export interface UpcLookupResponse {
   message?: string;
   error?: string;
   productName?: string;
+  /** Raw UPCitemdb / OFF product title when `productName` is cleaned for search. */
+  upcProductNameRaw?: string;
   hint?: string;
+  /** Server: category filter excluded all candidates; client showed unfiltered list. */
+  confidenceWarning?: string;
+  /** POST /upc/:upc/confirm: whether UPC was persisted on mlcc_items. */
+  cached?: boolean;
 }
 
 export interface CartItem {

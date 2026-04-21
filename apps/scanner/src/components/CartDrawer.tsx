@@ -1,4 +1,4 @@
-import type { CartContextValue } from "../hooks/useCart";
+import { cartLineId, type CartContextValue } from "../hooks/useCart";
 
 function money(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
@@ -11,7 +11,7 @@ type CartDrawerProps = {
 };
 
 export function CartDrawer({ cart, onClose, onSubmit }: CartDrawerProps) {
-  const { items, totalCost, clearCart, updateQuantity, removeItem } = cart;
+  const { items, totalCost, clearCart, incrementQuantity, decrementQuantity, removeItem } = cart;
 
   return (
     <div className="drawer-backdrop" onClick={onClose} role="presentation">
@@ -31,23 +31,36 @@ export function CartDrawer({ cart, onClose, onSubmit }: CartDrawerProps) {
               const unit = line.product.licensee_price ?? 0;
               const lineTotal = unit * line.quantity;
               const size = line.product.bottle_size_label ?? `${line.product.bottle_size_ml ?? ""} ML`;
+              const lineId = cartLineId(line.product);
+              const atMin = line.quantity <= 1;
               return (
-                <li key={line.product.id} className="drawer-line">
+                <li key={lineId} className="drawer-line">
                   <div className="drawer-line-main">
                     <div className="drawer-line-title">{line.product.name}</div>
                     <div className="muted small">{size}</div>
                     <div className="drawer-line-controls">
-                      <input
-                        className="drawer-qty"
-                        type="number"
-                        min={1}
-                        max={99}
-                        value={line.quantity}
-                        onChange={(e) => {
-                          const v = Number.parseInt(e.target.value, 10);
-                          if (Number.isFinite(v)) updateQuantity(line.product.code, Math.min(99, Math.max(1, v)));
-                        }}
-                      />
+                      <div className="qty-stepper" role="group" aria-label="Quantity">
+                        <button
+                          type="button"
+                          className="qty-stepper__btn"
+                          aria-label="Decrease quantity"
+                          disabled={atMin}
+                          onClick={() => decrementQuantity(lineId)}
+                        >
+                          −
+                        </button>
+                        <span className="qty-stepper__value" aria-live="polite">
+                          {line.quantity}
+                        </span>
+                        <button
+                          type="button"
+                          className="qty-stepper__btn"
+                          aria-label="Increase quantity"
+                          onClick={() => incrementQuantity(lineId)}
+                        >
+                          +
+                        </button>
+                      </div>
                       <button
                         type="button"
                         className="btn text danger"
