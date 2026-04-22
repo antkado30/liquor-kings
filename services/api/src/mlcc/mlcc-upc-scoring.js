@@ -98,6 +98,10 @@ const PREMIUM_QUALIFIERS = new Set([
   "COMMEMORATIVE",
   "DISTILLERY",
   "GIFT_SET",
+  "RYE",
+  "BOURBON",
+  "MALT",
+  "SCOTCH",
 ]);
 
 /** Union of all tokens `extractDistinguishingMarkers` looks for in names. */
@@ -107,6 +111,50 @@ const DISTINGUISHING_QUALIFIERS = new Set([
   ...PREMIUM_QUALIFIERS,
 ]);
 const SERIES_ROMAN = new Set(["I", "II", "III", "IV", "V", "X", "XV", "XX", "XXV", "XXX", "L"]);
+
+/**
+ * Levenshtein distance for short ASCII tokens (qualifier names).
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function levenshteinDistance(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  /** @type {number[]} */
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
+/**
+ * Match a typo'd token to a canonical qualifier (edit distance ≤ 1). Short tokens (≤3)
+ * are not fuzzy-matched to limit false positives.
+ * @param {string} token
+ * @param {Set<string>} qualifierSet
+ * @returns {string | null}
+ */
+function fuzzyMatchQualifier(token, qualifierSet) {
+  const u = String(token ?? "").toUpperCase();
+  if (u.length < 4) return null;
+  /** @type {string[]} */
+  const hits = [];
+  for (const q of qualifierSet) {
+    if (levenshteinDistance(u, q) <= 1) hits.push(q);
+  }
+  if (!hits.length) return null;
+  hits.sort();
+  return hits[0];
+}
 
 /**
  * MLCC uses "W/" for gift-with-purchase bundle copy (e.g. "W/WATER BOTTLE", trailing "W/").
@@ -301,8 +349,21 @@ export function extractDistinguishingMarkers(name) {
 
   const qualifiers = [];
   const series = [];
-  for (const word of tokens) {
-    if (DISTINGUISHING_QUALIFIERS.has(word) && !qualifiers.includes(word)) qualifiers.push(word);
+  for (let wi = 0; wi < tokens.length; wi++) {
+    const word = tokens[wi];
+    let canon = null;
+    if (DISTINGUISHING_QUALIFIERS.has(word)) {
+      canon = word;
+    } else if (word.length >= 4) {
+      canon = fuzzyMatchQualifier(word, DISTINGUISHING_QUALIFIERS);
+    }
+    if (canon) {
+      if (canon === "BOURBON") {
+        const next = tokens[wi + 1] ?? "";
+        if (next === "WHISKY" || next === "WHISKEY") continue;
+      }
+      if (!qualifiers.includes(canon)) qualifiers.push(canon);
+    }
     if (SERIES_ROMAN.has(word) && !series.includes(word)) series.push(word);
   }
   if (giftSet && !qualifiers.includes("GIFT_SET")) qualifiers.push("GIFT_SET");
