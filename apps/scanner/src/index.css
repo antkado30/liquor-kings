@@ -319,6 +319,50 @@ select {
   color: #fecaca;
 }
 
+.toast--warning {
+  background: rgba(251, 146, 60, 0.18);
+  color: #fed7aa;
+  border: 1px solid rgba(251, 146, 60, 0.35);
+}
+
+.price-book-age-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 12px 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.price-book-age-banner--aging {
+  background: rgba(250, 204, 21, 0.14);
+  color: #fde68a;
+  border: 1px solid rgba(250, 204, 21, 0.35);
+}
+
+.price-book-age-banner--stale {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fecaca;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+}
+
+.price-book-age-banner__close {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  margin: -6px -8px -6px 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .product-card-backdrop {
   position: fixed;
   inset: 0;
@@ -340,6 +384,45 @@ select {
   padding: 16px 16px 20px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   animation: sheetUp 0.2s ease-out;
+  display: flex;
+  flex-direction: column;
+}
+
+.product-card__image {
+  width: 120px;
+  height: 120px;
+  border-radius: 8px;
+  object-fit: cover;
+  margin: 0 auto 12px;
+  display: block;
+}
+
+.product-card-flag-row {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.product-card__flag-button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.product-card__flag-button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: var(--text);
+}
+
+.product-card__flag-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 @keyframes sheetUp {
@@ -754,6 +837,14 @@ select {
   padding: 0;
   max-height: 48vh;
   overflow: auto;
+}
+
+.upc-candidate-row__image {
+  width: 60px;
+  height: 60px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .upc-candidate-row {

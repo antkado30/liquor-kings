@@ -14,11 +14,21 @@ export interface MlccProduct {
   min_shelf_price: number | null;
   base_price: number | null;
   is_new_item: boolean;
+  /** UPCitemdb product image when present (scanner UPC flows). */
+  imageUrl?: string | null;
 }
 
 export interface ProductFamily {
   baseName: string;
   sizes: MlccProduct[];
+}
+
+export interface UpcCandidateScore {
+  code: string;
+  name: string;
+  score: number;
+  disqualified: boolean;
+  reasons: string[];
 }
 
 export interface UpcLookupResponse {
@@ -39,6 +49,10 @@ export interface UpcLookupResponse {
   confidenceWarning?: string;
   /** POST /upc/:upc/confirm: whether UPC was persisted on mlcc_items. */
   cached?: boolean;
+  /** Top candidate total score (0–100) from multi-signal UPC matching. */
+  confidenceScore?: number;
+  scoringBreakdown?: Record<string, string | number | null>;
+  allCandidateScores?: UpcCandidateScore[];
 }
 
 export interface CartItem {

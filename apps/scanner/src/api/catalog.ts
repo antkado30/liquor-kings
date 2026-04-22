@@ -1,6 +1,77 @@
-import type { MlccProduct, ProductFamily, UpcLookupResponse } from "../types";
+/**
+ * Scanner → price-book API client.
+ *
+ * Client env:
+ * - VITE_UPC_CONFIRM_TOKEN — optional Bearer token for POST /price-book/upc/:upc/confirm
+ *
+ * Server-side counterparts (documented on API): LK_CONFIDENT_MIN, LK_ADMIN_TOKEN, etc.
+ */
+import type { MlccProduct, ProductFamily, UpcCandidateScore, UpcLookupResponse } from "../types";
 
 const BASE = "/price-book";
+
+type FetchRetryConfig = {
+  maxRetries?: number;
+  baseDelayMs?: number;
+  timeoutMs?: number;
+};
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function fetchWithRetry(
+  url: string,
+  options?: RequestInit,
+  config?: FetchRetryConfig,
+): Promise<Response> {
+  const maxRetries = config?.maxRetries ?? 3;
+  const baseDelayMs = config?.baseDelayMs ?? 1000;
+  const timeoutMs = config?.timeoutMs ?? 8000;
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        ...options,
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (res.status >= 400 && res.status < 500) {
+        return res;
+      }
+      if (res.status >= 500) {
+        lastErr = new Error(`HTTP ${res.status}`);
+        if (attempt < maxRetries - 1) {
+          const waitMs = baseDelayMs * 2 ** attempt;
+          if (import.meta.env.DEV) {
+            console.log("[catalog][retry]", JSON.stringify({ url, attempt, waitMs, status: res.status }));
+          }
+          await delay(waitMs);
+          continue;
+        }
+        throw new Error(`Network error after ${maxRetries} retries`);
+      }
+      return res;
+    } catch (e) {
+      clearTimeout(timer);
+      lastErr = e;
+      if (attempt < maxRetries - 1) {
+        const waitMs = baseDelayMs * 2 ** attempt;
+        if (import.meta.env.DEV) {
+          console.log("[catalog][retry]", JSON.stringify({ url, attempt, waitMs, network: true }));
+        }
+        await delay(waitMs);
+        continue;
+      }
+    }
+  }
+  throw new Error(
+    `Network error after ${maxRetries} retries: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
+  );
+}
 
 function num(v: unknown): number | null {
   if (v == null) return null;
@@ -16,6 +87,9 @@ function str(v: unknown): string | null {
 }
 
 function mapRow(row: Record<string, unknown>): MlccProduct {
+  const imageUrlRaw = row.imageUrl ?? row.image_url;
+  const imageUrl =
+    imageUrlRaw != null && String(imageUrlRaw).trim() !== "" ? String(imageUrlRaw).trim() : null;
   return {
     id: String(row.id ?? ""),
     code: String(row.code ?? ""),
@@ -32,6 +106,7 @@ function mapRow(row: Record<string, unknown>): MlccProduct {
     min_shelf_price: num(row.min_shelf_price),
     base_price: num(row.base_price),
     is_new_item: Boolean(row.is_new_item),
+    imageUrl,
   };
 }
 
@@ -45,14 +120,10 @@ export async function searchProducts(
   params.set("limit", String(limit));
   params.set("page", "1");
   if (options?.adaNumber) params.set("adaNumber", options.adaNumber);
-  try {
-    const res = await fetch(`${BASE}/items?${params.toString()}`, { credentials: "same-origin" });
-    const data = (await res.json()) as { ok?: boolean; items?: unknown[] };
-    if (!res.ok || !data.ok || !Array.isArray(data.items)) return [];
-    return data.items.map((r) => mapRow(r as Record<string, unknown>));
-  } catch {
-    return [];
-  }
+  const res = await fetchWithRetry(`${BASE}/items?${params.toString()}`, { credentials: "same-origin" });
+  const data = (await res.json()) as { ok?: boolean; items?: unknown[] };
+  if (!res.ok || !data.ok || !Array.isArray(data.items)) return [];
+  return data.items.map((r) => mapRow(r as Record<string, unknown>));
 }
 
 function mapUpcLookupBody(raw: Record<string, unknown>, resOk: boolean): UpcLookupResponse {
@@ -74,6 +145,35 @@ function mapUpcLookupBody(raw: Record<string, unknown>, resOk: boolean): UpcLook
       raw.confidenceWarning != null ? String(raw.confidenceWarning) : undefined,
     cached: typeof raw.cached === "boolean" ? raw.cached : undefined,
   };
+  if (raw.confidenceScore != null) {
+    const n = Number(raw.confidenceScore);
+    if (Number.isFinite(n)) out.confidenceScore = Math.round(n);
+  }
+  if (raw.scoringBreakdown != null && typeof raw.scoringBreakdown === "object" && !Array.isArray(raw.scoringBreakdown)) {
+    const b = raw.scoringBreakdown as Record<string, unknown>;
+    const breakdown: Record<string, string | number | null> = {};
+    for (const [k, v] of Object.entries(b)) {
+      if (typeof v === "number" && Number.isFinite(v)) breakdown[k] = v;
+      else if (typeof v === "string") breakdown[k] = v;
+      else if (v === null) breakdown[k] = null;
+      else if (typeof v === "boolean") breakdown[k] = v ? 1 : 0;
+    }
+    if (Object.keys(breakdown).length > 0) out.scoringBreakdown = breakdown;
+  }
+  if (Array.isArray(raw.allCandidateScores)) {
+    out.allCandidateScores = raw.allCandidateScores.map((row): UpcCandidateScore | null => {
+      if (!row || typeof row !== "object") return null;
+      const o = row as Record<string, unknown>;
+      const score = Number(o.score);
+      return {
+        code: String(o.code ?? ""),
+        name: String(o.name ?? ""),
+        score: Number.isFinite(score) ? score : 0,
+        disqualified: Boolean(o.disqualified),
+        reasons: Array.isArray(o.reasons) ? o.reasons.map((r) => String(r)) : [],
+      };
+    }).filter((x): x is UpcCandidateScore => x != null);
+  }
   if (raw.product && typeof raw.product === "object") {
     out.product = mapRow(raw.product as Record<string, unknown>);
   }
@@ -90,18 +190,14 @@ function mapUpcLookupBody(raw: Record<string, unknown>, resOk: boolean): UpcLook
 export async function getProductByUpc(upc: string): Promise<UpcLookupResponse> {
   const u = upc.trim();
   if (!u) return { ok: false, error: "invalid_upc" };
+  const res = await fetchWithRetry(`${BASE}/upc/${encodeURIComponent(u)}`, { credentials: "same-origin" });
+  let raw: Record<string, unknown>;
   try {
-    const res = await fetch(`${BASE}/upc/${encodeURIComponent(u)}`, { credentials: "same-origin" });
-    let raw: Record<string, unknown>;
-    try {
-      raw = (await res.json()) as Record<string, unknown>;
-    } catch {
-      return { ok: false, error: "network_error" };
-    }
-    return mapUpcLookupBody(raw, res.ok);
+    raw = (await res.json()) as Record<string, unknown>;
   } catch {
     return { ok: false, error: "network_error" };
   }
+  return mapUpcLookupBody(raw, res.ok);
 }
 
 export async function confirmUpcMapping(
@@ -119,19 +215,15 @@ export async function confirmUpcMapping(
     const t = String(token).trim();
     headers.Authorization = t.startsWith("Bearer ") ? t : `Bearer ${t}`;
   }
-  try {
-    const res = await fetch(`${BASE}/upc/${encodeURIComponent(u)}/confirm`, {
-      method: "POST",
-      credentials: "same-origin",
-      headers,
-      body: JSON.stringify({ mlccCode, upcProductName, upcBrand }),
-    });
-    const data = (await res.json()) as { ok?: boolean; product?: unknown };
-    if (!res.ok || !data.ok || !data.product || typeof data.product !== "object") return null;
-    return mapRow(data.product as Record<string, unknown>);
-  } catch {
-    return null;
-  }
+  const res = await fetchWithRetry(`${BASE}/upc/${encodeURIComponent(u)}/confirm`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers,
+    body: JSON.stringify({ mlccCode, upcProductName, upcBrand }),
+  });
+  const data = (await res.json()) as { ok?: boolean; product?: unknown };
+  if (!res.ok || !data.ok || !data.product || typeof data.product !== "object") return null;
+  return mapRow(data.product as Record<string, unknown>);
 }
 
 export async function getProductByCode(mlccCode: string): Promise<MlccProduct | null> {
@@ -147,41 +239,76 @@ export async function getProductByCode(mlccCode: string): Promise<MlccProduct | 
   return null;
 }
 
-function dedupeById(products: MlccProduct[]): MlccProduct[] {
-  const seen = new Set<string>();
-  const out: MlccProduct[] = [];
-  for (const p of products) {
-    if (!p.id || seen.has(p.id)) continue;
-    seen.add(p.id);
-    out.push(p);
+export async function flagIncorrectMatch(
+  upc: string,
+  reason: string,
+): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  const u = upc.trim();
+  if (!u) return { ok: false, message: "Invalid UPC" };
+  const res = await fetchWithRetry(`${BASE}/upc/${encodeURIComponent(u)}/flag`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { ok: false, message: "Could not flag match right now, please try again" };
   }
-  return out;
+  if (!res.ok || raw.ok !== true) {
+    const err = raw.error != null ? String(raw.error) : "Could not flag match right now, please try again";
+    return { ok: false, message: err };
+  }
+  return {
+    ok: true,
+    message:
+      raw.message != null && String(raw.message).trim() !== ""
+        ? String(raw.message)
+        : "Match flagged thank you for helping improve the system",
+  };
 }
 
 export async function getProductFamily(mlccCode: string): Promise<ProductFamily | null> {
-  const matched = await getProductByCode(mlccCode);
-  if (!matched) return null;
-
-  const searchKey = (matched.brand_family ?? matched.name).trim() || matched.name;
-  const related = await searchProducts(searchKey, { limit: 100 });
-
-  const bf = matched.brand_family;
-  let sizes: MlccProduct[];
-  if (bf) {
-    sizes = related.filter((p) => p.brand_family === bf);
-  } else {
-    sizes = related.filter((p) => p.code === matched.code || p.name === matched.name);
-  }
-
-  if (!sizes.some((s) => s.id === matched.id)) {
-    sizes = [matched, ...sizes];
-  }
-
-  sizes = dedupeById(sizes);
-  sizes.sort((a, b) => (a.bottle_size_ml ?? 0) - (b.bottle_size_ml ?? 0));
-
-  return {
-    baseName: matched.name,
-    sizes,
+  const code = mlccCode.trim();
+  if (!code) return null;
+  const res = await fetchWithRetry(`${BASE}/items/${encodeURIComponent(code)}/family`, {
+    credentials: "same-origin",
+  });
+  const data = (await res.json()) as {
+    ok?: boolean;
+    baseName?: unknown;
+    sizes?: unknown[];
+    error?: string;
   };
+  if (!res.ok || !data.ok || !Array.isArray(data.sizes)) {
+    return null;
+  }
+  const sizes = data.sizes.map((r) => mapRow(r as Record<string, unknown>));
+  const baseName =
+    typeof data.baseName === "string" && data.baseName.trim() !== ""
+      ? data.baseName.trim()
+      : sizes[0]?.name ?? "";
+  return { baseName, sizes };
+}
+
+export type PriceBookStatusResponse = {
+  ok: boolean;
+  priceBookDate?: string | null;
+  daysSinceUpdate?: number | null;
+  status?: "fresh" | "aging" | "stale";
+  latestRun?: unknown;
+  error?: string;
+};
+
+export async function getPriceBookStatus(): Promise<PriceBookStatusResponse> {
+  const res = await fetchWithRetry(`${BASE}/status`, { credentials: "same-origin" });
+  try {
+    const raw = (await res.json()) as PriceBookStatusResponse;
+    if (!res.ok) return { ok: false, error: raw.error ?? "status_failed" };
+    return raw;
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
 }

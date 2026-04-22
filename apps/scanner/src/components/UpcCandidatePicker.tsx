@@ -1,9 +1,23 @@
+import { useState } from "react";
 import { confirmUpcMapping } from "../api/catalog";
 import type { MlccProduct } from "../types";
 
 function money(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+}
+
+function CandidateThumb({ url }: { url: string | null | undefined }) {
+  const [hide, setHide] = useState(false);
+  if (!url || hide) return null;
+  return (
+    <img
+      className="upc-candidate-row__image"
+      src={url}
+      alt=""
+      onError={() => setHide(true)}
+    />
+  );
 }
 
 type UpcCandidatePickerProps = {
@@ -47,6 +61,7 @@ export function UpcCandidatePicker({
             return (
               <li key={c.id}>
                 <button type="button" className="upc-candidate-row" onClick={() => void handlePick(c)}>
+                  <CandidateThumb url={c.imageUrl} />
                   <div className="upc-candidate-row-body">
                     <div className="upc-candidate-row-title">{brandLine}</div>
                     <div className="upc-candidate-row-meta muted">{cat}</div>

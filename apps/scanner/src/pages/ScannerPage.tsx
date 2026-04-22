@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getProductByCode, getProductByUpc, getProductFamily } from "../api/catalog";
+import { getPriceBookStatus, getProductByCode, getProductByUpc, getProductFamily } from "../api/catalog";
 import { Sentry } from "../lib/sentry";
 import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
@@ -36,10 +36,27 @@ export function ScannerPage() {
     upcBrand?: string;
     confidenceWarning?: string;
   } | null>(null);
+  /** When set, ProductCard may flag this UPC (camera scan + UPCitemdb match path only). */
+  const [upcScanContext, setUpcScanContext] = useState<{ upc: string } | null>(null);
+  const [priceBookAge, setPriceBookAge] = useState<{
+    status: "aging" | "stale";
+    daysSinceUpdate: number;
+  } | null>(null);
+  const [dismissPriceBookBanner, setDismissPriceBookBanner] = useState(false);
+  const [networkWarn, setNetworkWarn] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const s = await getPriceBookStatus();
+      if (s.ok && (s.status === "aging" || s.status === "stale") && s.daysSinceUpdate != null) {
+        setPriceBookAge({ status: s.status, daysSinceUpdate: s.daysSinceUpdate });
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 1000);
+    const t = setTimeout(() => setToast(null), 2800);
     return () => clearTimeout(t);
   }, [toast]);
 
@@ -49,10 +66,15 @@ export function ScannerPage() {
     return () => clearTimeout(t);
   }, [notFoundMsg]);
 
-  const openFamily = useCallback(async (p: MlccProduct) => {
+  const openFamily = useCallback(async (p: MlccProduct, opts?: { upcForFlag?: string | null }) => {
     const fam = await getProductFamily(p.code);
     if (fam) {
       setProductCardInitialCode(p.code);
+      if (opts?.upcForFlag != null && String(opts.upcForFlag).trim() !== "") {
+        setUpcScanContext({ upc: String(opts.upcForFlag).trim() });
+      } else {
+        setUpcScanContext(null);
+      }
       setCurrentFamily(fam);
       setShowProductCard(true);
     }
@@ -61,73 +83,71 @@ export function ScannerPage() {
   const handleScan = useCallback(
     async (code: string) => {
       const trimmed = code.trim();
-      const found = await getProductByCode(trimmed);
-      if (found) {
-        const fam = await getProductFamily(found.code);
-        if (fam) {
-          setProductCardInitialCode(found.code);
-          setCurrentFamily(fam);
-          setShowProductCard(true);
+      try {
+        const found = await getProductByCode(trimmed);
+        if (found) {
+          await openFamily(found);
+          return;
         }
-        return;
-      }
 
-      const upcRes: UpcLookupResponse = await getProductByUpc(trimmed);
+        const upcRes: UpcLookupResponse = await getProductByUpc(trimmed);
 
-      if (upcRes.ok && upcRes.product && !upcRes.needsUserConfirmation) {
-        if (upcRes.confidenceWarning) {
-          const capture = Sentry?.captureMessage;
-          if (typeof capture === "function") {
-            capture("upc_confidence_warning", {
-              level: "info",
-              tags: { upc_confidence_warning: upcRes.confidenceWarning },
-              extra: { upc: trimmed, confidenceWarning: upcRes.confidenceWarning, path: "confident" },
-            });
+        if (upcRes.ok && upcRes.product && !upcRes.needsUserConfirmation) {
+          if (upcRes.confidenceWarning) {
+            const capture = Sentry?.captureMessage;
+            if (typeof capture === "function") {
+              capture("upc_confidence_warning", {
+                level: "info",
+                tags: { upc_confidence_warning: upcRes.confidenceWarning },
+                extra: { upc: trimmed, confidenceWarning: upcRes.confidenceWarning, path: "confident" },
+              });
+            }
           }
+          await openFamily(upcRes.product, { upcForFlag: trimmed });
+          return;
         }
-        const fam = await getProductFamily(upcRes.product.code);
-        if (fam) {
-          setProductCardInitialCode(upcRes.product.code);
-          setCurrentFamily(fam);
-          setShowProductCard(true);
-        }
-        return;
-      }
 
-      if (upcRes.needsUserConfirmation && upcRes.candidates && upcRes.candidates.length > 0) {
-        if (upcRes.confidenceWarning) {
-          const capture = Sentry?.captureMessage;
-          if (typeof capture === "function") {
-            capture("upc_confidence_warning", {
-              level: "info",
-              tags: { upc_confidence_warning: upcRes.confidenceWarning },
-              extra: { upc: trimmed, confidenceWarning: upcRes.confidenceWarning },
-            });
+        if (upcRes.needsUserConfirmation && upcRes.candidates && upcRes.candidates.length > 0) {
+          if (upcRes.confidenceWarning) {
+            const capture = Sentry?.captureMessage;
+            if (typeof capture === "function") {
+              capture("upc_confidence_warning", {
+                level: "info",
+                tags: { upc_confidence_warning: upcRes.confidenceWarning },
+                extra: { upc: trimmed, confidenceWarning: upcRes.confidenceWarning },
+              });
+            }
           }
+          setUpcCandidates({
+            candidates: upcRes.candidates,
+            upc: trimmed,
+            upcProductName: upcRes.upcProductName ?? "",
+            upcBrand: upcRes.upcBrand,
+            confidenceWarning: upcRes.confidenceWarning,
+          });
+          return;
         }
-        setUpcCandidates({
-          candidates: upcRes.candidates,
-          upc: trimmed,
-          upcProductName: upcRes.upcProductName ?? "",
-          upcBrand: upcRes.upcBrand,
-          confidenceWarning: upcRes.confidenceWarning,
-        });
-        return;
-      }
 
-      if (upcRes.error === "upc_found_but_no_mlcc_match") {
-        const name = upcRes.productName ?? "";
-        setToast(`Found bottle but no MLCC match. Try searching: ${name}`);
-        search.setQuery(name);
-        return;
-      }
+        if (upcRes.error === "upc_found_but_no_mlcc_match") {
+          const name = upcRes.productName ?? "";
+          setToast(`Found bottle but no MLCC match. Try searching: ${name}`);
+          search.setQuery(name);
+          return;
+        }
 
-      if (upcRes.error === "upc_not_found") {
+        if (upcRes.error === "upc_not_found") {
+          setNotFoundMsg(true);
+          return;
+        }
+
         setNotFoundMsg(true);
-        return;
+      } catch {
+        setNetworkWarn(true);
+        setTimeout(() => {
+          setNetworkWarn(false);
+          setNotFoundMsg(true);
+        }, 2000);
       }
-
-      setNotFoundMsg(true);
     },
     [search.setQuery, openFamily],
   );
@@ -146,6 +166,28 @@ export function ScannerPage() {
         </div>
       </header>
 
+      {priceBookAge && !dismissPriceBookBanner ? (
+        <div
+          className={`price-book-age-banner ${
+            priceBookAge.status === "stale" ? "price-book-age-banner--stale" : "price-book-age-banner--aging"
+          }`}
+        >
+          <span>
+            {priceBookAge.status === "stale"
+              ? `Prices are ${priceBookAge.daysSinceUpdate} days old. Update price book before ordering.`
+              : `Prices last updated ${priceBookAge.daysSinceUpdate} days ago. Refresh soon.`}
+          </span>
+          <button
+            type="button"
+            className="price-book-age-banner__close"
+            aria-label="Dismiss"
+            onClick={() => setDismissPriceBookBanner(true)}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
+
       <div className="scanner-toggle-row">
         <label className="toggle">
           <input type="checkbox" checked={scannerActive} onChange={(e) => setScannerActive(e.target.checked)} />
@@ -157,6 +199,7 @@ export function ScannerPage() {
 
       <SearchBar value={search.query} onChange={search.setQuery} />
 
+      {networkWarn ? <p className="banner toast--warning">Having trouble connecting…</p> : null}
       {notFoundMsg ? <p className="banner banner-warn">Product not found — try searching</p> : null}
       {toast ? <p className="banner banner-ok">{toast}</p> : null}
 
@@ -184,10 +227,14 @@ export function ScannerPage() {
         <ProductCard
           family={currentFamily}
           initialSelectedCode={productCardInitialCode}
+          scannedUpc={upcScanContext?.upc ?? null}
+          wasUpcScanMatch={Boolean(upcScanContext?.upc)}
+          onToast={(msg) => setToast(msg)}
           onDismiss={() => {
             setShowProductCard(false);
             setCurrentFamily(null);
             setProductCardInitialCode(undefined);
+            setUpcScanContext(null);
           }}
           onAddToCart={(product, quantity) => {
             cart.addItem(product, quantity);
@@ -195,6 +242,7 @@ export function ScannerPage() {
             setShowProductCard(false);
             setCurrentFamily(null);
             setProductCardInitialCode(undefined);
+            setUpcScanContext(null);
           }}
         />
       ) : null}
@@ -236,8 +284,9 @@ export function ScannerPage() {
             upcBrand={upcCandidates.upcBrand}
             onCancel={() => setUpcCandidates(null)}
             onSelect={(product) => {
+              const u = upcCandidates.upc;
               setUpcCandidates(null);
-              void openFamily(product);
+              void openFamily(product, { upcForFlag: u });
             }}
           />
         </>

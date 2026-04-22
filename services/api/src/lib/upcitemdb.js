@@ -37,6 +37,24 @@ function sanitizeIlikeValue(s) {
 }
 
 /**
+ * @param {unknown} images
+ * @returns {string | null}
+ */
+function firstImageUrlFromUpcitemdb(images) {
+  if (!Array.isArray(images) || images.length === 0) return null;
+  const first = images[0];
+  if (typeof first === "string") {
+    const u = first.trim();
+    return u || null;
+  }
+  if (first && typeof first === "object") {
+    const u = /** @type {{ url?: string }} */ (first).url;
+    if (typeof u === "string" && u.trim()) return u.trim();
+  }
+  return null;
+}
+
+/**
  * When `brand` is empty, take the first 1–3 tokens from `name` that appear before the bottle-size token.
  * @param {string} name
  * @returns {string} normalized token string (may be empty)
@@ -78,9 +96,13 @@ function sortMlccPreciseCandidates(rows, brandNorm) {
  * Precise MLCC lookup: exact `bottle_size_ml` + `name_normalized` contains normalized brand (no trigram).
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {{ name: string; brand: string; category?: string; images?: unknown }} upcItem
+ * @param {{ candidateLimit?: number }} [options] default 5; use higher values for scoring pools.
  * @returns {Promise<{ confident: boolean; candidates: object[] }>}
  */
-export async function findMlccCandidatesForUpc(supabase, upcItem) {
+export async function findMlccCandidatesForUpc(supabase, upcItem, options = {}) {
+  const candidateLimit = Number.isFinite(options.candidateLimit)
+    ? Math.min(200, Math.max(1, Math.floor(options.candidateLimit)))
+    : 5;
   try {
     const name = typeof upcItem?.name === "string" ? upcItem.name.trim() : "";
     if (!name) {
@@ -124,7 +146,7 @@ export async function findMlccCandidatesForUpc(supabase, upcItem) {
       return { confident: false, candidates: [] };
     }
 
-    const sorted = sortMlccPreciseCandidates(data ?? [], brandNorm).slice(0, 5);
+    const sorted = sortMlccPreciseCandidates(data ?? [], brandNorm).slice(0, candidateLimit);
     const confident = sorted.length === 1;
     console.log(
       `[upcitemdb] precise candidates: count=${sorted.length} confident=${confident} brand="${brandNorm}" size=${extractedSize}ml`,
@@ -159,7 +181,17 @@ export async function findMlccProductByName(supabase, productName) {
  * On success, `raw` holds the API JSON for persistence in `upc_lookups.raw_api_response`.
  * @param {string} upc
  * @returns {Promise<
- *   | { ok: true; product: { name: string; brand: string; category: string; images: unknown }; raw: object }
+ *   | {
+ *       ok: true;
+ *       product: {
+ *         name: string;
+ *         brand: string;
+ *         category: string;
+ *         images: unknown;
+ *         imageUrl: string | null;
+ *       };
+ *       raw: object;
+ *     }
  *   | { ok: false; error: "not_found" | "rate_limited" | "network_error" }
  * >}
  */
@@ -227,10 +259,11 @@ export async function lookupUpcFromUpcitemdb(upc) {
   }
 
   const images = item.images ?? [];
+  const imageUrl = firstImageUrlFromUpcitemdb(images);
   console.log("[upcitemdb] hit", code, name.slice(0, 80));
   return {
     ok: true,
-    product: { name, brand, category, images },
+    product: { name, brand, category, images, imageUrl },
     /** Full API JSON for `upc_lookups.raw_api_response` (not part of the public contract). */
     raw: body,
   };

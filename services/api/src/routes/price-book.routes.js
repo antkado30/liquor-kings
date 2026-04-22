@@ -1,11 +1,44 @@
+/**
+ * Env tuning (UPC auto-match / picker):
+ * - LK_CONFIDENT_MIN — minimum total score for confident single match (default 85)
+ * - LK_CONFIDENT_LEAD — score lead over 2nd place required for confident when multiple rows (default 20)
+ * - LK_PICKER_MIN — scores below this return low_confidence no-match (default 50)
+ * - LK_PICKER_MAX — max ambiguous candidates returned (default 5)
+ */
 import express from "express";
 import supabase from "../config/supabase.js";
-import { findMlccCandidatesForUpc, lookupUpcFromUpcitemdb } from "../lib/upcitemdb.js";
+import { extractBottleSizeMl, findMlccCandidatesForUpc, lookupUpcFromUpcitemdb } from "../lib/upcitemdb.js";
+import { Sentry } from "../lib/sentry.js";
+import { flagUpcMatchAsIncorrect, queueUpcMatchAudit } from "../mlcc/mlcc-upc-audit.js";
+import { mlccCategoryMatchesAnyHint } from "../mlcc/mlcc-category-ontology.js";
+import {
+  extractCategoryHintsUpc,
+  extractProofFromTitle,
+  extractSizeFromTitle,
+  scoreUpcToMlccCandidate,
+} from "../mlcc/mlcc-upc-scoring.js";
 import { BRAND_ALIAS_MAP, resolveSearchAliases } from "../mlcc/mlcc-brand-aliases.js";
+import {
+  familyNameSearchPrefix,
+  filterToFamily,
+  normalizeMlccNameBaseForFamily,
+  sanitizeIlikeForFamily,
+} from "../mlcc/mlcc-product-family.js";
 import { getLatestPriceBookRun, ingestMlccPriceBook } from "../mlcc/mlcc-price-book-ingestor.js";
 
 /** When true, picker confirmations persist UPC onto `mlcc_items` (local cache for future scans). */
 const ENABLE_PICKER_SELECTION_CACHE = false;
+
+/** When true, confident UPCitemdb/OFF matches persist `mlcc_items.upc` for future scans. */
+const ENABLE_CONFIDENT_CACHE = process.env.ENABLE_CONFIDENT_CACHE !== "0";
+
+const CONFIDENCE_THRESHOLDS = {
+  auto_confident_min: Number(process.env.LK_CONFIDENT_MIN ?? 85),
+  auto_confident_lead: Number(process.env.LK_CONFIDENT_LEAD ?? 20),
+  picker_min: Number(process.env.LK_PICKER_MIN ?? 50),
+  picker_max_candidates: Number(process.env.LK_PICKER_MAX ?? 5),
+};
+console.log("[price-book] confidence thresholds:", CONFIDENCE_THRESHOLDS);
 
 const router = express.Router();
 
@@ -27,7 +60,40 @@ function requireServiceRole(req, res) {
 router.get("/status", async (req, res) => {
   try {
     const latestRun = await getLatestPriceBookRun(supabase);
-    res.json({ ok: true, latestRun });
+    const { data: newest, error: dErr } = await supabase
+      .from("mlcc_items")
+      .select("last_price_book_date")
+      .not("last_price_book_date", "is", null)
+      .order("last_price_book_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (dErr) {
+      return res.status(500).json({ ok: false, error: dErr.message });
+    }
+
+    let priceBookDate = null;
+    let daysSinceUpdate = null;
+    /** @type {"fresh"|"aging"|"stale"} */
+    let status = "stale";
+    const rawDate = newest?.last_price_book_date;
+    if (rawDate != null && String(rawDate).trim() !== "") {
+      priceBookDate = String(rawDate);
+      const d0 = new Date(`${priceBookDate}T12:00:00.000Z`);
+      const now = new Date();
+      daysSinceUpdate = Math.max(0, Math.floor((now.getTime() - d0.getTime()) / 86400000));
+      if (daysSinceUpdate < 7) status = "fresh";
+      else if (daysSinceUpdate <= 14) status = "aging";
+      else status = "stale";
+    }
+
+    res.json({
+      ok: true,
+      latestRun,
+      priceBookDate,
+      daysSinceUpdate,
+      status,
+    });
   } catch (e) {
     res.status(500).json({
       ok: false,
@@ -195,7 +261,8 @@ async function multiTermBrandSearch({
       q = q.ilike("name_normalized", `%${w}%`);
     }
     const { data, error } = await q
-      .order("code", { ascending: true })
+      .order("scan_count", { ascending: false })
+      .order("name", { ascending: true })
       .limit(MULTI_TERM_BRAND_FETCH_CAP);
     if (error) return { rows: [], error };
     for (const row of data ?? []) {
@@ -203,9 +270,15 @@ async function multiTermBrandSearch({
     }
   }
 
-  const merged = [...rowsById.values()].sort((a, b) =>
-    String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true }),
-  );
+  const merged = [...rowsById.values()].sort((a, b) => {
+    const sa = Number(a.scan_count) || 0;
+    const sb = Number(b.scan_count) || 0;
+    if (sa !== sb) return sb - sa;
+    const na = String(a.name ?? "");
+    const nb = String(b.name ?? "");
+    if (na !== nb) return na.localeCompare(nb);
+    return String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true });
+  });
   return { rows: merged, error: null };
 }
 
@@ -224,37 +297,44 @@ function queueUpcLookupLog(row) {
 }
 
 /**
+ * Fire-and-forget scan popularity bump for search ranking.
+ * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {string | undefined} mlccId
+ */
+function incrementScanCount(sb, mlccId) {
+  const id = mlccId != null ? String(mlccId).trim() : "";
+  if (!id) return;
+  void (async () => {
+    try {
+      const { data: cur, error: rErr } = await sb.from("mlcc_items").select("scan_count").eq("id", id).maybeSingle();
+      if (rErr) throw rErr;
+      const next = (Number(cur?.scan_count) || 0) + 1;
+      const { error: uErr } = await sb
+        .from("mlcc_items")
+        .update({
+          scan_count: next,
+          last_scanned_at: new Date().toISOString(),
+        })
+        .eq("id", id);
+      if (uErr) throw uErr;
+      if (process.env.DEBUG_UPC_FILTER === "1") {
+        console.log("[price-book][DEBUG_UPC_FILTER]", JSON.stringify({ scan_increment: true, id, next }));
+      }
+    } catch (e) {
+      if (typeof Sentry?.captureException === "function") {
+        Sentry.captureException(e);
+      }
+    }
+  })();
+}
+
+/**
  * Category keywords inferred from UPCitemdb / OFF product name for MLCC candidate filtering.
  * @param {string} productName
  * @returns {string[]}
  */
 function extractCategoryHints(productName) {
-  const s = String(productName ?? "").toLowerCase();
-  const hints = [];
-  const add = (h) => {
-    if (h && !hints.includes(h)) hints.push(h);
-  };
-  if (/\b(vodka)\b/.test(s)) add("vodka");
-  if (/\b(whiskey|whisky|bourbon|rye|scotch)\b/.test(s)) add("whiskey");
-  if (/\b(rum)\b/.test(s)) add("rum");
-  if (/\b(gin)\b/.test(s)) add("gin");
-  if (/\b(tequila|mezcal)\b/.test(s)) add("tequila");
-  if (/\b(cognac|brandy|armagnac)\b/.test(s)) add("brandy");
-  if (/\b(liqueur|cordial)\b/.test(s)) add("liqueur");
-  if (/\b(cocktail|premix|prepared)\b/.test(s)) add("cocktail");
-  if (/\b(wine)\b/.test(s)) add("wine");
-  if (/\b(beer|ale|lager)\b/.test(s)) add("beer");
-  return hints;
-}
-
-/**
- * @param {string | null | undefined} mlccCategory
- * @param {string[]} hints
- */
-function matchesCategory(mlccCategory, hints) {
-  if (!hints || hints.length === 0) return true;
-  const cat = String(mlccCategory ?? "").toLowerCase();
-  return hints.some((h) => cat.includes(h));
+  return extractCategoryHintsUpc(productName);
 }
 
 /**
@@ -263,47 +343,105 @@ function matchesCategory(mlccCategory, hints) {
  */
 function filterMlccCandidatesByCategory(candidates, hints) {
   if (!hints || hints.length === 0) return [...candidates];
-  const hasVodka = hints.includes("vodka");
-  const hasCocktail = hints.includes("cocktail");
-  return candidates.filter((c) => {
-    const catLower = String(c.category ?? "").toLowerCase();
-    if (hasVodka && !hasCocktail) {
-      if (catLower.includes("prepared cocktails") || catLower.includes("cocktail")) return false;
-    }
-    return matchesCategory(c.category, hints);
-  });
+  return candidates.filter((c) => mlccCategoryMatchesAnyHint(c?.category, hints));
 }
 
 /**
  * @param {{ candidates?: object[] }} mlcc
  * @param {string} productName
- * @returns {{ candidates: object[]; confidenceWarning?: string }}
+ * @returns {{ candidates: object[]; confidenceWarning?: string; unfiltered: object[] }}
  */
 function applyCategoryHintsToCandidates(mlcc, productName) {
   const unfiltered = [...(mlcc.candidates ?? [])];
   const hints = extractCategoryHints(productName);
-  let filtered = filterMlccCandidatesByCategory(unfiltered, hints);
+  const strictFiltered = filterMlccCandidatesByCategory(unfiltered, hints);
+
+  /** @type {object[]} */
+  let candidates;
+  /** @type {string | undefined} */
   let confidenceWarning;
-  if (filtered.length === 0 && unfiltered.length > 0) {
-    confidenceWarning = "category_filter_excluded_all";
-    filtered = unfiltered;
+
+  if (hints.length === 0) {
+    candidates = unfiltered;
+  } else if (strictFiltered.length > 0) {
+    candidates = strictFiltered;
+  } else if (unfiltered.length > 0) {
+    candidates = [];
+    confidenceWarning = "strict_filter_no_matches";
+  } else {
+    candidates = [];
   }
-  return { candidates: filtered, confidenceWarning };
+
+  if (process.env.DEBUG_UPC_FILTER === "1") {
+    const path =
+      hints.length === 0
+        ? "hints_empty_pass_through"
+        : strictFiltered.length > 0
+          ? "hints_strict_ok"
+          : unfiltered.length > 0
+            ? "hints_strict_empty"
+            : "unfiltered_empty";
+    console.log(
+      "[price-book-upc][DEBUG_UPC_FILTER]",
+      JSON.stringify({
+        productName,
+        unfilteredCount: unfiltered.length,
+        unfiltered: unfiltered.map((c) => ({
+          code: c?.code ?? null,
+          name: c?.name ?? null,
+          category: c?.category ?? null,
+        })),
+        hints,
+        strictFilteredCount: strictFiltered.length,
+        finalCandidateCount: candidates.length,
+        confidenceWarning: confidenceWarning ?? null,
+        path,
+      }),
+    );
+  }
+
+  return { candidates, confidenceWarning, unfiltered };
 }
 
 /**
- * Dedupe repeated words, strip size/proof noise for search auto-fill.
+ * Collapse immediate repeated n-grams (3-, 2-, then 1-word), e.g. "A B A B C" → "A B C".
+ * @param {string[]} words
+ * @returns {string[]}
+ */
+function collapseRepeatedPhrases(words) {
+  let w = [...words];
+  for (let pass = 0; pass < 5; pass++) {
+    let changed = false;
+    outer: for (let n = 3; n >= 1; n--) {
+      for (let i = 0; i + 2 * n <= w.length; i++) {
+        const a = w.slice(i, i + n).join(" ").toLowerCase();
+        const b = w.slice(i + n, i + 2 * n).join(" ").toLowerCase();
+        if (a === b) {
+          w.splice(i + n, n);
+          changed = true;
+          break outer;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return w;
+}
+
+/**
+ * Dedupe repeated phrases and words, strip size/proof/bottle noise for search auto-fill.
  * @param {string} name
  * @returns {string}
  */
 function cleanProductNameForSearch(name) {
   const raw = String(name ?? "").trim();
-  const parts = raw.split(/\s+/).filter(Boolean);
+  let words = raw.split(/\s+/).filter(Boolean);
+  words = collapseRepeatedPhrases(words);
   const out = [];
-  for (const w of parts) {
-    const lw = w.toLowerCase();
+  for (const token of words) {
+    const lw = token.toLowerCase();
     if (out.length && out[out.length - 1].toLowerCase() === lw) continue;
-    out.push(w);
+    out.push(token);
   }
   let s = out.join(" ");
   s = s.replace(/,\s*\d+(?:\.\d+)?\s*m\s*l\b/gi, "");
@@ -311,8 +449,279 @@ function cleanProductNameForSearch(name) {
   s = s.replace(/\(\s*\d+(?:\.\d+)?\s*%\s*abv\s*\)/gi, "");
   s = s.replace(/\(\s*\d+(?:\.\d+)?\s*proof\s*\)/gi, "");
   s = s.replace(/\b\d+(?:\.\d+)?\s*proof\b/gi, "");
+  s = s.replace(/\b\d+(?:\.\d+)?\s*m\s*l\b/gi, "");
+  s = s.replace(/\b\d+(?:\.\d+)?\s*l\b/gi, "");
+  s = s.replace(/\s+Bottle\b/gi, " ");
+  s = s.replace(/\bBottle\b$/i, "");
   s = s.replace(/\s+/g, " ").replace(/^[, ]+|[, ]+$/g, "").trim();
   return s;
+}
+
+function buildUpcData(upcItem) {
+  const rawTitle = String(upcItem?.name ?? "").trim();
+  const size_ml = extractSizeFromTitle(rawTitle) ?? extractBottleSizeMl(rawTitle);
+  const imageUrl =
+    typeof upcItem?.imageUrl === "string" && upcItem.imageUrl.trim() ? upcItem.imageUrl.trim() : null;
+  return {
+    name: rawTitle,
+    brand: String(upcItem?.brand ?? "").trim(),
+    size_ml,
+    proof: extractProofFromTitle(rawTitle),
+    rawTitle,
+    imageUrl,
+  };
+}
+
+/**
+ * @param {ReturnType<typeof buildUpcData>} upcData
+ * @param {object[]} pool
+ * @param {Set<unknown>} strictCategoryPassIdSet
+ * @param {boolean} hintsEmpty
+ */
+function scoreMlccPoolForUpc(upcData, pool, strictCategoryPassIdSet, hintsEmpty) {
+  const scored = [];
+  for (const row of pool) {
+    const r = scoreUpcToMlccCandidate(upcData, row);
+    scored.push({ row, ...r });
+  }
+  const allCandidateScores = scored.map((s) => ({
+    code: String(s.row.code ?? ""),
+    name: String(s.row.name ?? ""),
+    score: s.total,
+    disqualified: s.disqualified,
+    reasons: s.reasons,
+  }));
+
+  const eligible = scored.filter(
+    (s) => !s.disqualified && (hintsEmpty || strictCategoryPassIdSet.has(s.row.id)),
+  );
+  eligible.sort(
+    (a, b) => b.total - a.total || String(a.row.code ?? "").localeCompare(String(b.row.code ?? "")),
+  );
+  return { scored, allCandidateScores, eligible };
+}
+
+/**
+ * @param {Array<{ total: number; row: object; breakdown: object }>} sortedEligible
+ * @param {typeof CONFIDENCE_THRESHOLDS} th
+ */
+function decideUpcMatchFromScores(sortedEligible, th) {
+  if (!sortedEligible.length) return { mode: "none" };
+  const top = sortedEligible[0];
+  const second = sortedEligible[1];
+  const pickerMin = th.picker_min;
+  const confidentMin = th.auto_confident_min;
+  const lead = th.auto_confident_lead;
+  const maxAmb = th.picker_max_candidates;
+
+  if (top.total < pickerMin) return { mode: "low_confidence", top };
+  const single = sortedEligible.length === 1;
+  const gap = second ? top.total - second.total : Infinity;
+  if (top.total >= confidentMin && (single || gap >= lead)) return { mode: "confident", winner: top };
+  if (
+    (top.total >= pickerMin && top.total < confidentMin) ||
+    (second != null && gap < lead)
+  ) {
+    return { mode: "ambiguous", topFive: sortedEligible.slice(0, maxAmb) };
+  }
+  return { mode: "confident", winner: top };
+}
+
+/**
+ * @param {import("express").Response} res
+ * @param {{ upc: string; upcItem: object; rawApiResponse: unknown; source: "upcitemdb" | "open_food_facts" }} ctx
+ */
+async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, source }) {
+  const mlcc = await findMlccCandidatesForUpc(supabase, upcItem, { candidateLimit: 50 });
+  const { candidates: categoryPassRows, confidenceWarning, unfiltered } = applyCategoryHintsToCandidates(
+    mlcc,
+    upcItem.name,
+  );
+  const hintsEmpty = extractCategoryHints(upcItem.name).length === 0;
+  const strictSet = new Set((categoryPassRows ?? []).map((r) => r.id));
+  const upcData = buildUpcData(upcItem);
+  const cleanedName = cleanProductNameForSearch(upcData.rawTitle);
+  const { allCandidateScores, eligible } = scoreMlccPoolForUpc(upcData, unfiltered, strictSet, hintsEmpty);
+
+  const noMatchExtraWarning =
+    confidenceWarning ??
+    (!eligible.length && unfiltered.length > 0 ? "all_candidates_disqualified" : null);
+
+  const topForBreakdown = eligible[0];
+  const topScore = topForBreakdown ? topForBreakdown.total : 0;
+  const topBreakdown = topForBreakdown ? topForBreakdown.breakdown : null;
+
+  const decision = decideUpcMatchFromScores(eligible, CONFIDENCE_THRESHOLDS);
+
+  if (process.env.DEBUG_UPC_FILTER === "1") {
+    console.log(
+      "[price-book-upc][DEBUG_UPC_FILTER]",
+      JSON.stringify({
+        phase: "decision",
+        upc,
+        source,
+        decisionMode: decision.mode,
+        eligibleCount: eligible.length,
+        poolCount: unfiltered.length,
+        confidenceWarning: confidenceWarning ?? null,
+        noMatchExtraWarning,
+        topScore,
+      }),
+    );
+  }
+
+  const auditBase = {
+    upc,
+    upcBrand: upcData.brand || null,
+    upcProductName: cleanedName,
+    upcProductNameRaw: upcData.rawTitle,
+    allCandidateScores,
+  };
+
+  if (decision.mode === "confident" && decision.winner) {
+    const match = decision.winner.row;
+    let cached = false;
+    if (ENABLE_CONFIDENT_CACHE) {
+      const { error: upErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", match.id);
+      if (upErr) {
+        console.log("[price-book-upc] mlcc_items upc cache update failed", upErr.message);
+      } else {
+        cached = true;
+      }
+    }
+    const { data: refreshed } = await supabase.from("mlcc_items").select("*").eq("id", match.id).maybeSingle();
+    const base = refreshed ?? { ...match };
+    const product = { ...base, imageUrl: upcData.imageUrl ?? null };
+    incrementScanCount(supabase, product.id);
+    queueUpcLookupLog({
+      upc,
+      matched_mlcc_code: product.code ?? null,
+      matched_product_name: product.name ?? null,
+      source,
+      raw_api_response: rawApiResponse ?? null,
+    });
+    console.log("[price-book-upc] matched via", source, "(confident)", product.id);
+
+    queueUpcMatchAudit(supabase, {
+      ...auditBase,
+      matchedMlccCode: product.code != null ? String(product.code) : null,
+      matchMode: "confident",
+      confidenceScore: decision.winner.total,
+      confidenceWarning: confidenceWarning ?? null,
+      scoringBreakdown: decision.winner.breakdown,
+      cached,
+    });
+
+    return res.json({
+      ok: true,
+      product,
+      matchMode: "confident",
+      confidenceScore: decision.winner.total,
+      scoringBreakdown: decision.winner.breakdown,
+      allCandidateScores,
+      upcProductName: upcItem.name,
+      upcBrand: upcItem.brand,
+      ...(confidenceWarning ? { confidenceWarning } : {}),
+    });
+  }
+
+  if (decision.mode === "ambiguous" && decision.topFive?.length) {
+    const img = upcData.imageUrl ?? null;
+    const rows = decision.topFive.map((s) => ({ ...s.row, imageUrl: img }));
+    queueUpcLookupLog({
+      upc,
+      matched_mlcc_code: null,
+      matched_product_name: null,
+      source,
+      raw_api_response: rawApiResponse ?? null,
+    });
+
+    queueUpcMatchAudit(supabase, {
+      ...auditBase,
+      matchedMlccCode: null,
+      matchMode: "ambiguous",
+      confidenceScore: decision.topFive[0].total,
+      confidenceWarning: confidenceWarning ?? null,
+      scoringBreakdown: decision.topFive[0].breakdown,
+      cached: false,
+    });
+
+    return res.json({
+      ok: true,
+      needsUserConfirmation: true,
+      matchMode: "ambiguous",
+      candidates: rows,
+      upcProductName: upcItem.name,
+      upcBrand: upcItem.brand,
+      message: "Multiple products match. User must select.",
+      confidenceScore: decision.topFive[0].total,
+      scoringBreakdown: decision.topFive[0].breakdown,
+      allCandidateScores,
+      ...(confidenceWarning ? { confidenceWarning } : {}),
+    });
+  }
+
+  let finalWarning = noMatchExtraWarning;
+  if (decision.mode === "low_confidence") finalWarning = "low_confidence_match";
+
+  queueUpcLookupLog({
+    upc,
+    matched_mlcc_code: null,
+    matched_product_name: null,
+    source,
+    raw_api_response: rawApiResponse ?? null,
+  });
+
+  queueUpcMatchAudit(supabase, {
+    ...auditBase,
+    matchedMlccCode: null,
+    matchMode: "no_match",
+    confidenceScore: topScore,
+    confidenceWarning: finalWarning,
+    scoringBreakdown: topBreakdown,
+    cached: false,
+  });
+
+  const noMatchBody = {
+    ok: false,
+    error: "upc_found_but_no_mlcc_match",
+    productName: cleanedName,
+    upcProductNameRaw: upcData.rawTitle,
+    upcProductName: upcItem.name,
+    upcBrand: upcItem.brand,
+    hint: "search_by_name",
+    confidenceScore: topScore,
+    scoringBreakdown: topBreakdown,
+    allCandidateScores,
+  };
+  if (finalWarning) noMatchBody.confidenceWarning = finalWarning;
+  return res.json(noMatchBody);
+}
+
+export async function priceBookUpcFlagHandler(req, res) {
+  try {
+    const upc = String(req.params.upc ?? "").trim();
+    if (!upc) {
+      return res.status(400).json({ ok: false, error: "upc_required" });
+    }
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const reason =
+      typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : "user_says_wrong";
+    if (process.env.DEBUG_UPC_FILTER === "1") {
+      console.log("[price-book-upc][DEBUG_UPC_FILTER]", JSON.stringify({ flag_request: true, upc, reason }));
+    }
+    const r = await flagUpcMatchAsIncorrect(supabase, upc, reason);
+    if (!r.ok) {
+      return res.status(500).json({ ok: false, error: r.error ?? "flag_failed" });
+    }
+    return res.status(200).json({
+      ok: true,
+      message: "Match flagged; next scan will re-match from scratch.",
+      clearedMlccCode: r.clearedMlccCode ?? null,
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
 }
 
 export async function priceBookUpcHandler(req, res) {
@@ -343,71 +752,38 @@ export async function priceBookUpcHandler(req, res) {
         source: "local_cache",
         raw_api_response: null,
       });
-      return res.json({ ok: true, product: localRow });
+      queueUpcMatchAudit(supabase, {
+        upc,
+        upcBrand: null,
+        upcProductName: localRow.name ?? null,
+        upcProductNameRaw: localRow.name ?? null,
+        matchedMlccCode: localRow.code != null ? String(localRow.code) : null,
+        matchMode: "local_cache",
+        confidenceScore: 100,
+        confidenceWarning: null,
+        scoringBreakdown: null,
+        allCandidateScores: [],
+        cached: true,
+      });
+      incrementScanCount(supabase, localRow.id);
+      return res.json({
+        ok: true,
+        product: { ...localRow, imageUrl: null },
+        matchMode: "confident",
+        confidenceScore: 100,
+        scoringBreakdown: null,
+        allCandidateScores: [],
+        imageUrl: null,
+      });
     }
 
     const upcDb = await lookupUpcFromUpcitemdb(upc);
     if (upcDb.ok && upcDb.product) {
-      const upcItem = upcDb.product;
-      const mlcc = await findMlccCandidatesForUpc(supabase, upcItem);
-      const { candidates, confidenceWarning } = applyCategoryHintsToCandidates(mlcc, upcItem.name);
-
-      if (candidates.length === 1) {
-        const match = candidates[0];
-        const { error: upErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", match.id);
-        if (upErr) {
-          console.log("[price-book-upc] mlcc_items upc cache update failed", upErr.message);
-        }
-        const { data: refreshed } = await supabase.from("mlcc_items").select("*").eq("id", match.id).maybeSingle();
-        const product = refreshed ?? { ...match, upc };
-        queueUpcLookupLog({
-          upc,
-          matched_mlcc_code: product.code ?? null,
-          matched_product_name: product.name ?? null,
-          source: "upcitemdb",
-          raw_api_response: upcDb.raw ?? null,
-        });
-        console.log("[price-book-upc] matched via upcitemdb (confident)", product.id);
-        return res.json({
-          ok: true,
-          product,
-          matchMode: "confident",
-          ...(confidenceWarning ? { confidenceWarning } : {}),
-        });
-      }
-      if (candidates.length > 1) {
-        queueUpcLookupLog({
-          upc,
-          matched_mlcc_code: null,
-          matched_product_name: null,
-          source: "upcitemdb",
-          raw_api_response: upcDb.raw ?? null,
-        });
-        return res.json({
-          ok: true,
-          needsUserConfirmation: true,
-          matchMode: "ambiguous",
-          candidates,
-          upcProductName: upcItem.name,
-          upcBrand: upcItem.brand,
-          message: "Multiple products match. User must select.",
-          ...(confidenceWarning ? { confidenceWarning } : {}),
-        });
-      }
-      queueUpcLookupLog({
+      return respondWithScoredUpcMatch(res, {
         upc,
-        matched_mlcc_code: null,
-        matched_product_name: null,
+        upcItem: upcDb.product,
+        rawApiResponse: upcDb.raw ?? null,
         source: "upcitemdb",
-        raw_api_response: upcDb.raw ?? null,
-      });
-      const rawName = upcItem.name;
-      return res.json({
-        ok: false,
-        error: "upc_found_but_no_mlcc_match",
-        productName: cleanProductNameForSearch(rawName),
-        upcProductNameRaw: rawName,
-        hint: "search_by_name",
       });
     }
 
@@ -480,74 +856,11 @@ export async function priceBookUpcHandler(req, res) {
       category: "",
       images: [],
     };
-    const offMlcc = await findMlccCandidatesForUpc(supabase, offUpcItem);
-    const {
-      candidates: offCandidates,
-      confidenceWarning: offConfidenceWarning,
-    } = applyCategoryHintsToCandidates(offMlcc, offUpcItem.name);
-
-    if (offCandidates.length === 1) {
-      const offMatch = offCandidates[0];
-      const { error: offUpErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", offMatch.id);
-      if (offUpErr) {
-        console.log("[price-book-upc] mlcc_items upc cache update (off) failed", offUpErr.message);
-      }
-      const { data: offRefreshed } = await supabase
-        .from("mlcc_items")
-        .select("*")
-        .eq("id", offMatch.id)
-        .maybeSingle();
-      const product = offRefreshed ?? { ...offMatch, upc };
-      queueUpcLookupLog({
-        upc,
-        matched_mlcc_code: product.code ?? null,
-        matched_product_name: product.name ?? null,
-        source: "open_food_facts",
-        raw_api_response: offJson,
-      });
-      console.log("[price-book-upc] matched via open food facts (confident)", product.id);
-      return res.json({
-        ok: true,
-        product,
-        matchMode: "confident",
-        ...(offConfidenceWarning ? { confidenceWarning: offConfidenceWarning } : {}),
-      });
-    }
-    if (offCandidates.length > 1) {
-      queueUpcLookupLog({
-        upc,
-        matched_mlcc_code: null,
-        matched_product_name: null,
-        source: "open_food_facts",
-        raw_api_response: offJson,
-      });
-      return res.json({
-        ok: true,
-        needsUserConfirmation: true,
-        matchMode: "ambiguous",
-        candidates: offCandidates,
-        upcProductName: offUpcItem.name,
-        upcBrand: offUpcItem.brand,
-        message: "Multiple products match. User must select.",
-        ...(offConfidenceWarning ? { confidenceWarning: offConfidenceWarning } : {}),
-      });
-    }
-
-    console.log("[price-book-upc] no mlcc match for off name");
-    queueUpcLookupLog({
+    return respondWithScoredUpcMatch(res, {
       upc,
-      matched_mlcc_code: null,
-      matched_product_name: null,
+      upcItem: offUpcItem,
+      rawApiResponse: offJson,
       source: "open_food_facts",
-      raw_api_response: offJson,
-    });
-    const rawOffName = nameGuess.trim();
-    return res.json({
-      ok: false,
-      error: "upc_found_but_no_mlcc_match",
-      productName: cleanProductNameForSearch(rawOffName),
-      upcProductNameRaw: rawOffName,
-      hint: "search_by_name",
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -616,7 +929,104 @@ router.post("/upc/:upc/confirm", async (req, res) => {
   }
 });
 
+router.post("/upc/:upc/flag", priceBookUpcFlagHandler);
 router.get("/upc/:upc", priceBookUpcHandler);
+
+router.get("/items/:code/family", async (req, res) => {
+  try {
+    const code = String(req.params.code ?? "").trim();
+    if (!code) {
+      return res.status(400).json({ ok: false, error: "code_required" });
+    }
+
+    const { data: anchor, error: aErr } = await supabase
+      .from("mlcc_items")
+      .select("*")
+      .eq("code", code)
+      .maybeSingle();
+
+    if (aErr) {
+      return res.status(500).json({ ok: false, error: aErr.message });
+    }
+    if (!anchor) {
+      return res.json({ ok: false, error: "mlcc_code_not_found" });
+    }
+
+    let q = supabase.from("mlcc_items").select("*").eq("is_active", true);
+    const cat = String(anchor.category ?? "").trim();
+    if (cat) {
+      q = q.eq("category", cat);
+    }
+    const adaName = String(anchor.ada_name ?? "").trim();
+    if (adaName) {
+      q = q.eq("ada_name", adaName);
+    }
+    const prefix = familyNameSearchPrefix(anchor);
+    const safe = sanitizeIlikeForFamily(prefix);
+    if (safe) {
+      q = q.ilike("name", `%${safe}%`);
+    }
+    q = q.limit(500);
+    const { data: pool, error: pErr } = await q;
+    if (pErr) {
+      return res.status(500).json({ ok: false, error: pErr.message });
+    }
+
+    let sizes = filterToFamily(anchor, pool ?? []);
+    const seen = new Set((sizes ?? []).map((r) => r?.id).filter(Boolean));
+    if (anchor.id && !seen.has(anchor.id)) {
+      sizes = [anchor, ...sizes];
+    }
+
+    const dedup = [];
+    const byId = new Set();
+    for (const row of sizes) {
+      if (!row?.id || byId.has(row.id)) continue;
+      byId.add(row.id);
+      dedup.push(row);
+    }
+    dedup.sort((a, b) => (Number(a.bottle_size_ml) || 0) - (Number(b.bottle_size_ml) || 0));
+
+    const bf = String(anchor.brand_family ?? "").trim();
+    const grouping = bf ? "brand_family_and_category" : "name_base_category_ada_name";
+
+    if (process.env.DEBUG_UPC_FILTER === "1") {
+      console.log(
+        "[price-book][DEBUG_UPC_FILTER][family]",
+        JSON.stringify({
+          requestedCode: code,
+          anchor: {
+            code: anchor.code,
+            name: anchor.name,
+            brand_family: anchor.brand_family ?? null,
+            category: anchor.category ?? null,
+            ada_name: anchor.ada_name ?? null,
+          },
+          grouping,
+          nameBase: normalizeMlccNameBaseForFamily(anchor.name),
+          searchPrefix: prefix || null,
+          poolCount: (pool ?? []).length,
+          familyCount: dedup.length,
+          familyNames: dedup.map((r) => r.name),
+        }),
+      );
+    }
+
+    return res.json({
+      ok: true,
+      baseName: anchor.name,
+      sizes: dedup,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return res.status(500).json({ ok: false, error: msg });
+  }
+});
+
+/** Default list ordering for catalog search: popular scans first, then name. */
+function orderMlccItemsByScanThenName(q) {
+  return q.order("scan_count", { ascending: false }).order("name", { ascending: true });
+}
 
 router.get("/items", async (req, res) => {
   try {
@@ -636,7 +1046,7 @@ router.get("/items", async (req, res) => {
     if (search && /^\d+$/.test(search)) {
       let qExact = supabase.from("mlcc_items").select("*", { count: "exact" }).eq("code", search);
       qExact = applyMlccItemsFilters(qExact, adaNumber, isNewItemQ);
-      const exactRes = await qExact.order("code", { ascending: true }).range(from, to);
+      const exactRes = await orderMlccItemsByScanThenName(qExact).range(from, to);
       if (exactRes.error) {
         return res.status(500).json({ ok: false, error: exactRes.error.message });
       }
@@ -651,7 +1061,7 @@ router.get("/items", async (req, res) => {
 
       let qName = supabase.from("mlcc_items").select("*", { count: "exact" }).ilike("name", `%${search}%`);
       qName = applyMlccItemsFilters(qName, adaNumber, isNewItemQ);
-      const nameRes = await qName.order("code", { ascending: true }).range(from, to);
+      const nameRes = await orderMlccItemsByScanThenName(qName).range(from, to);
       if (nameRes.error) {
         return res.status(500).json({ ok: false, error: nameRes.error.message });
       }
@@ -701,9 +1111,15 @@ router.get("/items", async (req, res) => {
           return res.status(500).json({ ok: false, error: fuzzyErr.message });
         }
         let filtered = filterMlccRowsClientSide(fuzzyRows, adaNumber, isNewItemQ);
-        filtered.sort((a, b) =>
-          String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true }),
-        );
+        filtered.sort((a, b) => {
+          const sa = Number(a.scan_count) || 0;
+          const sb = Number(b.scan_count) || 0;
+          if (sa !== sb) return sb - sa;
+          const na = String(a.name ?? "");
+          const nb = String(b.name ?? "");
+          if (na !== nb) return na.localeCompare(nb);
+          return String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true });
+        });
         const total = filtered.length;
         const items = filtered.slice(from, from + limit);
         return res.json({
@@ -726,9 +1142,7 @@ router.get("/items", async (req, res) => {
         let qOr = supabase.from("mlcc_items").select("*", { count: "exact" });
         qOr = applyItemsOrSearchToQuery(qOr, search);
         qOr = applyMlccItemsFilters(qOr, adaNumber, isNewItemQ);
-        const { data: orItems, error: orErr, count } = await qOr
-          .order("code", { ascending: true })
-          .range(from, to);
+        const { data: orItems, error: orErr, count } = await orderMlccItemsByScanThenName(qOr).range(from, to);
         if (orErr) {
           return res.status(500).json({ ok: false, error: orErr.message });
         }
@@ -752,9 +1166,15 @@ router.get("/items", async (req, res) => {
         return res.status(500).json({ ok: false, error: fuzzyErrNoBrand.message });
       }
       let filteredNoBrand = filterMlccRowsClientSide(fuzzyRowsNoBrand, adaNumber, isNewItemQ);
-      filteredNoBrand.sort((a, b) =>
-        String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true }),
-      );
+      filteredNoBrand.sort((a, b) => {
+        const sa = Number(a.scan_count) || 0;
+        const sb = Number(b.scan_count) || 0;
+        if (sa !== sb) return sb - sa;
+        const na = String(a.name ?? "");
+        const nb = String(b.name ?? "");
+        if (na !== nb) return na.localeCompare(nb);
+        return String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true });
+      });
       const totalNb = filteredNoBrand.length;
       const itemsNb = filteredNoBrand.slice(from, from + limit);
       return res.json({
@@ -769,7 +1189,7 @@ router.get("/items", async (req, res) => {
 
     q = applyMlccItemsFilters(q, adaNumber, isNewItemQ);
 
-    const { data: items, error, count } = await q.order("code", { ascending: true }).range(from, to);
+    const { data: items, error, count } = await orderMlccItemsByScanThenName(q).range(from, to);
 
     if (error) {
       return res.status(500).json({ ok: false, error: error.message });

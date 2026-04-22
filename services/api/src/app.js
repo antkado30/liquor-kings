@@ -13,7 +13,8 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import operatorReviewRouter from "./routes/operator-review.routes.js";
-import priceBookRouter, { priceBookUpcHandler } from "./routes/price-book.routes.js";
+import adminRouter from "./routes/admin.routes.js";
+import priceBookRouter, { priceBookUpcFlagHandler, priceBookUpcHandler } from "./routes/price-book.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -38,6 +39,9 @@ app.use(express.json({ limit: "12mb" }));
 
 /** App-level registration so GET /price-book/upc/:upc always resolves (not only via mounted router). */
 app.get("/price-book/upc/:upc", priceBookUpcHandler);
+app.post("/price-book/upc/:upc/flag", priceBookUpcFlagHandler);
+/** Admin JSON: optional `LK_ADMIN_TOKEN` + `X-Admin-Token` — see `services/api/src/routes/admin.routes.js`. */
+app.use("/admin", adminRouter);
 
 app.use(
   "/cart",

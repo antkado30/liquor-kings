@@ -21,8 +21,8 @@ export function useCatalogSearch() {
     try {
       const items = await searchProducts(q, { limit: 20 });
       setResults(items);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Search failed");
+    } catch {
+      setError("Having trouble connecting…");
       setResults([]);
     } finally {
       setLoading(false);

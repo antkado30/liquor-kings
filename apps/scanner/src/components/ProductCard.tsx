@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { flagIncorrectMatch } from "../api/catalog";
 import type { MlccProduct, ProductFamily } from "../types";
 import { pickInitialSizeByCode, ProductSizeSelector } from "./ProductSizeSelector";
 
@@ -13,13 +14,32 @@ type ProductCardProps = {
   initialSelectedCode?: string;
   onAddToCart: (product: MlccProduct, quantity: number) => void;
   onDismiss: () => void;
+  /** UPC from the barcode that led to this card (UPCitemdb path only). */
+  scannedUpc?: string | null;
+  /** True when this card was opened from a camera scan that used UPC matching (not name search). */
+  wasUpcScanMatch?: boolean;
+  onToast?: (message: string) => void;
 };
 
-export function ProductCard({ family, initialSelectedCode, onAddToCart, onDismiss }: ProductCardProps) {
+export function ProductCard({
+  family,
+  initialSelectedCode,
+  onAddToCart,
+  onDismiss,
+  scannedUpc = null,
+  wasUpcScanMatch = false,
+  onToast,
+}: ProductCardProps) {
   const [selectedProduct, setSelectedProduct] = useState<MlccProduct>(() =>
     pickInitialSizeByCode(family.sizes, initialSelectedCode),
   );
   const [quantity, setQuantity] = useState(1);
+  const [flagBusy, setFlagBusy] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [selectedProduct.id]);
 
   const bump = (delta: number) => {
     setQuantity((q) => Math.min(99, Math.max(1, q + delta)));
@@ -30,11 +50,49 @@ export function ProductCard({ family, initialSelectedCode, onAddToCart, onDismis
     setQuantity(1);
   };
 
+  const onFlagWrongMatch = async () => {
+    const u = scannedUpc?.trim();
+    if (!u || flagBusy || !wasUpcScanMatch) return;
+    if (
+      !window.confirm(
+        "Mark this as incorrect? The next person to scan this bottle will re-match from scratch.",
+      )
+    ) {
+      return;
+    }
+    setFlagBusy(true);
+    const r = await flagIncorrectMatch(u, "user_says_wrong");
+    setFlagBusy(false);
+    if (import.meta.env.DEV) {
+      console.log("[scanner-upc-flag]", JSON.stringify({ tapped: true, upc: u, ok: r.ok }));
+    }
+    if (r.ok) {
+      onToast?.("Match flagged thank you for helping improve the system");
+      onDismiss();
+    } else {
+      onToast?.("Could not flag match right now, please try again");
+    }
+  };
+
   const cat = selectedProduct.category ?? "—";
+  const showFlag = wasUpcScanMatch && Boolean(scannedUpc?.trim());
+  const cardImageUrl =
+    (!imageFailed &&
+      (family.sizes.map((s) => s.imageUrl).find((u) => u && String(u).trim()) ??
+        selectedProduct.imageUrl)) ||
+    null;
 
   return (
     <div className="product-card-backdrop" role="dialog" aria-modal="true" aria-labelledby="product-card-title">
       <div className="product-card">
+        {cardImageUrl ? (
+          <img
+            className="product-card__image"
+            src={cardImageUrl}
+            alt=""
+            onError={() => setImageFailed(true)}
+          />
+        ) : null}
         <div className="product-card-header">
           <h2 id="product-card-title" className="product-card-brand">
             {family.baseName}
@@ -103,6 +161,19 @@ export function ProductCard({ family, initialSelectedCode, onAddToCart, onDismis
         <button type="button" className="btn primary btn-block" onClick={onAdd}>
           Add to Cart
         </button>
+
+        {showFlag ? (
+          <div className="product-card-flag-row">
+            <button
+              type="button"
+              className="product-card__flag-button"
+              disabled={flagBusy}
+              onClick={() => void onFlagWrongMatch()}
+            >
+              Flag wrong match
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
