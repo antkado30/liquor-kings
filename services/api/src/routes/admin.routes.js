@@ -74,6 +74,93 @@ router.get("/upc-audit", async (req, res) => {
   }
 });
 
+router.get("/upc-audit/suspicious", async (req, res) => {
+  if (!assertAdminToken(req, res)) return;
+  try {
+    const [{ data: rows, error }, { data: flaggedRows, error: flaggedError }] = await Promise.all([
+      supabase
+        .from("upc_match_audit")
+        .select("*")
+        .eq("match_mode", "confident")
+        .order("created_at", { ascending: false })
+        .limit(1000),
+      supabase
+        .from("upc_match_audit")
+        .select("upc,created_at,flagged_incorrect")
+        .eq("flagged_incorrect", true)
+        .order("created_at", { ascending: false })
+        .limit(2000),
+    ]);
+    if (flaggedError) {
+      return res.status(500).json({ ok: false, error: flaggedError.message });
+    }
+    if (error) {
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+    /** @type {Map<string, string[]>} */
+    const flaggedByUpc = new Map();
+    for (const flagged of flaggedRows ?? []) {
+      const key = String(flagged?.upc ?? "").trim();
+      const at = String(flagged?.created_at ?? "").trim();
+      if (!key || !at) continue;
+      const arr = flaggedByUpc.get(key) ?? [];
+      arr.push(at);
+      flaggedByUpc.set(key, arr);
+    }
+
+    const latestByUpc = new Map();
+    for (const row of rows ?? []) {
+      const upc = String(row?.upc ?? "").trim();
+      if (upc && !latestByUpc.has(upc)) latestByUpc.set(upc, row);
+    }
+
+    const suspicious = [];
+    for (const row of latestByUpc.values()) {
+      const breakdown =
+        row?.scoring_breakdown && typeof row.scoring_breakdown === "object" ? row.scoring_breakdown : {};
+      const nameSim = Number(breakdown?.nameSimilarityScore ?? 0);
+      const confidence = Number(row?.confidence_score ?? 0);
+      const reasonsSummary = JSON.stringify(row?.all_candidate_scores ?? []);
+      const hasMarkerConflict = /marker conflict/i.test(reasonsSummary);
+      const flaggedTimes = flaggedByUpc.get(String(row?.upc ?? "").trim()) ?? [];
+      const flaggedLater = Boolean(
+        row?.cached &&
+          flaggedTimes.some((flaggedAt) => new Date(flaggedAt).getTime() > new Date(String(row?.created_at ?? "")).getTime()),
+      );
+
+      const isSuspicious = nameSim < 4 || confidence < 80 || hasMarkerConflict || flaggedLater;
+      if (!isSuspicious) continue;
+
+      const { data: cachedRow } = await supabase
+        .from("mlcc_items")
+        .select("id,name")
+        .eq("upc", row.upc)
+        .eq("code", row.matched_mlcc_code)
+        .maybeSingle();
+
+      suspicious.push({
+        audit_id: row.id,
+        upc: row.upc,
+        upc_product_name: row.upc_product_name,
+        matched_mlcc_code: row.matched_mlcc_code,
+        matched_mlcc_name: cachedRow?.name ?? null,
+        confidence_score: row.confidence_score,
+        reasons_summary: reasonsSummary,
+        created_at: row.created_at,
+        currently_cached: Boolean(cachedRow?.id),
+      });
+    }
+
+    return res.json({
+      ok: true,
+      total: suspicious.length,
+      suspicious_mappings: suspicious,
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 router.get("/telemetry", async (req, res) => {
   if (!assertAdminToken(req, res)) return;
   try {

@@ -1,3 +1,7 @@
+import { getAllMlccSearchVariants } from "../mlcc/mlcc-brand-aliases.js";
+import { mlccCategoryMatchesAnyHint } from "../mlcc/mlcc-category-ontology.js";
+import { extractCategoryHintsUpc } from "../mlcc/mlcc-upc-scoring.js";
+
 /**
  * Parse bottle size in milliliters from a product name or description (mL / L patterns).
  * @param {string | null | undefined} text
@@ -34,6 +38,24 @@ function normalizeForMatch(str) {
 /** Strip % and _ for safe use inside ILIKE patterns. */
 function sanitizeIlikeValue(s) {
   return String(s).replace(/%/g, "").replace(/_/g, "");
+}
+
+/**
+ * Parse and concatenate UPC size hints from offer titles.
+ * @param {unknown} offers
+ * @returns {string}
+ */
+function offersToSizeHintText(offers) {
+  if (!Array.isArray(offers) || offers.length === 0) return "";
+  const hints = [];
+  for (const offer of offers) {
+    const title = typeof offer?.title === "string" ? offer.title.trim() : "";
+    if (!title) continue;
+    if (/\b\d+(?:\.\d+)?\s*(?:m\s*l|ml|l|litre|liter|fl\.?\s*oz|oz)\b/i.test(title)) {
+      hints.push(title);
+    }
+  }
+  return hints.join(" | ");
 }
 
 /**
@@ -110,12 +132,23 @@ export async function findMlccCandidatesForUpc(supabase, upcItem, options = {}) 
       return { confident: false, candidates: [] };
     }
 
-    const extractedSize = extractBottleSizeMl(name);
-    if (extractedSize == null) {
-      console.log("[upcitemdb] findMlccCandidatesForUpc no size in name, skipping precise query");
-      return { confident: false, candidates: [] };
-    }
-    console.log(`[upcitemdb] extracted size: ${extractedSize}ml from "${name}"`);
+    const plausibleSizesFromUpc = Array.isArray(upcItem?.plausible_sizes)
+      ? upcItem.plausible_sizes
+          .map((v) => Number(v))
+          .filter((v) => Number.isFinite(v))
+      : [];
+    const fallbackSize =
+      extractBottleSizeMl(name) ??
+      extractBottleSizeMl(typeof upcItem?.rawSize === "string" ? upcItem.rawSize : "") ??
+      extractBottleSizeMl(typeof upcItem?.offersText === "string" ? upcItem.offersText : "");
+    const plausibleSizes =
+      plausibleSizesFromUpc.length > 0
+        ? [...new Set(plausibleSizesFromUpc)]
+        : Number.isFinite(Number(upcItem?.size_ml))
+          ? [Number(upcItem.size_ml)]
+          : fallbackSize != null
+            ? [fallbackSize]
+            : [];
 
     let brandNorm = normalizeForMatch(typeof upcItem.brand === "string" ? upcItem.brand : "");
     if (!brandNorm) {
@@ -126,31 +159,76 @@ export async function findMlccCandidatesForUpc(supabase, upcItem, options = {}) 
       return { confident: false, candidates: [] };
     }
 
-    const brandPattern = sanitizeIlikeValue(brandNorm);
-    if (!brandPattern) {
-      console.log("[upcitemdb] findMlccCandidatesForUpc empty brand pattern");
-      return { confident: false, candidates: [] };
+    const brandVariants = getAllMlccSearchVariants(upcItem?.brand ?? "");
+    if (!brandVariants.length) {
+      brandVariants.push(...getAllMlccSearchVariants(brandNorm));
+    }
+    if (!brandVariants.length) {
+      const fallbackWord = name.split(/\s+/).filter(Boolean)[0];
+      if (fallbackWord) brandVariants.push(fallbackWord.toUpperCase());
     }
 
-    let q = supabase
-      .from("mlcc_items")
-      .select("*")
-      .eq("is_active", true)
-      .eq("bottle_size_ml", extractedSize)
-      .ilike("name_normalized", `%${brandPattern}%`)
-      .limit(50);
+    /** @type {Map<string, object>} */
+    const dedupedByCode = new Map();
+    /** @type {Array<{ variant: string; count: number }>} */
+    const variantCounts = [];
 
-    const { data, error } = await q;
-    if (error) {
-      console.log("[upcitemdb] precise mlcc query error", error.message);
-      return { confident: false, candidates: [] };
+    for (const variant of brandVariants) {
+      const pattern = sanitizeIlikeValue(variant);
+      if (!pattern) continue;
+      const { data, error } = await supabase
+        .from("mlcc_items")
+        .select("*")
+        .eq("is_active", true)
+        .ilike("name", `%${pattern}%`)
+        .limit(Math.max(candidateLimit, 20));
+      if (error) {
+        console.log("[upcitemdb] alias variant query error", error.message);
+        return { confident: false, candidates: [] };
+      }
+      const rows = data ?? [];
+      variantCounts.push({ variant, count: rows.length });
+      for (const row of rows) {
+        const code = String(row?.code ?? "").trim();
+        if (!code || dedupedByCode.has(code)) continue;
+        dedupedByCode.set(code, row);
+      }
     }
 
-    const sorted = sortMlccPreciseCandidates(data ?? [], brandNorm).slice(0, candidateLimit);
+    let merged = [...dedupedByCode.values()];
+    if (plausibleSizes.length > 0) {
+      merged = merged.filter((row) => {
+        const rowSize = Number(row?.bottle_size_ml);
+        if (!Number.isFinite(rowSize)) return false;
+        return plausibleSizes.some((size) => rowSize === size || Math.abs(rowSize - size) <= 50);
+      });
+    }
+    const categoryHints = extractCategoryHintsUpc(name);
+    if (categoryHints.length > 0) {
+      merged = merged.filter((row) => {
+        return mlccCategoryMatchesAnyHint(row?.category, categoryHints);
+      });
+    }
+    const minPool = Math.max(20, candidateLimit);
+    const sorted = sortMlccPreciseCandidates(merged, brandNorm).slice(0, minPool);
     const confident = sorted.length === 1;
-    console.log(
-      `[upcitemdb] precise candidates: count=${sorted.length} confident=${confident} brand="${brandNorm}" size=${extractedSize}ml`,
-    );
+    if (process.env.DEBUG_UPC_FILTER === "1") {
+      console.log(
+        "[upcitemdb][DEBUG_UPC_FILTER]",
+        JSON.stringify({
+          phase: "alias_candidate_search",
+          upcName: name,
+          upcBrand: upcItem?.brand ?? null,
+          plausibleSizes,
+          categoryHints,
+          brandVariants,
+          variantCounts,
+          dedupedCount: dedupedByCode.size,
+          postFilterCount: merged.length,
+          returnedCount: sorted.length,
+        }),
+      );
+    }
     return { confident, candidates: sorted };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -187,6 +265,8 @@ export async function findMlccProductByName(supabase, productName) {
  *         name: string;
  *         brand: string;
  *         category: string;
+ *         rawSize: string;
+ *         offersText: string;
  *         images: unknown;
  *         imageUrl: string | null;
  *       };
@@ -250,6 +330,7 @@ export async function lookupUpcFromUpcitemdb(upc) {
   const title = typeof item.title === "string" ? item.title.trim() : "";
   const brand = typeof item.brand === "string" ? item.brand.trim() : "";
   const category = typeof item.category === "string" ? item.category.trim() : "";
+  const rawSize = typeof item.size === "string" ? item.size.trim() : "";
   const desc = typeof item.description === "string" ? item.description.trim() : "";
   const name =
     `${brand} ${title}`.trim() || title || desc || brand;
@@ -259,11 +340,12 @@ export async function lookupUpcFromUpcitemdb(upc) {
   }
 
   const images = item.images ?? [];
+  const offersText = offersToSizeHintText(item.offers);
   const imageUrl = firstImageUrlFromUpcitemdb(images);
   console.log("[upcitemdb] hit", code, name.slice(0, 80));
   return {
     ok: true,
-    product: { name, brand, category, images, imageUrl },
+    product: { name, brand, category, rawSize, offersText, images, imageUrl },
     /** Full API JSON for `upc_lookups.raw_api_response` (not part of the public contract). */
     raw: body,
   };

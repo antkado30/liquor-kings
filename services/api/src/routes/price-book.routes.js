@@ -459,15 +459,27 @@ function cleanProductNameForSearch(name) {
 
 function buildUpcData(upcItem) {
   const rawTitle = String(upcItem?.name ?? "").trim();
-  const size_ml = extractSizeFromTitle(rawTitle) ?? extractBottleSizeMl(rawTitle);
+  const rawSize = String(upcItem?.rawSize ?? "").trim();
+  const offersText = String(upcItem?.offersText ?? "").trim();
+  const sizeResolution = extractSizeFromTitle({ rawTitle, rawSize, offersText });
+  const size_ml = sizeResolution.preferredSize ?? extractBottleSizeMl(rawTitle);
+  const plausible_sizes = Array.isArray(sizeResolution.plausibleSizes)
+    ? sizeResolution.plausibleSizes
+    : size_ml != null
+      ? [size_ml]
+      : [];
   const imageUrl =
     typeof upcItem?.imageUrl === "string" && upcItem.imageUrl.trim() ? upcItem.imageUrl.trim() : null;
   return {
     name: rawTitle,
     brand: String(upcItem?.brand ?? "").trim(),
     size_ml,
+    plausible_sizes,
+    sizePenalty: sizeResolution.penalty,
     proof: extractProofFromTitle(rawTitle),
     rawTitle,
+    rawSize,
+    offersText,
     imageUrl,
   };
 }
@@ -517,7 +529,18 @@ function decideUpcMatchFromScores(sortedEligible, th) {
   if (top.total < pickerMin) return { mode: "low_confidence", top };
   const single = sortedEligible.length === 1;
   const gap = second ? top.total - second.total : Infinity;
-  if (top.total >= confidentMin && (single || gap >= lead)) return { mode: "confident", winner: top };
+  if (top.total >= confidentMin && single) {
+    const nameStrong = Number(top.breakdown?.nameSimilarityScore ?? 0) >= 7;
+    const brandExact = String(top.breakdown?.brandSource ?? "") === "exact";
+    const markerConflict = Boolean(top.breakdown?.markerConflict);
+    if (nameStrong || (brandExact && !markerConflict)) return { mode: "confident", winner: top };
+    return {
+      mode: "ambiguous",
+      topFive: [top],
+      confidenceWarning: "single_candidate_requires_confirmation",
+    };
+  }
+  if (top.total >= confidentMin && gap >= lead) return { mode: "confident", winner: top };
   if (
     (top.total >= pickerMin && top.total < confidentMin) ||
     (second != null && gap < lead)
@@ -532,14 +555,18 @@ function decideUpcMatchFromScores(sortedEligible, th) {
  * @param {{ upc: string; upcItem: object; rawApiResponse: unknown; source: "upcitemdb" | "open_food_facts" }} ctx
  */
 async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, source }) {
-  const mlcc = await findMlccCandidatesForUpc(supabase, upcItem, { candidateLimit: 50 });
+  const upcData = buildUpcData(upcItem);
+  const mlcc = await findMlccCandidatesForUpc(
+    supabase,
+    { ...upcItem, size_ml: upcData.size_ml, plausible_sizes: upcData.plausible_sizes },
+    { candidateLimit: 50 },
+  );
   const { candidates: categoryPassRows, confidenceWarning, unfiltered } = applyCategoryHintsToCandidates(
     mlcc,
     upcItem.name,
   );
   const hintsEmpty = extractCategoryHints(upcItem.name).length === 0;
   const strictSet = new Set((categoryPassRows ?? []).map((r) => r.id));
-  const upcData = buildUpcData(upcItem);
   const cleanedName = cleanProductNameForSearch(upcData.rawTitle);
   const { allCandidateScores, eligible } = scoreMlccPoolForUpc(upcData, unfiltered, strictSet, hintsEmpty);
 
@@ -552,6 +579,7 @@ async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, so
   const topBreakdown = topForBreakdown ? topForBreakdown.breakdown : null;
 
   const decision = decideUpcMatchFromScores(eligible, CONFIDENCE_THRESHOLDS);
+  const decisionConfidenceWarning = decision.confidenceWarning ?? null;
 
   if (process.env.DEBUG_UPC_FILTER === "1") {
     console.log(
@@ -563,7 +591,7 @@ async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, so
         decisionMode: decision.mode,
         eligibleCount: eligible.length,
         poolCount: unfiltered.length,
-        confidenceWarning: confidenceWarning ?? null,
+        confidenceWarning: confidenceWarning ?? decisionConfidenceWarning,
         noMatchExtraWarning,
         topScore,
       }),
@@ -580,14 +608,35 @@ async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, so
 
   if (decision.mode === "confident" && decision.winner) {
     const match = decision.winner.row;
+    const winnerBreakdown = decision.winner.breakdown ?? {};
+    const cacheQuality =
+      decision.winner.total >= 90 &&
+      Number(winnerBreakdown.nameSimilarityScore ?? 0) >= 5 &&
+      Number(winnerBreakdown.sizeScore ?? 0) === 20 &&
+      !Boolean(winnerBreakdown.markerConflict)
+        ? "high"
+        : "provisional";
+
     let cached = false;
-    if (ENABLE_CONFIDENT_CACHE) {
+    if (ENABLE_CONFIDENT_CACHE && cacheQuality === "high") {
       const { error: upErr } = await supabase.from("mlcc_items").update({ upc }).eq("id", match.id);
       if (upErr) {
         console.log("[price-book-upc] mlcc_items upc cache update failed", upErr.message);
       } else {
         cached = true;
       }
+    } else if (process.env.DEBUG_UPC_FILTER === "1") {
+      console.log(
+        "[price-book-upc][DEBUG_UPC_FILTER]",
+        JSON.stringify({
+          phase: "cache_skip",
+          upc,
+          mlccCode: String(match.code ?? ""),
+          cacheQuality,
+          confidenceScore: decision.winner.total,
+          breakdown: winnerBreakdown,
+        }),
+      );
     }
     const { data: refreshed } = await supabase.from("mlcc_items").select("*").eq("id", match.id).maybeSingle();
     const base = refreshed ?? { ...match };
@@ -607,7 +656,7 @@ async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, so
       matchedMlccCode: product.code != null ? String(product.code) : null,
       matchMode: "confident",
       confidenceScore: decision.winner.total,
-      confidenceWarning: confidenceWarning ?? null,
+      confidenceWarning: confidenceWarning ?? decisionConfidenceWarning,
       scoringBreakdown: decision.winner.breakdown,
       cached,
     });
@@ -619,9 +668,12 @@ async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, so
       confidenceScore: decision.winner.total,
       scoringBreakdown: decision.winner.breakdown,
       allCandidateScores,
+      cacheQuality,
       upcProductName: upcItem.name,
       upcBrand: upcItem.brand,
-      ...(confidenceWarning ? { confidenceWarning } : {}),
+      ...(confidenceWarning || decisionConfidenceWarning
+        ? { confidenceWarning: confidenceWarning ?? decisionConfidenceWarning }
+        : {}),
     });
   }
 
@@ -641,7 +693,7 @@ async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, so
       matchedMlccCode: null,
       matchMode: "ambiguous",
       confidenceScore: decision.topFive[0].total,
-      confidenceWarning: confidenceWarning ?? null,
+      confidenceWarning: confidenceWarning ?? decisionConfidenceWarning,
       scoringBreakdown: decision.topFive[0].breakdown,
       cached: false,
     });
@@ -657,7 +709,9 @@ async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, so
       confidenceScore: decision.topFive[0].total,
       scoringBreakdown: decision.topFive[0].breakdown,
       allCandidateScores,
-      ...(confidenceWarning ? { confidenceWarning } : {}),
+      ...(confidenceWarning || decisionConfidenceWarning
+        ? { confidenceWarning: confidenceWarning ?? decisionConfidenceWarning }
+        : {}),
     });
   }
 
@@ -930,6 +984,39 @@ router.post("/upc/:upc/confirm", async (req, res) => {
 });
 
 router.post("/upc/:upc/flag", priceBookUpcFlagHandler);
+router.post("/upc/:upc/report-no-match", async (req, res) => {
+  try {
+    const upc = String(req.params.upc ?? "").trim();
+    if (!upc) {
+      return res.status(400).json({ ok: false, error: "upc_required" });
+    }
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const upcProductName =
+      typeof body.upcProductName === "string" && body.upcProductName.trim()
+        ? body.upcProductName.trim()
+        : null;
+    const upcBrand = typeof body.upcBrand === "string" && body.upcBrand.trim() ? body.upcBrand.trim() : null;
+    queueUpcMatchAudit(supabase, {
+      upc,
+      upcBrand,
+      upcProductName,
+      upcProductNameRaw: upcProductName,
+      matchedMlccCode: null,
+      matchMode: "user_rejected_all_candidates",
+      confidenceScore: 0,
+      confidenceWarning: "user_rejected_all_candidates",
+      scoringBreakdown: null,
+      allCandidateScores: [],
+      cached: false,
+    });
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    if (typeof Sentry?.captureException === "function") {
+      Sentry.captureException(e);
+    }
+    return res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
 router.get("/upc/:upc", priceBookUpcHandler);
 
 router.get("/items/:code/family", async (req, res) => {

@@ -49,6 +49,8 @@ export interface UpcLookupResponse {
   confidenceWarning?: string;
   /** POST /upc/:upc/confirm: whether UPC was persisted on mlcc_items. */
   cached?: boolean;
+  /** Confident UPC match cache tier from API. */
+  cacheQuality?: "high" | "provisional";
   /** Top candidate total score (0–100) from multi-signal UPC matching. */
   confidenceScore?: number;
   scoringBreakdown?: Record<string, string | number | null>;

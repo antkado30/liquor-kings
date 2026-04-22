@@ -26,6 +26,7 @@ type UpcCandidatePickerProps = {
   candidates: MlccProduct[];
   upc: string;
   onSelect: (product: MlccProduct) => void;
+  onNoneMatch: () => void;
   onCancel: () => void;
 };
 
@@ -35,6 +36,7 @@ export function UpcCandidatePicker({
   candidates,
   upc,
   onSelect,
+  onNoneMatch,
   onCancel,
 }: UpcCandidatePickerProps) {
   const subtitleParts = [upcBrand, upcProductName].filter((s) => s && String(s).trim());
@@ -73,6 +75,9 @@ export function UpcCandidatePicker({
             );
           })}
         </ul>
+        <button type="button" className="upc-candidate-row--none" onClick={onNoneMatch}>
+          None of these — search by name instead
+        </button>
 
         <button type="button" className="upc-candidate-cancel btn secondary btn-block" onClick={onCancel}>
           Cancel

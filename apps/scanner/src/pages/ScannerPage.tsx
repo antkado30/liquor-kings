@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getPriceBookStatus, getProductByCode, getProductByUpc, getProductFamily } from "../api/catalog";
+import { getPriceBookStatus, getProductByCode, getProductByUpc, getProductFamily, reportUpcNoMatch } from "../api/catalog";
 import { Sentry } from "../lib/sentry";
 import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
@@ -283,6 +283,21 @@ export function ScannerPage() {
             upcProductName={upcCandidates.upcProductName}
             upcBrand={upcCandidates.upcBrand}
             onCancel={() => setUpcCandidates(null)}
+            onNoneMatch={() => {
+              const ctx = upcCandidates;
+              setUpcCandidates(null);
+              const fallbackName = (ctx.upcProductName ?? "").trim();
+              if (fallbackName) search.setQuery(fallbackName);
+              setToast("Search by name — the scanned bottle may need manual lookup");
+              void (async () => {
+                try {
+                  await reportUpcNoMatch(ctx.upc, ctx.upcProductName, ctx.upcBrand);
+                } catch (error) {
+                  const capture = Sentry?.captureException;
+                  if (typeof capture === "function") capture(error);
+                }
+              })();
+            }}
             onSelect={(product) => {
               const u = upcCandidates.upc;
               setUpcCandidates(null);

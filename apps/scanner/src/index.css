@@ -897,6 +897,23 @@ select {
   color: var(--accent);
 }
 
+.upc-candidate-row--none {
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.7);
+  border-radius: 10px;
+  background: transparent;
+  color: #94a3b8;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+
+.upc-candidate-row--none:active {
+  background: rgba(148, 163, 184, 0.12);
+}
+
 .upc-candidate-cancel {
   margin-top: 4px;
 }

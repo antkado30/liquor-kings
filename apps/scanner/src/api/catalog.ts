@@ -144,6 +144,10 @@ function mapUpcLookupBody(raw: Record<string, unknown>, resOk: boolean): UpcLook
     confidenceWarning:
       raw.confidenceWarning != null ? String(raw.confidenceWarning) : undefined,
     cached: typeof raw.cached === "boolean" ? raw.cached : undefined,
+    cacheQuality:
+      raw.cacheQuality === "high" || raw.cacheQuality === "provisional"
+        ? raw.cacheQuality
+        : undefined,
   };
   if (raw.confidenceScore != null) {
     const n = Number(raw.confidenceScore);
@@ -268,6 +272,27 @@ export async function flagIncorrectMatch(
         ? String(raw.message)
         : "Match flagged thank you for helping improve the system",
   };
+}
+
+export async function reportUpcNoMatch(
+  upc: string,
+  upcProductName?: string,
+  upcBrand?: string,
+): Promise<boolean> {
+  const u = upc.trim();
+  if (!u) return false;
+  try {
+    const res = await fetchWithRetry(`${BASE}/upc/${encodeURIComponent(u)}/report-no-match`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ upcProductName, upcBrand }),
+    });
+    const data = (await res.json()) as { ok?: boolean };
+    return Boolean(res.ok && data.ok);
+  } catch {
+    return false;
+  }
 }
 
 export async function getProductFamily(mlccCode: string): Promise<ProductFamily | null> {

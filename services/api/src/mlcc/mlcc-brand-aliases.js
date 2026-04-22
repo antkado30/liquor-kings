@@ -167,6 +167,37 @@ export function resolveBrandAlias(commonBrand) {
 }
 
 /**
+ * Build all MLCC search variants for a UPC brand string.
+ * @param {string | null | undefined} upcBrand
+ * @returns {string[]}
+ */
+export function getAllMlccSearchVariants(upcBrand) {
+  const rawBrand = String(upcBrand ?? "").trim();
+  if (!rawBrand) return [];
+
+  const out = [];
+  const seen = new Set();
+  const add = (value) => {
+    const normalized = String(value ?? "").trim().toUpperCase();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(normalized);
+  };
+
+  add(rawBrand);
+  add(rawBrand.replaceAll("'", ""));
+
+  for (const aliasPrefix of resolveBrandAlias(rawBrand)) {
+    add(aliasPrefix);
+  }
+
+  const firstWord = rawBrand.split(/\s+/).filter(Boolean)[0];
+  if (firstWord) add(firstWord);
+
+  return out;
+}
+
+/**
  * Infer brand similarity between UPCitemdb brand and MLCC product name (0–1).
  * @param {string | null | undefined} upcBrand
  * @param {string | null | undefined} mlccName

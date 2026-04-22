@@ -1,6 +1,17 @@
 /**
  * Multi-signal UPC → MLCC candidate scoring (0–100).
- * @typedef {{ name: string; brand: string; size_ml: number | null; proof: number | null; rawTitle: string; imageUrl?: string | null }} UpcData
+ * @typedef {{
+ *   name: string;
+ *   brand: string;
+ *   size_ml: number | null;
+ *   plausible_sizes?: number[];
+ *   sizePenalty: number;
+ *   proof: number | null;
+ *   rawTitle: string;
+ *   rawSize?: string;
+ *   offersText?: string;
+ *   imageUrl?: string | null;
+ * }} UpcData
  */
 
 import { inferBrandAlias, resolveBrandAlias } from "./mlcc-brand-aliases.js";
@@ -10,13 +21,76 @@ import {
 } from "./mlcc-category-ontology.js";
 
 const DEBUG = process.env.DEBUG_UPC_FILTER === "1";
+const STANDARD_BOTTLE_SIZES_ML = [50, 100, 200, 375, 500, 700, 750, 1000, 1750];
+
+/** Flavored / variant product lines — MLCC-only flavor vs silent UPC is a conflict. */
+const FLAVOR_QUALIFIERS = new Set([
+  "FIRE",
+  "HONEY",
+  "APPLE",
+  "CINNAMON",
+  "PEACH",
+  "BLACKBERRY",
+  "GINGER",
+  "LEMONADE",
+  "CARAMEL",
+  "VANILLA",
+  "PEPPER",
+  "COCONUT",
+  "CHERRY",
+  "BERRY",
+  "TROPICAL",
+  "CITRUS",
+  "MINT",
+  "SPICED",
+]);
 
 /**
- * @param {string | null | undefined} title
+ * MLCC labels for the core / standard line — when UPC has no qualifiers, these do not
+ * contradict the consumer title (e.g. Old No. 7 vs "OLD 7 BLACK" on MLCC).
+ */
+const BASE_LINE_QUALIFIERS = new Set(["BLACK", "ORIGINAL", "CLASSIC", "STANDARD", "TRADITIONAL"]);
+
+/** Premium or limited line markers — conflict with a plain base UPC unless UPC also names them. */
+const PREMIUM_QUALIFIERS = new Set([
+  "SINGLE",
+  "BARREL",
+  "RESERVE",
+  "GOLD",
+  "PLATINUM",
+  "DIAMOND",
+  "CROWN",
+  "BONDED",
+  "GREEN",
+  "WHITE",
+  "SILVER",
+  "TRIPLE",
+  "MASH",
+  "SINATRA",
+  "WINTER",
+  "HERITAGE",
+  "GENTLEMAN",
+  "MCLAREN",
+  "COY",
+  "PROOF",
+]);
+
+/** Union of all tokens `extractDistinguishingMarkers` looks for in names. */
+const DISTINGUISHING_QUALIFIERS = new Set([
+  ...FLAVOR_QUALIFIERS,
+  ...BASE_LINE_QUALIFIERS,
+  ...PREMIUM_QUALIFIERS,
+]);
+const SERIES_ROMAN = new Set(["I", "II", "III", "IV", "V", "X", "XV", "XX", "XXV", "XXX", "L"]);
+
+/**
+ * Parse a size hint into ml (supports ml, liter, and fl oz).
+ * @param {string | null | undefined} text
  * @returns {number | null}
  */
-export function extractSizeFromTitle(title) {
-  const s = String(title ?? "");
+function parseSizeHintMl(text) {
+  const s = String(text ?? "");
+  if (!s) return null;
   const ml = s.match(/(\d+(?:\.\d+)?)\s*(?:m\s*l|ml)\b/i);
   if (ml) {
     const v = Number.parseFloat(ml[1]);
@@ -27,7 +101,240 @@ export function extractSizeFromTitle(title) {
     const v = Number.parseFloat(liter[1]);
     if (Number.isFinite(v)) return Math.round(v * 1000);
   }
+  const flOz = s.match(/(\d+(?:\.\d+)?)\s*(?:fl\.?\s*oz|oz)\b/i);
+  if (flOz) {
+    const v = Number.parseFloat(flOz[1]);
+    if (Number.isFinite(v)) return roundToStandardBottleSize(v * 29.5735);
+  }
   return null;
+}
+
+/**
+ * Pick the nearest standard bottle size.
+ * @param {number} valueMl
+ * @returns {number}
+ */
+function roundToStandardBottleSize(valueMl) {
+  let best = STANDARD_BOTTLE_SIZES_ML[0];
+  let bestDiff = Math.abs(valueMl - best);
+  for (const size of STANDARD_BOTTLE_SIZES_ML) {
+    const diff = Math.abs(valueMl - size);
+    if (diff < bestDiff) {
+      best = size;
+      bestDiff = diff;
+    }
+  }
+  return best;
+}
+
+/**
+ * Choose the value that is nearest to a standard bottle size.
+ * @param {number[]} candidates
+ * @returns {number | null}
+ */
+function pickClosestStandardSize(candidates) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  let best = null;
+  let bestDelta = Infinity;
+  for (const candidate of candidates) {
+    for (const standard of STANDARD_BOTTLE_SIZES_ML) {
+      const delta = Math.abs(candidate - standard);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = candidate;
+      }
+    }
+  }
+  return best != null ? Math.round(best) : null;
+}
+
+/**
+ * Resolve UPC size using multiple fields and uncertainty metadata.
+ * @param {Pick<UpcData, "rawTitle" | "rawSize" | "offersText"> | string | null | undefined} upcData
+ * @returns {{ preferredSize: number | null; plausibleSizes: number[]; penalty: number }}
+ */
+export function extractSizeFromTitle(upcData) {
+  const rawTitle = typeof upcData === "string" ? upcData : String(upcData?.rawTitle ?? "");
+  const rawSize = typeof upcData === "string" ? "" : String(upcData?.rawSize ?? "");
+  const offersText = typeof upcData === "string" ? "" : String(upcData?.offersText ?? "");
+
+  const titleMl = parseSizeHintMl(rawTitle);
+  const rawSizeMl = parseSizeHintMl(rawSize);
+  const offersMl = parseSizeHintMl(offersText);
+  const candidates = [titleMl, rawSizeMl, offersMl].filter((v) => Number.isFinite(v));
+
+  const plausibleSizes = [];
+  for (const candidate of candidates) {
+    const rounded = roundToStandardBottleSize(candidate);
+    if (!STANDARD_BOTTLE_SIZES_ML.includes(rounded)) continue;
+    if (!plausibleSizes.includes(rounded)) plausibleSizes.push(rounded);
+  }
+  if (!plausibleSizes.length) return { preferredSize: null, plausibleSizes: [], penalty: 0 };
+
+  const disagreement =
+    titleMl != null &&
+    rawSizeMl != null &&
+    Math.abs(titleMl - rawSizeMl) / Math.max(titleMl, rawSizeMl) > 0.05;
+  if (disagreement) {
+    const preferred = pickClosestStandardSize([titleMl, rawSizeMl]);
+    if (DEBUG) {
+      console.warn(
+        "[upc-scoring][DEBUG_UPC_FILTER] size disagreement",
+        JSON.stringify({ titleMl, rawSizeMl, offersMl, preferred }),
+      );
+    }
+    return { preferredSize: preferred, plausibleSizes, penalty: -5 };
+  }
+
+  const preferred = pickClosestStandardSize(candidates);
+  return { preferredSize: preferred, plausibleSizes, penalty: plausibleSizes.length > 1 ? -5 : 0 };
+}
+
+/**
+ * Extract distinguishing markers from a product name.
+ * @param {string | null | undefined} name
+ * @returns {{ numbers: number[]; qualifiers: string[]; series: string[] }}
+ */
+export function extractDistinguishingMarkers(name) {
+  /** MLCC column abbreviations → canonical tokens (applied before qualifier matching). */
+  const MLCC_ABBREVIATION_MAP = {
+    SNGL: "SINGLE",
+    BRL: "BARREL",
+    BRRL: "BARREL",
+    PRF: "PROOF",
+    WSKY: "WHISKEY",
+    BIB: "BONDED",
+    BRBN: "BOURBON",
+    TN: "TENNESSEE",
+    SCTH: "SCOTCH",
+    CAN: "CANADIAN",
+    RSRV: "RESERVE",
+    STGHT: "STRAIGHT",
+    ORIG: "ORIGINAL",
+    CLSSC: "CLASSIC",
+    STD: "STANDARD",
+    LTD: "LIMITED",
+    ED: "EDITION",
+    SPCL: "SPECIAL",
+    ANNV: "ANNIVERSARY",
+    YR: "YEAR",
+    PROOF: "PROOF",
+  };
+
+  const stripLeadingTrailingNonAlnum = (s) => {
+    let i = 0;
+    let j = s.length;
+    while (i < j && !/[A-Z0-9]/.test(s[i])) i += 1;
+    while (j > i && !/[A-Z0-9]/.test(s[j - 1])) j -= 1;
+    return s.slice(i, j);
+  };
+
+  let src = String(name ?? "").toUpperCase();
+  src = src.replace(/\bW\/\b/g, " ");
+  src = src.replace(/\s+/g, " ").trim();
+  const rawParts = src.split(/\s+/).filter(Boolean);
+
+  const tokens = [];
+  for (const part of rawParts) {
+    const cleaned = stripLeadingTrailingNonAlnum(part);
+    if (!cleaned) continue;
+    const innerChunks = cleaned.includes("-") || cleaned.includes("/") ? cleaned.split(/[-/]+/) : [cleaned];
+    for (const chunk of innerChunks) {
+      const sub = stripLeadingTrailingNonAlnum(chunk);
+      if (!sub) continue;
+      const mapped = Object.prototype.hasOwnProperty.call(MLCC_ABBREVIATION_MAP, sub)
+        ? MLCC_ABBREVIATION_MAP[sub]
+        : sub;
+      if (mapped === "") continue;
+      tokens.push(mapped);
+    }
+  }
+
+  const numbers = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!/^\d{1,3}$/.test(token)) continue;
+    const prev = tokens[i - 1] ?? "";
+    const next = tokens[i + 1] ?? "";
+    const isMeasurement = /^(ML|L|LITER|LITRE|OZ|FLOZ|FL|PROOF|ABV|%)$/.test(next);
+    const isProofPattern = prev === "(" && next === "PROOF";
+    if (isMeasurement || isProofPattern) continue;
+    const numeric = Number.parseInt(token, 10);
+    if (Number.isFinite(numeric) && !numbers.includes(numeric)) numbers.push(numeric);
+  }
+
+  const qualifiers = [];
+  const series = [];
+  for (const word of tokens) {
+    if (DISTINGUISHING_QUALIFIERS.has(word) && !qualifiers.includes(word)) qualifiers.push(word);
+    if (SERIES_ROMAN.has(word) && !series.includes(word)) series.push(word);
+  }
+  return { numbers, qualifiers, series };
+}
+
+/**
+ * @param {string[]} qualifiers
+ * @returns {boolean}
+ */
+function qualifiersIncludeFlavor(qualifiers) {
+  return qualifiers.some((q) => FLAVOR_QUALIFIERS.has(q));
+}
+
+/**
+ * @param {string[]} qualifiers
+ * @returns {boolean}
+ */
+function qualifiersIncludePremium(qualifiers) {
+  return qualifiers.some((q) => PREMIUM_QUALIFIERS.has(q));
+}
+
+/**
+ * Every qualifier is baseline-only (e.g. BLACK on MLCC for core Old No. 7 line).
+ * @param {string[]} qualifiers
+ * @returns {boolean}
+ */
+function qualifiersAreOnlyBaseline(qualifiers) {
+  return qualifiers.length > 0 && qualifiers.every((q) => BASE_LINE_QUALIFIERS.has(q));
+}
+
+/**
+ * Check for marker conflicts between UPC and MLCC names.
+ * Numbers: conflict only when both sides have numbers and there is zero overlap.
+ * Qualifiers: flavor/premium vs silent UPC; baseline-only on MLCC does not conflict; shared token clears conflict.
+ * @param {{ numbers: number[]; qualifiers: string[]; series: string[] }} upcMarkers
+ * @param {{ numbers: number[]; qualifiers: string[]; series: string[] }} mlccMarkers
+ * @returns {boolean}
+ */
+export function hasMarkerConflict(upcMarkers, mlccMarkers) {
+  const upcNums = upcMarkers.numbers ?? [];
+  const mlccNums = mlccMarkers.numbers ?? [];
+  if (upcNums.length > 0 && mlccNums.length > 0) {
+    const numberOverlap = upcNums.some((n) => mlccNums.includes(n));
+    if (!numberOverlap) return true;
+  }
+
+  const upcQ = upcMarkers.qualifiers ?? [];
+  const mlccQ = mlccMarkers.qualifiers ?? [];
+
+  if (upcQ.length > 0 && mlccQ.length === 0) return true;
+
+  const shared = upcQ.some((q) => mlccQ.includes(q));
+  if (upcQ.length > 0 && mlccQ.length > 0) {
+    if (shared) return false;
+    return true;
+  }
+
+  if (upcQ.length === 0 && mlccQ.length > 0) {
+    if (qualifiersAreOnlyBaseline(mlccQ)) return false;
+    if (qualifiersIncludeFlavor(mlccQ)) return true;
+    if (qualifiersIncludePremium(mlccQ)) return true;
+    return true;
+  }
+
+  const seriesOverlap = upcMarkers.series.some((s) => mlccMarkers.series.includes(s));
+  if (upcMarkers.series.length > 0 && mlccMarkers.series.length > 0 && !seriesOverlap) return true;
+
+  return false;
 }
 
 /**
@@ -282,9 +589,14 @@ function scoreCategory(upcData, mlcc, reasons) {
  * @returns {{ score: number; disqualified: boolean }}
  */
 function scoreSize(upcData, mlcc, reasons) {
-  const u = upcData.size_ml;
+  const plausibleSizes = Array.isArray(upcData.plausible_sizes)
+    ? upcData.plausible_sizes
+        .map((s) => Number(s))
+        .filter((s) => Number.isFinite(s))
+    : [];
+  const targets = plausibleSizes.length > 0 ? plausibleSizes : [upcData.size_ml].filter((s) => Number.isFinite(s));
   const m = mlcc.bottle_size_ml != null ? Number(mlcc.bottle_size_ml) : null;
-  if (u == null || !Number.isFinite(u)) {
+  if (!targets.length) {
     reasons.push("Size: unknown on UPC (10 neutral)");
     return { score: 10, disqualified: false };
   }
@@ -292,18 +604,19 @@ function scoreSize(upcData, mlcc, reasons) {
     reasons.push("Size: MLCC size missing (0)");
     return { score: 0, disqualified: false };
   }
-  const d = Math.abs(u - m);
-  if (d === 0) {
-    reasons.push("Size: exact ml match (20)");
-    return { score: 20, disqualified: false };
+  let bestScore = 0;
+  for (const target of targets) {
+    const d = Math.abs(target - m);
+    if (d === 0) bestScore = Math.max(bestScore, 20);
+    else if (d <= 5) bestScore = Math.max(bestScore, 15);
+    else if (d <= 50) bestScore = Math.max(bestScore, 5);
   }
-  if (d <= 5) {
-    reasons.push("Size: within 5ml (15)");
-    return { score: 15, disqualified: false };
-  }
-  if (d <= 50) {
-    reasons.push("Size: within 50ml (5)");
-    return { score: 5, disqualified: false };
+  if (bestScore >= 20) reasons.push("Size: exact ml match (20)");
+  else if (bestScore >= 15) reasons.push("Size: within 5ml (15)");
+  else if (bestScore >= 5) reasons.push("Size: within 50ml (5)");
+  const uncertaintyPenalty = targets.length > 1 ? -5 : Number(upcData.sizePenalty) || 0;
+  if (bestScore > 0) {
+    return { score: Math.max(0, bestScore + uncertaintyPenalty), disqualified: false };
   }
   reasons.push("Size: mismatch >50ml — disqualify");
   return { score: 0, disqualified: true };
@@ -366,7 +679,16 @@ export function scoreUpcToMlccCandidate(upcData, mlccCandidate) {
   const p = scoreProof(upcData, mlccCandidate, reasons);
   const n = scoreNameSimilarity(upcData, mlccCandidate, reasons);
 
-  const disqualified = Boolean(b.disqualified || c.disqualified || z.disqualified || p.disqualified || n.disqualified);
+  const upcMarkers = extractDistinguishingMarkers(upcData.name);
+  const mlccMarkers = extractDistinguishingMarkers(String(mlccCandidate.name ?? ""));
+  const markerConflict = hasMarkerConflict(upcMarkers, mlccMarkers);
+  if (markerConflict) {
+    reasons.push(`Marker conflict: UPC markers ${JSON.stringify(upcMarkers)} vs MLCC markers ${JSON.stringify(mlccMarkers)}`);
+  }
+
+  const disqualified = Boolean(
+    b.disqualified || c.disqualified || z.disqualified || p.disqualified || n.disqualified || markerConflict,
+  );
   const brandScore = disqualified ? 0 : b.score;
   const categoryScore = disqualified ? 0 : c.score;
   const sizeScore = disqualified ? 0 : z.score;
@@ -385,6 +707,9 @@ export function scoreUpcToMlccCandidate(upcData, mlccCandidate) {
     sizeScore,
     proofScore,
     nameSimilarityScore,
+    markerConflict,
+    upcMarkers,
+    mlccMarkers,
   };
 
   if (DEBUG) {
