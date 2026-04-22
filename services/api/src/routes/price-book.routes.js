@@ -9,6 +9,13 @@ import express from "express";
 import supabase from "../config/supabase.js";
 import { extractBottleSizeMl, findMlccCandidatesForUpc, lookupUpcFromUpcitemdb } from "../lib/upcitemdb.js";
 import { Sentry } from "../lib/sentry.js";
+import {
+  deleteUpcMapping,
+  flagUpcMappingAsIncorrect,
+  getUpcMapping,
+  incrementUpcMappingScanCount,
+  upsertUpcMapping,
+} from "../lib/upc-mappings.js";
 import { flagUpcMatchAsIncorrect, queueUpcMatchAudit } from "../mlcc/mlcc-upc-audit.js";
 import { mlccCategoryMatchesAnyHint } from "../mlcc/mlcc-category-ontology.js";
 import {
@@ -624,6 +631,12 @@ async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, so
         console.log("[price-book-upc] mlcc_items upc cache update failed", upErr.message);
       } else {
         cached = true;
+        void upsertUpcMapping(supabase, {
+          upc,
+          mlccCode: String(match.code ?? ""),
+          confidenceSource: "auto_high_score",
+          confirmedBy: null,
+        });
       }
     } else if (process.env.DEBUG_UPC_FILTER === "1") {
       console.log(
@@ -768,10 +781,13 @@ export async function priceBookUpcFlagHandler(req, res) {
     if (!r.ok) {
       return res.status(500).json({ ok: false, error: r.error ?? "flag_failed" });
     }
+    const mappingFlag = await flagUpcMappingAsIncorrect(supabase, upc);
+    const clearedMap = await deleteUpcMapping(supabase, upc);
     return res.status(200).json({
       ok: true,
       message: "Match flagged; next scan will re-match from scratch.",
       clearedMlccCode: r.clearedMlccCode ?? null,
+      upcMappingRemoved: mappingFlag.removed || clearedMap.removed,
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -785,6 +801,55 @@ export async function priceBookUpcHandler(req, res) {
       return res.status(400).json({ ok: false, error: "upc_required" });
     }
     console.log("[price-book-upc] lookup", upc);
+
+    const mapping = await getUpcMapping(supabase, upc);
+    if (mapping) {
+      const { data: mlccItem, error: mapItemErr } = await supabase
+        .from("mlcc_items")
+        .select("*")
+        .eq("code", mapping.mlccCode)
+        .maybeSingle();
+      if (mapItemErr) {
+        console.log("[price-book-upc] upc_mappings mlcc_items fetch error", mapItemErr.message);
+      } else if (mlccItem) {
+        void incrementUpcMappingScanCount(supabase, upc).catch(() => {});
+        queueUpcLookupLog({
+          upc,
+          matched_mlcc_code: mlccItem.code ?? null,
+          matched_product_name: mlccItem.name ?? null,
+          source: "upc_mappings",
+          raw_api_response: null,
+        });
+        queueUpcMatchAudit(supabase, {
+          upc,
+          upcBrand: null,
+          upcProductName: mlccItem.name ?? null,
+          upcProductNameRaw: mlccItem.name ?? null,
+          matchedMlccCode: mlccItem.code != null ? String(mlccItem.code) : null,
+          matchMode: "upc_mapping",
+          confidenceScore: 100,
+          confidenceWarning: null,
+          scoringBreakdown: null,
+          allCandidateScores: [],
+          cached: true,
+        });
+        incrementScanCount(supabase, mlccItem.id);
+        return res.json({
+          ok: true,
+          product: { ...mlccItem, imageUrl: null },
+          source: "upc_mappings",
+          confidenceSource: mapping.confidenceSource,
+          scanCount: mapping.scanCount,
+          message: "Authoritative mapping",
+          matchMode: "confident",
+          confidenceScore: 100,
+          scoringBreakdown: null,
+          allCandidateScores: [],
+          imageUrl: null,
+        });
+      }
+      void deleteUpcMapping(supabase, upc).catch(() => {});
+    }
 
     const { data: localRow, error: localErr } = await supabase
       .from("mlcc_items")
@@ -967,6 +1032,14 @@ router.post("/upc/:upc/confirm", async (req, res) => {
     const upcProductName =
       typeof body.upcProductName === "string" ? body.upcProductName.trim() || null : null;
     const upcBrand = typeof body.upcBrand === "string" ? body.upcBrand.trim() || null : null;
+    const confirmedBy =
+      typeof body.confirmedBy === "string" && body.confirmedBy.trim() ? body.confirmedBy.trim() : null;
+    void upsertUpcMapping(supabase, {
+      upc,
+      mlccCode: String(product.code ?? mlccCode),
+      confidenceSource: "user_confirmed",
+      confirmedBy,
+    });
     queueUpcLookupLog({
       upc,
       matched_mlcc_code: product.code ?? null,

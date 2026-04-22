@@ -25,6 +25,76 @@ function assertAdminToken(req, res) {
   return true;
 }
 
+router.get("/upc-mappings", async (req, res) => {
+  if (!assertAdminToken(req, res)) return;
+  try {
+    const sources = ["user_confirmed", "auto_high_score", "bulk_seed", "manual_admin"];
+    const [totalRes, ...countRes] = await Promise.all([
+      supabase.from("upc_mappings").select("*", { count: "exact", head: true }),
+      ...sources.map((s) =>
+        supabase.from("upc_mappings").select("*", { count: "exact", head: true }).eq("confidence_source", s),
+      ),
+    ]);
+    if (totalRes.error) {
+      return res.status(500).json({ ok: false, error: totalRes.error.message });
+    }
+    for (const c of countRes) {
+      if (c.error) {
+        return res.status(500).json({ ok: false, error: c.error.message });
+      }
+    }
+    const by_source = {
+      user_confirmed: countRes[0].count ?? 0,
+      auto_high_score: countRes[1].count ?? 0,
+      bulk_seed: countRes[2].count ?? 0,
+      manual_admin: countRes[3].count ?? 0,
+    };
+
+    const { data: recentRows, error: recErr } = await supabase
+      .from("upc_mappings")
+      .select("upc, mlcc_code, confidence_source, confirmed_at, scan_count, flag_count")
+      .order("confirmed_at", { ascending: false })
+      .limit(50);
+    if (recErr) {
+      return res.status(500).json({ ok: false, error: recErr.message });
+    }
+    const codes = [...new Set((recentRows ?? []).map((r) => String(r?.mlcc_code ?? "").trim()).filter(Boolean))];
+    /** @type {Map<string, string>} */
+    const nameByCode = new Map();
+    if (codes.length) {
+      const { data: items, error: itemErr } = await supabase
+        .from("mlcc_items")
+        .select("code, name")
+        .in("code", codes);
+      if (itemErr) {
+        return res.status(500).json({ ok: false, error: itemErr.message });
+      }
+      for (const it of items ?? []) {
+        const c = String(it?.code ?? "").trim();
+        if (c) nameByCode.set(c, String(it?.name ?? ""));
+      }
+    }
+    const recent = (recentRows ?? []).map((r) => ({
+      upc: r.upc,
+      mlcc_code: r.mlcc_code,
+      mlcc_name: nameByCode.get(String(r.mlcc_code ?? "")) ?? null,
+      confidence_source: r.confidence_source,
+      confirmed_at: r.confirmed_at,
+      scan_count: r.scan_count,
+      flag_count: r.flag_count,
+    }));
+
+    return res.json({
+      ok: true,
+      total_mappings: totalRes.count ?? 0,
+      by_source,
+      recent,
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 router.get("/upc-audit", async (req, res) => {
   if (!assertAdminToken(req, res)) return;
   try {

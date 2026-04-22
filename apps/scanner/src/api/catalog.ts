@@ -134,7 +134,8 @@ function mapUpcLookupBody(raw: Record<string, unknown>, resOk: boolean): UpcLook
         ? raw.matchMode
         : undefined,
     needsUserConfirmation: Boolean(raw.needsUserConfirmation),
-    message: raw.message != null ? String(raw.message) : undefined,
+    message:
+      raw.message != null && String(raw.message).trim() !== "" ? String(raw.message) : undefined,
     error: raw.error != null ? String(raw.error) : undefined,
     productName: raw.productName != null ? String(raw.productName) : undefined,
     upcProductNameRaw: raw.upcProductNameRaw != null ? String(raw.upcProductNameRaw) : undefined,
@@ -147,6 +148,13 @@ function mapUpcLookupBody(raw: Record<string, unknown>, resOk: boolean): UpcLook
     cacheQuality:
       raw.cacheQuality === "high" || raw.cacheQuality === "provisional"
         ? raw.cacheQuality
+        : undefined,
+    source: raw.source != null ? String(raw.source) : undefined,
+    confidenceSource:
+      raw.confidenceSource != null ? String(raw.confidenceSource) : undefined,
+    scanCount:
+      raw.scanCount != null && Number.isFinite(Number(raw.scanCount))
+        ? Math.round(Number(raw.scanCount))
         : undefined,
   };
   if (raw.confidenceScore != null) {
@@ -209,6 +217,7 @@ export async function confirmUpcMapping(
   mlccCode: string,
   upcProductName?: string,
   upcBrand?: string,
+  confirmedBy?: string,
 ): Promise<MlccProduct | null> {
   const u = upc.trim();
   if (!u) return null;
@@ -219,11 +228,15 @@ export async function confirmUpcMapping(
     const t = String(token).trim();
     headers.Authorization = t.startsWith("Bearer ") ? t : `Bearer ${t}`;
   }
+  const body: Record<string, unknown> = { mlccCode, upcProductName, upcBrand };
+  if (confirmedBy != null && String(confirmedBy).trim() !== "") {
+    body.confirmedBy = String(confirmedBy).trim();
+  }
   const res = await fetchWithRetry(`${BASE}/upc/${encodeURIComponent(u)}/confirm`, {
     method: "POST",
     credentials: "same-origin",
     headers,
-    body: JSON.stringify({ mlccCode, upcProductName, upcBrand }),
+    body: JSON.stringify(body),
   });
   const data = (await res.json()) as { ok?: boolean; product?: unknown };
   if (!res.ok || !data.ok || !data.product || typeof data.product !== "object") return null;

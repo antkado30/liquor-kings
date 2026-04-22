@@ -51,6 +51,12 @@ export interface UpcLookupResponse {
   cached?: boolean;
   /** Confident UPC match cache tier from API. */
   cacheQuality?: "high" | "provisional";
+  /** When present, lookup used `public.upc_mappings` (authoritative) vs scoring/cache. */
+  source?: string;
+  /** From `upc_mappings.confidence_source` when `source` is `upc_mappings`. */
+  confidenceSource?: string;
+  /** From `upc_mappings.scan_count` when `source` is `upc_mappings`. */
+  scanCount?: number;
   /** Top candidate total score (0–100) from multi-signal UPC matching. */
   confidenceScore?: number;
   scoringBreakdown?: Record<string, string | number | null>;
