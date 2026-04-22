@@ -12,6 +12,20 @@ function normalizeForAlias(str) {
     .trim();
 }
 
+/**
+ * Uppercase brand string with apostrophes removed for consistent matching
+ * (e.g. MAKER'S MARK → MAKERS MARK, JACK DANIEL'S → JACK DANIELS).
+ * @param {string | null | undefined} str
+ * @returns {string}
+ */
+export function normalizeBrandForMatch(str) {
+  return String(str ?? "")
+    .toUpperCase()
+    .replace(/'/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** @type {readonly [string, string][]} */
 const RAW_BRAND_ALIAS_PAIRS = [
   ["jack daniels", "j daniels"],
@@ -160,7 +174,7 @@ for (const [common, mlccPrefixes] of RAW_UPC_BRAND_PREFIXES) {
  * @returns {string[]}
  */
 export function resolveBrandAlias(commonBrand) {
-  const key = normalizeForAlias(commonBrand);
+  const key = normalizeForAlias(normalizeBrandForMatch(commonBrand));
   if (!key) return [];
   const list = UPC_BRAND_PREFIX_BY_KEY.get(key);
   return list ? [...list] : [];
@@ -186,6 +200,7 @@ export function getAllMlccSearchVariants(upcBrand) {
 
   add(rawBrand);
   add(rawBrand.replaceAll("'", ""));
+  add(normalizeBrandForMatch(rawBrand));
 
   for (const aliasPrefix of resolveBrandAlias(rawBrand)) {
     add(aliasPrefix);
@@ -204,8 +219,8 @@ export function getAllMlccSearchVariants(upcBrand) {
  * @returns {number}
  */
 export function inferBrandAlias(upcBrand, mlccName) {
-  const a = normalizeForAlias(upcBrand);
-  const b = normalizeForAlias(mlccName);
+  const a = normalizeForAlias(normalizeBrandForMatch(upcBrand));
+  const b = normalizeForAlias(normalizeBrandForMatch(mlccName));
   if (!a || !b) return 0;
   const ta = a.split(/\s+/).filter(Boolean);
   const tb = b.split(/\s+/).filter(Boolean);

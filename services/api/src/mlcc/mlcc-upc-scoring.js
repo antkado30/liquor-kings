@@ -14,7 +14,11 @@
  * }} UpcData
  */
 
-import { inferBrandAlias, resolveBrandAlias } from "./mlcc-brand-aliases.js";
+import {
+  inferBrandAlias,
+  normalizeBrandForMatch,
+  resolveBrandAlias,
+} from "./mlcc-brand-aliases.js";
 import {
   isDisqualifyingMismatch,
   mlccCategoryMatchesAnyHint,
@@ -49,7 +53,14 @@ const FLAVOR_QUALIFIERS = new Set([
  * MLCC labels for the core / standard line — when UPC has no qualifiers, these do not
  * contradict the consumer title (e.g. Old No. 7 vs "OLD 7 BLACK" on MLCC).
  */
-const BASE_LINE_QUALIFIERS = new Set(["BLACK", "ORIGINAL", "CLASSIC", "STANDARD", "TRADITIONAL"]);
+const BASE_LINE_QUALIFIERS = new Set([
+  "BLACK",
+  "BBN",
+  "ORIGINAL",
+  "CLASSIC",
+  "STANDARD",
+  "TRADITIONAL",
+]);
 
 /** Premium or limited line markers — conflict with a plain base UPC unless UPC also names them. */
 const PREMIUM_QUALIFIERS = new Set([
@@ -73,6 +84,20 @@ const PREMIUM_QUALIFIERS = new Set([
   "MCLAREN",
   "COY",
   "PROOF",
+  "CASK",
+  "STRENGTH",
+  "PRIVATE",
+  "SELECT",
+  "CELLAR",
+  "AGED",
+  "LIMITED",
+  "EDITION",
+  "WFS",
+  "KEEPERS",
+  "ANNIVERSARY",
+  "COMMEMORATIVE",
+  "DISTILLERY",
+  "GIFT_SET",
 ]);
 
 /** Union of all tokens `extractDistinguishingMarkers` looks for in names. */
@@ -82,6 +107,16 @@ const DISTINGUISHING_QUALIFIERS = new Set([
   ...PREMIUM_QUALIFIERS,
 ]);
 const SERIES_ROMAN = new Set(["I", "II", "III", "IV", "V", "X", "XV", "XX", "XXV", "XXX", "L"]);
+
+/**
+ * MLCC uses "W/" for gift-with-purchase bundle copy (e.g. "W/WATER BOTTLE", trailing "W/").
+ * Matches a word-boundary before {@code W} then a slash (covers {@code W/WATER} and standalone {@code W/}).
+ * @param {string | null | undefined} mlccName
+ * @returns {boolean}
+ */
+export function isGiftSet(mlccName) {
+  return /\bW\//i.test(String(mlccName ?? ""));
+}
 
 /**
  * Parse a size hint into ml (supports ml, liter, and fl oz).
@@ -196,6 +231,8 @@ export function extractSizeFromTitle(upcData) {
  * @returns {{ numbers: number[]; qualifiers: string[]; series: string[] }}
  */
 export function extractDistinguishingMarkers(name) {
+  const giftSet = isGiftSet(name);
+
   /** MLCC column abbreviations → canonical tokens (applied before qualifier matching). */
   const MLCC_ABBREVIATION_MAP = {
     SNGL: "SINGLE",
@@ -230,7 +267,6 @@ export function extractDistinguishingMarkers(name) {
   };
 
   let src = String(name ?? "").toUpperCase();
-  src = src.replace(/\bW\/\b/g, " ");
   src = src.replace(/\s+/g, " ").trim();
   const rawParts = src.split(/\s+/).filter(Boolean);
 
@@ -269,6 +305,7 @@ export function extractDistinguishingMarkers(name) {
     if (DISTINGUISHING_QUALIFIERS.has(word) && !qualifiers.includes(word)) qualifiers.push(word);
     if (SERIES_ROMAN.has(word) && !series.includes(word)) series.push(word);
   }
+  if (giftSet && !qualifiers.includes("GIFT_SET")) qualifiers.push("GIFT_SET");
   return { numbers, qualifiers, series };
 }
 
@@ -298,7 +335,24 @@ function qualifiersAreOnlyBaseline(qualifiers) {
 }
 
 /**
+ * True when the UPC title has no variant markers (plain flagship): no numbers or series,
+ * and no qualifiers except optional baseline-only tokens (e.g. BLACK, BBN).
+ * @param {{ numbers: number[]; qualifiers: string[]; series: string[] }} upcMarkers
+ * @returns {boolean}
+ */
+export function isPlainFlagshipUpc(upcMarkers) {
+  const nums = upcMarkers.numbers ?? [];
+  const quals = upcMarkers.qualifiers ?? [];
+  const series = upcMarkers.series ?? [];
+  if (nums.length > 0) return false;
+  if (series.length > 0) return false;
+  if (quals.length === 0) return true;
+  return quals.every((q) => BASE_LINE_QUALIFIERS.has(q));
+}
+
+/**
  * Check for marker conflicts between UPC and MLCC names.
+ * Plain flagship UPC rejects MLCC rows with extra numbers, non-baseline qualifiers, or series.
  * Numbers: conflict only when both sides have numbers and there is zero overlap.
  * Qualifiers: flavor/premium vs silent UPC; baseline-only on MLCC does not conflict; shared token clears conflict.
  * @param {{ numbers: number[]; qualifiers: string[]; series: string[] }} upcMarkers
@@ -306,6 +360,15 @@ function qualifiersAreOnlyBaseline(qualifiers) {
  * @returns {boolean}
  */
 export function hasMarkerConflict(upcMarkers, mlccMarkers) {
+  if (isPlainFlagshipUpc(upcMarkers)) {
+    const mlccSeries = mlccMarkers.series ?? [];
+    if (mlccSeries.length > 0) return true;
+    const mlccNumsFlag = mlccMarkers.numbers ?? [];
+    if (mlccNumsFlag.length > 0) return true;
+    const mlccQFlag = mlccMarkers.qualifiers ?? [];
+    if (mlccQFlag.length > 0 && !qualifiersAreOnlyBaseline(mlccQFlag)) return true;
+  }
+
   const upcNums = upcMarkers.numbers ?? [];
   const mlccNums = mlccMarkers.numbers ?? [];
   if (upcNums.length > 0 && mlccNums.length > 0) {
@@ -371,7 +434,8 @@ export function extractProofFromTitle(title) {
  * @returns {string} lowercased brand-ish phrase (first 2–3 tokens)
  */
 export function cleanMlccBrandFromName(name) {
-  let s = String(name ?? "").trim();
+  let s = normalizeBrandForMatch(name);
+  s = s.toLowerCase();
   s = s.replace(/\([^)]*\)/g, " ");
   s = s.replace(/\b(PT|FTH|LTR|QTR|50ML|375ML|750ML|1000ML|1750ML)\b/gi, " ");
   s = s.replace(/\b\d+(?:\.\d+)?\s*(?:m\s*l|ml|l|litre|liter)\b/gi, " ");
@@ -484,27 +548,27 @@ export function categoryRowMatchesHints(hints, mlccCategory) {
  * @returns {{ score: number; disqualified: boolean; brandSource: string; brandInferScore: number | null }}
  */
 function scoreBrand(upcData, mlcc, reasons) {
-  const ub = String(upcData.brand ?? "").trim().toLowerCase();
+  const ub = normalizeBrandForMatch(upcData.brand).toLowerCase();
   const mlccName = String(mlcc.name ?? "");
-  const mlccLower = mlccName.toLowerCase();
+  const mlccNorm = normalizeBrandForMatch(mlccName).toLowerCase();
   const mlccBrandPhrase = cleanMlccBrandFromName(mlccName);
 
   if (!ub) {
     reasons.push("Brand: no UPC brand (0)");
     return { score: 0, disqualified: false, brandSource: "none", brandInferScore: null };
   }
-  if (mlccLower === ub || mlccBrandPhrase === ub) {
+  if (mlccNorm === ub || mlccBrandPhrase === ub) {
     reasons.push("Brand: exact match (30)");
     return { score: 30, disqualified: false, brandSource: "exact", brandInferScore: null };
   }
-  if (mlccLower.startsWith(ub) || mlccLower.startsWith(`${ub} `)) {
+  if (mlccNorm.startsWith(ub) || mlccNorm.startsWith(`${ub} `)) {
     reasons.push("Brand: UPC brand prefix on MLCC name (25)");
     return { score: 25, disqualified: false, brandSource: "prefix", brandInferScore: null };
   }
-  const prefixes = resolveBrandAlias(ub);
+  const prefixes = resolveBrandAlias(upcData.brand);
   for (const p of prefixes) {
-    const pl = p.toLowerCase();
-    if (mlccLower.startsWith(pl) || mlccLower.includes(` ${pl}`)) {
+    const pl = normalizeBrandForMatch(p).toLowerCase();
+    if (mlccNorm.startsWith(pl) || mlccNorm.includes(` ${pl}`)) {
       reasons.push(`Brand: alias prefix match "${p}" (28)`);
       return { score: 28, disqualified: false, brandSource: "alias", brandInferScore: null };
     }
