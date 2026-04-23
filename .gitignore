@@ -7,6 +7,7 @@ build
 coverage
 playwright-report
 mlcc_ui_dump
+services/api/rpa-output/
 *.log
 supabase/.temp/
 supabase/.branches/

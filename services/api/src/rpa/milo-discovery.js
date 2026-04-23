@@ -1,0 +1,701 @@
+/**
+ * MILO / OLO read-only discovery: login once, walk typical UI, capture artifacts.
+ * SAFE MODE: never submits orders; see BLOCKLIST_RE and clickSafely().
+ *
+ * Run: node services/api/src/rpa/milo-discovery.js
+ * Docs: services/api/src/rpa/README.md
+ */
+
+import { appendFile, mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { chromium } from "playwright";
+
+/** Buttons / actions that must never be clicked in discovery (case-insensitive). */
+export const BLOCKLIST_RE = /checkout|validate|place order|submit|confirm order/i;
+
+/** Same patterns except "place order" — used only with explicit license-nav override. */
+const BLOCKLIST_NO_PLACE_ORDER_RE = /checkout|validate|submit|confirm order/i;
+
+const PAGE_LOAD_MS = 30_000;
+const STABILIZE_MS = 5000;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const API_ROOT = path.resolve(__dirname, "..", "..");
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function timestampDirName() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function requireEnv(name) {
+  const v = process.env[name];
+  if (v == null || String(v).trim() === "") {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return String(v).trim();
+}
+
+function parseSlowMo() {
+  const raw = process.env.MILO_DISCOVERY_SLOWMO;
+  const n = raw == null ? 250 : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 250;
+}
+
+function resolveOutputDir() {
+  const custom = process.env.MILO_OUTPUT_DIR;
+  if (custom && custom.trim()) {
+    return path.isAbsolute(custom.trim()) ? custom.trim() : path.resolve(process.cwd(), custom.trim());
+  }
+  return path.join(API_ROOT, "rpa-output", timestampDirName());
+}
+
+function buildHostnameAllowPredicate(loginUrlStr) {
+  const seed = new URL(loginUrlStr);
+  const seedHost = seed.hostname.toLowerCase();
+  const allowed = new Set([seedHost]);
+  if (seedHost.endsWith(".michigan.gov") || seedHost === "michigan.gov") {
+    allowed.add("michigan.gov");
+  }
+  return (hostname) => {
+    const h = String(hostname).toLowerCase();
+    if (allowed.has(h)) return true;
+    if (h.endsWith(`.${seedHost}`)) return true;
+    if (h === "michigan.gov" || h.endsWith(".michigan.gov")) return true;
+    return false;
+  };
+}
+
+let isHostnameAllowed = () => true;
+let expectedHostsDescription = "";
+
+function assertAllowedUrl(urlStr, label) {
+  let hostname;
+  try {
+    hostname = new URL(urlStr).hostname;
+  } catch {
+    throw new Error(`SAFE MODE: invalid URL during ${label}: ${urlStr}`);
+  }
+  if (!isHostnameAllowed(hostname)) {
+    throw new Error(
+      `SAFE MODE: unexpected host "${hostname}" during ${label}. Allowed: ${expectedHostsDescription}`,
+    );
+  }
+}
+
+/** @type {import('node:fs').WriteStream | null} */
+let networkStream = null;
+let warnings = [];
+
+function logWarning(msg) {
+  warnings.push(msg);
+  console.warn(`[warn] ${msg}`);
+}
+
+async function appendActionLine(obj) {
+  const line = JSON.stringify(obj) + "\n";
+  await appendFile(path.join(outputDirGlobal, "actions.jsonl"), line, "utf8");
+}
+
+let outputDirGlobal = "";
+
+/**
+ * @param {import('playwright').Page} page
+ * @param {import('playwright').Locator} locator
+ * @param {{ step: string, selectorNote?: string, allowPlaceOrderLicenseNav?: boolean }} opts
+ */
+export async function clickSafely(page, locator, opts) {
+  const first = locator.first();
+  const count = await first.count();
+  if (count === 0) {
+    throw new Error(`SAFE MODE: no element for click (${opts.step})`);
+  }
+  const text = await first
+    .evaluate((el) => {
+      const tag = el.tagName.toLowerCase();
+      const val = ("value" in el && el.value ? String(el.value) : "").trim();
+      const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+      const piece = t || val;
+      return piece.slice(0, 500);
+    })
+    .catch(() => "");
+  const tag = (await first.evaluate((el) => el.tagName)).toLowerCase();
+  const typeAttr = (await first.getAttribute("type").catch(() => "")) || "";
+
+  const blockedCore = BLOCKLIST_NO_PLACE_ORDER_RE.test(text);
+  const blockedPlaceOrder = /place order/i.test(text) && !opts.allowPlaceOrderLicenseNav;
+  if (blockedCore || blockedPlaceOrder) {
+    throw new Error(`SAFE MODE: refused to click element '[${text || tag}]' (${opts.step})`);
+  }
+  if (opts.allowPlaceOrderLicenseNav && /place order/i.test(text)) {
+    const url = page.url().toLowerCase();
+    const bodySnippet = (
+      await page.evaluate(() => (document.body?.innerText ?? "").slice(0, 4000).toLowerCase())
+    ).catch(() => "");
+    const looksLicense =
+      url.includes("license") ||
+      bodySnippet.includes("your license") ||
+      bodySnippet.includes("select a license") ||
+      bodySnippet.includes("place order");
+    if (!looksLicense) {
+      throw new Error(
+        `SAFE_MODE: refused Place Order click — page does not look like license selection (${opts.step})`,
+      );
+    }
+  }
+
+  const urlBefore = page.url();
+  await first.click({ timeout: 15_000 });
+  await sleep(parseSlowMo());
+  const urlAfter = page.url();
+  assertAllowedUrl(urlAfter, opts.step);
+  await appendActionLine({
+    step: opts.step,
+    selectorNote: opts.selectorNote ?? null,
+    text: text.slice(0, 500),
+    tag,
+    typeAttr,
+    url_before: urlBefore,
+    url_after: urlAfter,
+    ts: new Date().toISOString(),
+  });
+}
+
+async function saveUrlFile(baseName, urlStr) {
+  await writeFile(path.join(outputDirGlobal, `${baseName}.url.txt`), `${urlStr}\n`, "utf8");
+}
+
+async function saveBodyCapture(page, baseName) {
+  const bodyInner = await page.evaluate(() => {
+    const body = document.body;
+    if (!body) return "";
+    const clone = body.cloneNode(true);
+    clone.querySelectorAll('input[type="password"]').forEach((el) => {
+      el.value = "";
+      el.setAttribute("value", "");
+    });
+    return clone.innerHTML;
+  });
+  const html =
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${baseName}</title></head><body>` +
+    bodyInner +
+    `</body></html>`;
+  await writeFile(path.join(outputDirGlobal, `${baseName}.html`), html, "utf8");
+  await page.screenshot({ path: path.join(outputDirGlobal, `${baseName}.png`), fullPage: true });
+  await saveUrlFile(baseName, page.url());
+}
+
+async function saveJson(name, data) {
+  await writeFile(path.join(outputDirGlobal, name), JSON.stringify(data, null, 2) + "\n", "utf8");
+}
+
+async function gotoStable(page, url, stepLabel) {
+  assertAllowedUrl(url, `${stepLabel} pre-goto`);
+  await page.goto(url, { waitUntil: "networkidle", timeout: PAGE_LOAD_MS });
+  await page.waitForLoadState("networkidle", { timeout: STABILIZE_MS }).catch(() => {});
+  assertAllowedUrl(page.url(), `${stepLabel} post-goto`);
+}
+
+async function inspectLoginLikeDom(page) {
+  return page.evaluate(() => {
+    const inputs = [...document.querySelectorAll("input")].map((el) => ({
+      tag: el.tagName,
+      type: el.getAttribute("type") || "",
+      name: el.getAttribute("name") || "",
+      id: el.id || "",
+      placeholder: el.getAttribute("placeholder") || "",
+      ariaLabel: el.getAttribute("aria-label") || "",
+      required: el.required === true,
+    }));
+    const labels = [...document.querySelectorAll("label")].map((el) => ({
+      text: (el.textContent || "").trim().slice(0, 500),
+      forId: el.getAttribute("for") || "",
+      parentText: (el.parentElement?.textContent || "").trim().slice(0, 200),
+    }));
+    const buttons = [...document.querySelectorAll("button, input[type='submit'], input[type='button']")].map(
+      (el) => ({
+        tag: el.tagName,
+        text: (el.textContent || el.getAttribute("value") || "").trim().slice(0, 300),
+        type: el.getAttribute("type") || "",
+        id: el.id || "",
+        className: el.className || "",
+        ariaLabel: el.getAttribute("aria-label") || "",
+      }),
+    );
+    const anchors = [...document.querySelectorAll("a[href]")].map((el) => ({
+      text: (el.textContent || "").trim().slice(0, 300),
+      href: el.getAttribute("href") || "",
+    }));
+    return { inputs, labels, buttons, anchors };
+  });
+}
+
+async function inspectButtonsAndLinks(page) {
+  return page.evaluate(() => {
+    const buttons = [...document.querySelectorAll("button, [role='button']")].map((el) => ({
+      tag: el.tagName,
+      text: (el.textContent || "").trim().slice(0, 300),
+      id: el.id || "",
+      className: typeof el.className === "string" ? el.className : "",
+      ariaLabel: el.getAttribute("aria-label") || "",
+    }));
+    const anchors = [...document.querySelectorAll("a[href]")].map((el) => ({
+      text: (el.textContent || "").trim().slice(0, 300),
+      href: el.getAttribute("href") || "",
+    }));
+    return { buttons, anchors };
+  });
+}
+
+async function findUsernameLocator(page) {
+  const email = page.locator('input[type="email"]').first();
+  if ((await email.count()) > 0) return email;
+  const byName = page.locator('input[name*="email" i], input[name*="user" i]').first();
+  if ((await byName.count()) > 0) return byName;
+  const all = page.locator("input[type='text'], input:not([type]), input[type='email']");
+  const n = await all.count();
+  for (let i = 0; i < n; i++) {
+    const loc = all.nth(i);
+    const aria = ((await loc.getAttribute("aria-label")) || "").toLowerCase();
+    const name = ((await loc.getAttribute("name")) || "").toLowerCase();
+    const id = ((await loc.getAttribute("id")) || "").toLowerCase();
+    const ph = ((await loc.getAttribute("placeholder")) || "").toLowerCase();
+    const hay = `${aria} ${name} ${id} ${ph}`;
+    if (/(email|user|login)/i.test(hay)) return loc;
+  }
+  return page.locator("input").first();
+}
+
+async function findPasswordLocator(page) {
+  return page.locator('input[type="password"]').first();
+}
+
+async function findTermsCheckbox(page) {
+  const boxes = page.locator("input[type='checkbox']");
+  const c = await boxes.count();
+  for (let i = 0; i < c; i++) {
+    const b = boxes.nth(i);
+    const id = await b.getAttribute("id");
+    let labelText = "";
+    if (id) {
+      const lbl = page.locator(`label[for="${id.replace(/"/g, '\\"')}"]`);
+      if ((await lbl.count()) > 0) labelText = (await lbl.innerText().catch(() => "")) || "";
+    }
+    const aria = (await b.getAttribute("aria-label")) || "";
+    const t = `${labelText} ${aria}`.toLowerCase();
+    if (/(read|accept|terms)/i.test(t)) return b;
+  }
+  return page.locator("input[type='checkbox']").first();
+}
+
+async function findLoginSubmitLocator(page) {
+  const role = page.getByRole("button", { name: /^(log\s*in|login|sign\s*in)$/i });
+  if ((await role.count()) > 0) return role.first();
+  const submit = page.locator('button[type="submit"], input[type="submit"]').first();
+  if ((await submit.count()) > 0) return submit;
+  return page.getByRole("button", { name: /log|sign/i }).first();
+}
+
+async function collectLicenseSelectOptions(page) {
+  return page.evaluate(() => {
+    const sel = document.querySelector("select");
+    if (!sel) return null;
+    return [...sel.options].map((o) => ({ value: o.value, text: (o.textContent || "").trim() }));
+  });
+}
+
+async function deepSampleRow(page, rowSelectorHints) {
+  return page.evaluate((hints) => {
+    let row = null;
+    for (const h of hints) {
+      row = document.querySelector(h);
+      if (row) break;
+    }
+    if (!row) {
+      row =
+        document.querySelector("table tbody tr") ||
+        document.querySelector("[role='row']") ||
+        document.querySelector("li.product, .product-row, [data-product]");
+    }
+    if (!row) return null;
+
+    function attrs(el) {
+      const o = {};
+      if (!el.attributes) return o;
+      for (const a of el.attributes) o[a.name] = a.value;
+      return o;
+    }
+
+    function walk(el, depth, maxChildren) {
+      if (!el || depth < 0) return null;
+      const node = {
+        tag: el.tagName,
+        attrs: attrs(el),
+        text: (el.childNodes?.length === 1 && el.childNodes[0].nodeType === 3
+          ? el.textContent
+          : ""
+        )
+          .trim()
+          .slice(0, 200),
+      };
+      if (depth === 0) return node;
+      const kids = [...el.children].slice(0, maxChildren);
+      node.children = kids.map((k) => walk(k, depth - 1, maxChildren)).filter(Boolean);
+      return node;
+    }
+    return walk(row, 5, 25);
+  }, rowSelectorHints);
+}
+
+async function summarizeOutputBytes(dir) {
+  let total = 0;
+  let fileCount = 0;
+  async function walk(d) {
+    const entries = await readdir(d, { withFileTypes: true });
+    for (const ent of entries) {
+      const p = path.join(d, ent.name);
+      if (ent.isDirectory()) await walk(p);
+      else {
+        total += (await stat(p)).size;
+        fileCount += 1;
+      }
+    }
+  }
+  await walk(dir);
+  return { total, fileCount };
+}
+
+async function main() {
+  console.log("=== MILO discovery (read-only, SAFE MODE) ===");
+  const MILO_LOGIN_URL = requireEnv("MILO_LOGIN_URL");
+  requireEnv("MILO_USERNAME");
+  requireEnv("MILO_PASSWORD");
+  const username = process.env.MILO_USERNAME.trim();
+  const password = process.env.MILO_PASSWORD;
+
+  outputDirGlobal = resolveOutputDir();
+  await mkdir(outputDirGlobal, { recursive: true });
+  console.log("Output:", outputDirGlobal);
+
+  const seedUrl = new URL(MILO_LOGIN_URL);
+  isHostnameAllowed = buildHostnameAllowPredicate(MILO_LOGIN_URL);
+  expectedHostsDescription = `${seedUrl.hostname} (exact), *.${seedUrl.hostname}, michigan.gov, *.michigan.gov`;
+  console.log("Allowed hosts:", expectedHostsDescription);
+
+  const headless = process.env.MILO_DISCOVERY_HEADFUL !== "1";
+  const slowMo = parseSlowMo();
+
+  const harPath = path.join(outputDirGlobal, "network.har");
+  networkStream = createWriteStream(path.join(outputDirGlobal, "network-log.jsonl"), { flags: "a" });
+
+  const browser = await chromium.launch({ headless, slowMo });
+  const context = await browser.newContext({
+    recordHar: { path: harPath, omitContent: false },
+    recordVideo: { dir: outputDirGlobal },
+  });
+
+  const page = await context.newPage();
+
+  page.on("request", (req) => {
+    try {
+      const u = req.url();
+      if (/password=/i.test(u)) return;
+      networkStream.write(
+        JSON.stringify({
+          type: "request",
+          ts: new Date().toISOString(),
+          method: req.method(),
+          url: u,
+          resourceType: req.resourceType(),
+        }) + "\n",
+      );
+    } catch {
+      /* ignore */
+    }
+  });
+  page.on("response", async (res) => {
+    try {
+      const u = res.url();
+      if (/password=/i.test(u)) return;
+      networkStream.write(
+        JSON.stringify({
+          type: "response",
+          ts: new Date().toISOString(),
+          status: res.status(),
+          url: u,
+        }) + "\n",
+      );
+    } catch {
+      /* ignore */
+    }
+  });
+
+  try {
+    // Step 2
+    await gotoStable(page, MILO_LOGIN_URL, "01-login-page");
+    await saveBodyCapture(page, "01-login-page");
+
+    // Step 3
+    const loginInspection = await inspectLoginLikeDom(page);
+    await saveJson("01-login-form-inspection.json", loginInspection);
+
+    // Step 4 — fill (password never logged)
+    const userLoc = await findUsernameLocator(page);
+    const passLoc = await findPasswordLocator(page);
+    const termsLoc = await findTermsCheckbox(page);
+    await userLoc.fill(username, { timeout: 15_000 });
+    await passLoc.fill(password, { timeout: 15_000 });
+    await termsLoc.check({ timeout: 10_000 });
+
+    await saveBodyCapture(page, "02-login-filled");
+
+    const loginBtn = await findLoginSubmitLocator(page);
+    await clickSafely(page, loginBtn, { step: "04-login-submit", selectorNote: "login button" });
+    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+
+    // Step 5
+    await saveBodyCapture(page, "03-dashboard");
+    const dashInspect = await inspectButtonsAndLinks(page);
+    await saveJson("03-dashboard-elements.json", {
+      ...dashInspect,
+      selectorNotes: {
+        licenseHints: ["Click here to select a license", "Choose License", "license"],
+        loginUrlHost: seedUrl.hostname,
+      },
+    });
+    const licOptions = await collectLicenseSelectOptions(page);
+    if (licOptions && licOptions.length > 1) {
+      await saveJson("03-license-options.json", licOptions);
+      logWarning(`Multiple license options (${licOptions.length}); using first available navigation path.`);
+    }
+
+    // Step 6 — license selection (Place Order allowed here only)
+    const licenseLink = page.getByRole("link", { name: /select.*license|your license|license/i }).first();
+    const licenseDropdown = page.locator("select").first();
+    if ((await licenseLink.count()) > 0) {
+      await clickSafely(page, licenseLink, { step: "06-license-link", selectorNote: "license nav link" });
+      await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    } else if ((await licenseDropdown.count()) > 0) {
+      const opts = await licenseDropdown.locator("option").count();
+      if (opts > 1) logWarning("License <select> has multiple options; choosing index 1 if available.");
+      await licenseDropdown.selectOption({ index: 1 }).catch(async () => {
+        await licenseDropdown.selectOption({ index: 0 });
+      });
+      await sleep(slowMo);
+    }
+
+    const placeOrderButtons = page.getByRole("button", { name: /place order/i });
+    const poCount = await placeOrderButtons.count();
+    if (poCount > 1) {
+      logWarning(`Found ${poCount} "Place Order" buttons; clicking the first (test account assumption).`);
+    }
+    if (poCount > 0) {
+      await clickSafely(page, placeOrderButtons.first(), {
+        step: "06-license-place-order",
+        selectorNote: "first Place Order on license list",
+        allowPlaceOrderLicenseNav: true,
+      });
+    } else {
+      const poLink = page.getByRole("link", { name: /place order/i }).first();
+      if ((await poLink.count()) > 0) {
+        await clickSafely(page, poLink, {
+          step: "06-license-place-order-link",
+          selectorNote: "Place Order link",
+          allowPlaceOrderLicenseNav: true,
+        });
+      } else {
+        logWarning('No "Place Order" button/link found; continuing — page may already be past license selection.');
+      }
+    }
+    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    await saveBodyCapture(page, "04-license-validated");
+    assertAllowedUrl(page.url(), "04-after-license");
+
+    // Step 7 — products
+    await saveBodyCapture(page, "05-products-page");
+    assertAllowedUrl(page.url(), "05-products");
+    const navAnchors = await page.evaluate(() =>
+      [...document.querySelectorAll("a[href]")]
+        .map((a) => ({
+          text: (a.textContent || "").trim().slice(0, 200),
+          href: a.getAttribute("href") || "",
+        }))
+        .filter((x) =>
+          /home|product|order|favorite|code|quick|add by code|cart/i.test(`${x.text} ${x.href}`),
+        ),
+    );
+    await saveJson("05-nav-elements.json", { anchors: navAnchors.slice(0, 200) });
+
+    const productsMeta = await page.evaluate(() => {
+      const search =
+        document.querySelector("input[type='search'], input[name*='search' i], input[placeholder*='search' i]") ||
+        document.querySelector("input[type='text']");
+      const banner = [...document.querySelectorAll("*")]
+        .filter((el) => /delivery/i.test((el.textContent || "").slice(0, 80)))
+        .slice(0, 3)
+        .map((el) => ({ tag: el.tagName, text: (el.textContent || "").trim().slice(0, 300) }));
+      return {
+        search: search
+          ? { tag: search.tagName, id: search.id, name: search.getAttribute("name"), type: search.getAttribute("type") }
+          : null,
+        deliveryBannerHints: banner,
+      };
+    });
+    await saveJson("05-products-elements.json", {
+      ...productsMeta,
+      hints: {
+        productRows: "table tbody tr, [role='row'], .product-row",
+        addToCart: "button:has-text('Add to Cart'), [aria-label*='cart' i]",
+        quantity: "input[type=number], input[type=text][name*='qty' i]",
+        cartIcon: "a[href*='cart' i], [aria-label*='cart' i], img[alt*='cart' i]",
+      },
+    });
+
+    // Step 8 — search read-only
+    let searchLoc = page.locator("input[type='search']").first();
+    if ((await searchLoc.count()) === 0) {
+      const ph = page.getByPlaceholder(/search/i).first();
+      if ((await ph.count()) > 0) searchLoc = ph;
+      else searchLoc = page.locator("input[type='text']").first();
+    }
+    await searchLoc.fill("9121", { timeout: 15_000 });
+    await page.keyboard.press("Enter").catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    await sleep(Math.max(slowMo, 400));
+    await saveBodyCapture(page, "06-search-results");
+    assertAllowedUrl(page.url(), "06-search");
+    const rowSample = await deepSampleRow(page, [
+      "table tbody tr",
+      "[role='row']",
+      ".search-result tr",
+      "li",
+    ]);
+    await saveJson("06-product-row-sample.json", { sample: rowSample });
+
+    // Step 9 — Quick Add
+    const quickLink = page.getByRole("link", { name: /add.*code|quick add|by code/i }).first();
+    if ((await quickLink.count()) > 0) {
+      await clickSafely(page, quickLink, { step: "09-quickadd-nav", selectorNote: "Quick Add / by code link" });
+    } else {
+      const t = page.getByText(/click here to add products by code/i).first();
+      if ((await t.count()) > 0) await clickSafely(page, t, { step: "09-quickadd-text-click", selectorNote: "text click" });
+      else logWarning("Quick Add link not found; skipping dedicated Quick Add navigation.");
+    }
+    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    await saveBodyCapture(page, "07-quickadd-page");
+    assertAllowedUrl(page.url(), "07-quickadd");
+
+    const quickMeta = await page.evaluate(() => {
+      const inputs = [...document.querySelectorAll("input")].map((el) => ({
+        type: el.getAttribute("type"),
+        name: el.getAttribute("name"),
+        id: el.id,
+        placeholder: el.getAttribute("placeholder"),
+        ariaLabel: el.getAttribute("aria-label"),
+      }));
+      const buttons = [...document.querySelectorAll("button")].map((el) => ({
+        text: (el.textContent || "").trim().slice(0, 200),
+        id: el.id,
+        type: el.getAttribute("type"),
+      }));
+      return { inputs, buttons };
+    });
+    await saveJson("07-quickadd-elements.json", quickMeta);
+
+    // Step 10 — Orders
+    const ordersLink = page.getByRole("link", { name: /orders/i }).first();
+    if ((await ordersLink.count()) > 0) {
+      await clickSafely(page, ordersLink, { step: "10-orders-tab", selectorNote: "Orders nav" });
+      await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    } else {
+      logWarning("Orders nav link not found by role/name.");
+    }
+    await saveBodyCapture(page, "08-orders-page");
+    assertAllowedUrl(page.url(), "08-orders");
+
+    const ordersMeta = await inspectButtonsAndLinks(page);
+    await saveJson("08-orders-structure-hints.json", ordersMeta);
+    const orderRow = await deepSampleRow(page, ["table tbody tr", "[role='row']", ".order-row", "tr"]);
+    await saveJson("08-order-row-sample.json", { sample: orderRow });
+
+    // Step 11 — Cart icon (not checkout)
+    const cartCandidates = page
+      .locator(
+        "a[href*='cart' i], [aria-label*='cart' i], button:has-text('Cart'), a:has(img[alt*='cart' i])",
+      )
+      .first();
+    if ((await cartCandidates.count()) > 0) {
+      await clickSafely(page, cartCandidates, { step: "11-cart-open", selectorNote: "cart icon/link" });
+      await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    } else {
+      logWarning("Cart icon not found with heuristics.");
+    }
+    await saveBodyCapture(page, "09-cart-empty");
+    assertAllowedUrl(page.url(), "09-cart");
+
+    const cartButtons = await page.evaluate(() =>
+      [...document.querySelectorAll("button, a, [role='button']")].map((el) => ({
+        text: (el.textContent || "").trim().slice(0, 200),
+        tag: el.tagName,
+        type: el.getAttribute("type") || "",
+        disabled: el.disabled === true || el.getAttribute("aria-disabled") === "true",
+        id: el.id || "",
+        ariaLabel: el.getAttribute("aria-label") || "",
+      })),
+    );
+    await saveJson("09-cart-elements.json", { controls: cartButtons });
+
+    // Step 12 — Logout
+    const logoutLink = page.getByRole("link", { name: /log\s*out|sign\s*out/i }).first();
+    const logoutBtn = page.getByRole("button", { name: /log\s*out|sign\s*out/i }).first();
+    if ((await logoutLink.count()) > 0) {
+      await clickSafely(page, logoutLink, { step: "12-logout", selectorNote: "logout link" });
+    } else if ((await logoutBtn.count()) > 0) {
+      await clickSafely(page, logoutBtn, { step: "12-logout", selectorNote: "logout button" });
+    } else {
+      const anyLogout = page.getByText(/log\s*out|sign\s*out/i).first();
+      if ((await anyLogout.count()) > 0)
+        await clickSafely(page, anyLogout, { step: "12-logout", selectorNote: "logout text" });
+      else logWarning("Logout control not found.");
+    }
+    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    await saveBodyCapture(page, "10-logout-confirmed");
+
+    // Step 13
+    await context.storageState({ path: path.join(outputDirGlobal, "session-state.json") });
+  } finally {
+    await context.close().catch(() => {});
+    await browser.close().catch(() => {});
+    await new Promise((resolve) => {
+      if (networkStream && !networkStream.destroyed) {
+        networkStream.end(() => resolve());
+      } else resolve();
+    });
+  }
+
+  if (warnings.length) await saveJson("discovery-warnings.json", { warnings });
+
+  const { total, fileCount } = await summarizeOutputBytes(outputDirGlobal);
+  console.log("=== Discovery complete ===");
+  console.log("Artifacts under:", outputDirGlobal);
+  console.log(`Wrote ${fileCount} entries (files) in directory; ~${total} bytes total (excluding subdir depth).`);
+  if (warnings.length) console.log(`Warnings: ${warnings.length} (see discovery-warnings.json)`);
+  console.log("Review session-state.json locally only; do not commit (rpa-output/ is gitignored).");
+}
+
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
+const modulePath = path.resolve(fileURLToPath(import.meta.url));
+if (invokedPath === modulePath) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
