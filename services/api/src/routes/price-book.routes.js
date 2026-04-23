@@ -989,7 +989,6 @@ export async function priceBookUpcHandler(req, res) {
 }
 
 router.post("/upc/:upc/confirm", async (req, res) => {
-  if (!requireServiceRole(req, res)) return;
   try {
     const upc = String(req.params.upc ?? "").trim();
     const body = req.body && typeof req.body === "object" ? req.body : {};

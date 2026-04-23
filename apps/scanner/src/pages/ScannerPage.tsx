@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getPriceBookStatus, getProductByCode, getProductByUpc, getProductFamily, reportUpcNoMatch } from "../api/catalog";
+import {
+  confirmUpcMapping,
+  getPriceBookStatus,
+  getProductByCode,
+  getProductByUpc,
+  getProductFamily,
+  reportUpcNoMatch,
+} from "../api/catalog";
 import { Sentry } from "../lib/sentry";
 import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
@@ -300,7 +307,23 @@ export function ScannerPage() {
             }}
             onSelect={(product) => {
               const u = upcCandidates.upc;
+              const upcProductName = upcCandidates.upcProductName;
+              const upcBrand = upcCandidates.upcBrand;
               setUpcCandidates(null);
+              void (async () => {
+                try {
+                  await confirmUpcMapping(
+                    u,
+                    String(product.code ?? ""),
+                    upcProductName,
+                    upcBrand,
+                    "scanner-user",
+                  );
+                } catch (error) {
+                  const capture = Sentry?.captureException;
+                  if (typeof capture === "function") capture(error);
+                }
+              })();
               void openFamily(product, { upcForFlag: u });
             }}
           />
