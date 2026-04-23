@@ -45,6 +45,8 @@ export function ScannerPage() {
   } | null>(null);
   /** When set, ProductCard may flag this UPC (camera scan + UPCitemdb match path only). */
   const [upcScanContext, setUpcScanContext] = useState<{ upc: string } | null>(null);
+  /** When set, a search result tap writes `upc_mappings` for this scanned UPC. */
+  const [upcBeingMapped, setUpcBeingMapped] = useState<string | null>(null);
   const [priceBookAge, setPriceBookAge] = useState<{
     status: "aging" | "stale";
     daysSinceUpdate: number;
@@ -90,6 +92,7 @@ export function ScannerPage() {
   const handleScan = useCallback(
     async (code: string) => {
       const trimmed = code.trim();
+      setUpcBeingMapped(null);
       try {
         const found = await getProductByCode(trimmed);
         if (found) {
@@ -137,13 +140,20 @@ export function ScannerPage() {
 
         if (upcRes.error === "upc_found_but_no_mlcc_match") {
           const name = upcRes.productName ?? "";
-          setToast(`Found bottle but no MLCC match. Try searching: ${name}`);
+          setUpcBeingMapped(trimmed);
+          setToast(
+            "Found the bottle online but no MLCC row yet — search below. Your pick teaches the system.",
+          );
           search.setQuery(name);
           return;
         }
 
-        if (upcRes.error === "upc_not_found") {
-          setNotFoundMsg(true);
+        if (upcRes.error === "no_upc_data_found" || upcRes.error === "upc_not_found") {
+          setUpcBeingMapped(upcRes.upc ?? trimmed);
+          setToast(
+            "Bottle not in our database yet — search for it below. Your selection teaches the system.",
+          );
+          search.setQuery("");
           return;
         }
 
@@ -204,7 +214,15 @@ export function ScannerPage() {
 
       {scannerActive ? <BarcodeScanner active={scannerActive} onScan={handleScan} /> : null}
 
-      <SearchBar value={search.query} onChange={search.setQuery} />
+      <SearchBar
+        value={search.query}
+        onChange={search.setQuery}
+        placeholder={
+          upcBeingMapped
+            ? `Map UPC ${upcBeingMapped} — search MLCC name…`
+            : undefined
+        }
+      />
 
       {networkWarn ? <p className="banner toast--warning">Having trouble connecting…</p> : null}
       {notFoundMsg ? <p className="banner banner-warn">Product not found — try searching</p> : null}
@@ -219,7 +237,31 @@ export function ScannerPage() {
             const size = p.bottle_size_label ?? `${p.bottle_size_ml ?? ""} ML`;
             return (
               <li key={p.id}>
-                <button type="button" className="result-row" onClick={() => void openFamily(p)}>
+                <button
+                  type="button"
+                  className="result-row"
+                  onClick={() => {
+                    const mapUpc = upcBeingMapped;
+                    if (mapUpc) {
+                      void (async () => {
+                        try {
+                          await confirmUpcMapping(
+                            mapUpc,
+                            p.code,
+                            search.query,
+                            undefined,
+                            "scanner-user-manual-search",
+                          );
+                        } catch (error) {
+                          const capture = Sentry?.captureException;
+                          if (typeof capture === "function") capture(error);
+                        }
+                      })();
+                      setUpcBeingMapped(null);
+                    }
+                    void openFamily(p, { upcForFlag: mapUpc ?? undefined });
+                  }}
+                >
                   <span className="result-name">{p.name}</span>
                   <span className="result-meta muted">{size}</span>
                   <span className="result-price">{money(p.licensee_price)}</span>

@@ -156,6 +156,7 @@ function mapUpcLookupBody(raw: Record<string, unknown>, resOk: boolean): UpcLook
       raw.scanCount != null && Number.isFinite(Number(raw.scanCount))
         ? Math.round(Number(raw.scanCount))
         : undefined,
+    upc: raw.upc != null && String(raw.upc).trim() !== "" ? String(raw.upc).trim() : undefined,
   };
   if (raw.confidenceScore != null) {
     const n = Number(raw.confidenceScore);

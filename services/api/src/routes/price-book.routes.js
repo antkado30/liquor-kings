@@ -7,6 +7,7 @@
  */
 import express from "express";
 import supabase from "../config/supabase.js";
+import { lookupUpcFromOpenFoodFacts } from "../lib/open-food-facts.js";
 import { extractBottleSizeMl, findMlccCandidatesForUpc, lookupUpcFromUpcitemdb } from "../lib/upcitemdb.js";
 import { Sentry } from "../lib/sentry.js";
 import {
@@ -906,85 +907,42 @@ export async function priceBookUpcHandler(req, res) {
       });
     }
 
-    const tryOff = upcDb.error === "not_found";
-    if (!tryOff) {
-      queueUpcLookupLog({
+    const off = await lookupUpcFromOpenFoodFacts(upc);
+    if (off.ok && off.product) {
+      return respondWithScoredUpcMatch(res, {
         upc,
-        matched_mlcc_code: null,
-        matched_product_name: null,
-        source: "upcitemdb",
-        raw_api_response: { error: upcDb.error },
+        upcItem: off.product,
+        rawApiResponse: off.raw ?? null,
+        source: "open_food_facts",
       });
-      return res.json({ ok: false, error: "upc_not_found" });
     }
 
-    let offJson;
-    try {
-      const ctrl = AbortSignal.timeout(5000);
-      const offRes = await fetch(
-        `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(upc)}.json`,
-        { signal: ctrl },
-      );
-      offJson = await offRes.json();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.log("[price-book-upc] openfoodfacts fetch failed", msg);
-      queueUpcLookupLog({
-        upc,
-        matched_mlcc_code: null,
-        matched_product_name: null,
-        source: "not_found",
-        raw_api_response: { open_food_facts: "fetch_failed", message: msg },
-      });
-      return res.json({ ok: false, error: "upc_not_found" });
-    }
-
-    if (offJson?.status != 1 || !offJson.product) {
-      console.log("[price-book-upc] openfoodfacts no product");
-      queueUpcLookupLog({
-        upc,
-        matched_mlcc_code: null,
-        matched_product_name: null,
-        source: "not_found",
-        raw_api_response: { open_food_facts: offJson ?? null },
-      });
-      return res.json({ ok: false, error: "upc_not_found" });
-    }
-
-    const p = offJson.product;
-    const nameGuess =
-      (typeof p.product_name === "string" && p.product_name.trim()) ||
-      (typeof p.brands === "string" && p.brands.trim()) ||
-      "";
-    if (!nameGuess) {
-      console.log("[price-book-upc] openfoodfacts missing name/brands");
-      queueUpcLookupLog({
-        upc,
-        matched_mlcc_code: null,
-        matched_product_name: null,
-        source: "not_found",
-        raw_api_response: { open_food_facts: "no_name" },
-      });
-      return res.json({ ok: false, error: "upc_not_found" });
-    }
-
-    const offBrands = typeof p.brands === "string" ? p.brands.trim() : "";
-    const offUpcItem = {
-      name: nameGuess.trim(),
-      brand: offBrands,
-      category: "",
-      images: [],
-    };
-    return respondWithScoredUpcMatch(res, {
+    queueUpcLookupLog({
       upc,
-      upcItem: offUpcItem,
-      rawApiResponse: offJson,
-      source: "open_food_facts",
+      matched_mlcc_code: null,
+      matched_product_name: null,
+      source: "not_found",
+      raw_api_response: {
+        upcitemdb: upcDb.ok ? null : { error: upcDb.error },
+        open_food_facts: off.ok ? null : { error: off.error },
+      },
+    });
+    return res.json({
+      ok: false,
+      error: "no_upc_data_found",
+      hint: "manual_search_required",
+      upc,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.log("[price-book-upc] unexpected", msg);
-    return res.json({ ok: false, error: "upc_not_found" });
+    const u = String(req.params.upc ?? "").trim();
+    return res.json({
+      ok: false,
+      error: "no_upc_data_found",
+      hint: "manual_search_required",
+      upc: u || undefined,
+    });
   }
 }
 
@@ -1187,6 +1145,111 @@ function orderMlccItemsByScanThenName(q) {
   return q.order("scan_count", { ascending: false }).order("name", { ascending: true });
 }
 
+/**
+ * Levenshtein distance for short search tokens (name token vs query).
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function levenshteinDistanceForSearch(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  /** @type {number[]} */
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
+/**
+ * When ILIKE / trigram miss typos (e.g. "screwball" vs "SKREWBALL"), match any 4+ letter
+ * name token within edit distance ≤ 2 of the longest query token.
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} search
+ * @param {string} adaNumber
+ * @param {string | undefined} isNewItemQ
+ * @param {number} from
+ * @param {number} limit
+ * @param {number} page
+ * @returns {Promise<{ ok: true; items: object[]; total: number; page: number; fuzzy_match: true } | null>}
+ */
+async function tryLevenshteinNameTokenSearch(supabase, search, adaNumber, isNewItemQ, from, limit, page) {
+  const normalized = normalizeSearchTerm(search);
+  const words = normalized.split(/\s+/).filter((w) => w.length >= 4);
+  if (!words.length) return null;
+  const token = words.reduce((best, w) => (w.length > best.length ? w : best), words[0]);
+  /** Sliding 3-char chunks so "screwball" → "rew" still hits "SKREWBALL" (prefix "scr" alone does not). */
+  const prefixes = [];
+  for (let i = 0; i <= token.length - 3; i++) {
+    prefixes.push(token.slice(i, i + 3));
+  }
+  const uniqPrefixes = [...new Set(prefixes.map((p) => sanitizeIlikeValue(p)).filter((p) => p.length >= 3))].slice(
+    0,
+    12,
+  );
+  if (!uniqPrefixes.length) return null;
+  const seen = new Set();
+  const rows = [];
+  for (const safe of uniqPrefixes) {
+    let q = supabase.from("mlcc_items").select("*").ilike("name", `%${safe}%`).limit(200);
+    q = applyMlccItemsFilters(q, adaNumber, isNewItemQ);
+    const { data, error } = await q;
+    if (error) {
+      console.log("[price-book-items] fuzzy-token name search error", error.message);
+      continue;
+    }
+    for (const row of data ?? []) {
+      const id = String(row?.id ?? "");
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      rows.push(row);
+      if (rows.length >= 500) break;
+    }
+    if (rows.length >= 500) break;
+  }
+  const hits = [];
+  for (const row of rows) {
+    const nn = normalizeSearchTerm(String(row.name ?? ""));
+    const parts = nn.split(/\s+/).filter((p) => p.length >= 4);
+    const compact = nn.replace(/[^a-z0-9]+/g, "");
+    let ok = false;
+    for (const part of parts) {
+      if (levenshteinDistanceForSearch(token, part) <= 2) {
+        ok = true;
+        break;
+      }
+    }
+    if (!ok && compact.length >= token.length) {
+      for (let i = 0; i <= compact.length - token.length; i++) {
+        const slice = compact.slice(i, i + token.length);
+        if (levenshteinDistanceForSearch(token, slice) <= 2) {
+          ok = true;
+          break;
+        }
+      }
+    }
+    if (ok) hits.push(row);
+  }
+  if (!hits.length) return null;
+  hits.sort((a, b) => {
+    const sa = Number(a.scan_count) || 0;
+    const sb = Number(b.scan_count) || 0;
+    if (sa !== sb) return sb - sa;
+    return String(a.name ?? "").localeCompare(String(b.name ?? ""));
+  });
+  const total = hits.length;
+  const items = hits.slice(from, from + limit);
+  return { ok: true, items, total, page, fuzzy_match: true };
+}
+
 router.get("/items", async (req, res) => {
   try {
     let page = Number.parseInt(String(req.query.page || "1"), 10);
@@ -1279,8 +1342,20 @@ router.get("/items", async (req, res) => {
           if (na !== nb) return na.localeCompare(nb);
           return String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true });
         });
-        const total = filtered.length;
-        const items = filtered.slice(from, from + limit);
+        let total = filtered.length;
+        let items = filtered.slice(from, from + limit);
+        if (total === 0) {
+          const fb = await tryLevenshteinNameTokenSearch(
+            supabase,
+            search,
+            adaNumber,
+            isNewItemQ,
+            from,
+            limit,
+            page,
+          );
+          if (fb) return res.json(fb);
+        }
         return res.json({
           ok: true,
           items,
@@ -1334,8 +1409,20 @@ router.get("/items", async (req, res) => {
         if (na !== nb) return na.localeCompare(nb);
         return String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true });
       });
-      const totalNb = filteredNoBrand.length;
-      const itemsNb = filteredNoBrand.slice(from, from + limit);
+      let totalNb = filteredNoBrand.length;
+      let itemsNb = filteredNoBrand.slice(from, from + limit);
+      if (totalNb === 0) {
+        const fb = await tryLevenshteinNameTokenSearch(
+          supabase,
+          search,
+          adaNumber,
+          isNewItemQ,
+          from,
+          limit,
+          page,
+        );
+        if (fb) return res.json(fb);
+      }
       return res.json({
         ok: true,
         items: itemsNb,

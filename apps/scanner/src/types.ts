@@ -45,6 +45,8 @@ export interface UpcLookupResponse {
   /** Raw UPCitemdb / OFF product title when `productName` is cleaned for search. */
   upcProductNameRaw?: string;
   hint?: string;
+  /** Scanned UPC when the server returns `no_upc_data_found` (manual mapping flow). */
+  upc?: string;
   /** Server: category filter excluded all candidates; client showed unfiltered list. */
   confidenceWarning?: string;
   /** POST /upc/:upc/confirm: whether UPC was persisted on mlcc_items. */
