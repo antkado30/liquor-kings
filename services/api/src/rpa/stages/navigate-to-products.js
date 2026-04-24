@@ -19,7 +19,6 @@ const INACTIVE_RE = /inactive|suspended|expired|pending activation|provisioning/
  * - MILO_STAGE2_LICENSE_NOT_READY
  * - MILO_STAGE2_LICENSE_NOT_ACTIVE
  * - MILO_STAGE2_PRODUCTS_LOAD_TIMEOUT
- * - MILO_STAGE2_DELIVERY_DATES_MISSING
  * - MILO_STAGE2_UNEXPECTED_URL
  * - MILO_STAGE2_TIMEOUT
  */
@@ -201,7 +200,7 @@ async function parseDeliveryDates(page) {
   return { rawBannerText: result.rawBannerText, iso };
 }
 
-async function waitForDeliveryDatesLoaded(page, timeoutMs = 20_000) {
+async function waitForDeliveryDatesLoaded(page, timeoutMs = 10_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const { loadingPresent, datesPresent } = await page.evaluate(() => {
@@ -476,36 +475,26 @@ export async function navigateToProducts(session, options = {}) {
         );
       }
 
-      const deliveryLoaded = await waitForDeliveryDatesLoaded(page, 20_000);
+      const deliveryLoaded = await waitForDeliveryDatesLoaded(page, 10_000);
       const delivery = await parseDeliveryDates(page);
-      if (!deliveryLoaded) {
-        const screenshotPath = await captureFailure(page, outputDir, stage2Artifacts, "error-delivery-dates-loading-timeout");
-        throw createStage2Error(
-          "MILO_STAGE2_DELIVERY_DATES_MISSING",
-          "Could not parse all ADA delivery dates from products banner",
-          {
-            currentUrl,
-            reason: "Delivery dates still loading after 20s",
-            rawBannerText: delivery.rawBannerText,
-            deliveryDatesParsed: delivery.iso,
-          },
-          screenshotPath,
-        );
+      const parsedAllDeliveryDates = Boolean(delivery.iso["141"] && delivery.iso["221"] && delivery.iso["321"]);
+      const deliveryDatesWarning = !deliveryLoaded || !parsedAllDeliveryDates;
+      if (deliveryDatesWarning) {
+        console.warn("[stage2] Delivery dates unavailable on /milo/products (best-effort only); continuing to Stage 3.", {
+          reason: !deliveryLoaded ? "Delivery dates still loading after 10s" : "Dates loaded but format unrecognized",
+          currentUrl,
+          deliveryDatesParsed: delivery.iso,
+          rawBannerText: delivery.rawBannerText,
+        });
       }
-      if (!delivery.iso["141"] || !delivery.iso["221"] || !delivery.iso["321"]) {
-        const screenshotPath = await captureFailure(page, outputDir, stage2Artifacts, "error-delivery-dates-missing");
-        throw createStage2Error(
-          "MILO_STAGE2_DELIVERY_DATES_MISSING",
-          "Could not parse all ADA delivery dates from products banner",
-          {
-            currentUrl,
-            reason: "Dates loaded but format unrecognized",
-            deliveryDatesParsed: delivery.iso,
-            rawBannerText: delivery.rawBannerText,
-          },
-          screenshotPath,
-        );
-      }
+
+      const normalizedDeliveryDates = deliveryDatesWarning
+        ? { "141": null, "221": null, "321": null }
+        : {
+            "141": delivery.iso["141"],
+            "221": delivery.iso["221"],
+            "321": delivery.iso["321"],
+          };
 
       await captureArtifact(page, outputDir, stage2Artifacts, "03-products-ready");
 
@@ -518,11 +507,8 @@ export async function navigateToProducts(session, options = {}) {
           number: licenseNumber,
           friendlyName: cardMeta.friendlyName || "",
         },
-        deliveryDates: {
-          "141": delivery.iso["141"],
-          "221": delivery.iso["221"],
-          "321": delivery.iso["321"],
-        },
+        deliveryDates: normalizedDeliveryDates,
+        deliveryDatesWarning,
         stage2StartedAt,
         stage2CompletedAt: stage2CompletedAtDate.toISOString(),
         stage2DurationMs: stage2CompletedAtDate.getTime() - stage2StartedAtDate.getTime(),
