@@ -201,6 +201,22 @@ async function parseDeliveryDates(page) {
   return { rawBannerText: result.rawBannerText, iso };
 }
 
+async function waitForDeliveryDatesLoaded(page, timeoutMs = 20_000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const { loadingPresent, datesPresent } = await page.evaluate(() => {
+      const text = document.body?.innerText ?? "";
+      return {
+        loadingPresent: /loading your delivery dates/i.test(text),
+        datesPresent: /\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(text),
+      };
+    });
+    if (!loadingPresent && datesPresent) return true;
+    await page.waitForTimeout(500);
+  }
+  return false;
+}
+
 export async function navigateToProducts(session, options = {}) {
   ensureStage2Session(session);
   const licenseNumber = ensureLicenseNumber(options.licenseNumber);
@@ -460,7 +476,22 @@ export async function navigateToProducts(session, options = {}) {
         );
       }
 
+      const deliveryLoaded = await waitForDeliveryDatesLoaded(page, 20_000);
       const delivery = await parseDeliveryDates(page);
+      if (!deliveryLoaded) {
+        const screenshotPath = await captureFailure(page, outputDir, stage2Artifacts, "error-delivery-dates-loading-timeout");
+        throw createStage2Error(
+          "MILO_STAGE2_DELIVERY_DATES_MISSING",
+          "Could not parse all ADA delivery dates from products banner",
+          {
+            currentUrl,
+            reason: "Delivery dates still loading after 20s",
+            rawBannerText: delivery.rawBannerText,
+            deliveryDatesParsed: delivery.iso,
+          },
+          screenshotPath,
+        );
+      }
       if (!delivery.iso["141"] || !delivery.iso["221"] || !delivery.iso["321"]) {
         const screenshotPath = await captureFailure(page, outputDir, stage2Artifacts, "error-delivery-dates-missing");
         throw createStage2Error(
@@ -468,6 +499,7 @@ export async function navigateToProducts(session, options = {}) {
           "Could not parse all ADA delivery dates from products banner",
           {
             currentUrl,
+            reason: "Dates loaded but format unrecognized",
             deliveryDatesParsed: delivery.iso,
             rawBannerText: delivery.rawBannerText,
           },
