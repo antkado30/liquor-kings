@@ -20,7 +20,8 @@ export const BLOCKLIST_RE = /checkout|validate|place order|submit|confirm order/
 const BLOCKLIST_NO_PLACE_ORDER_RE = /checkout|validate|submit|confirm order/i;
 
 const PAGE_LOAD_MS = 30_000;
-const STABILIZE_MS = 5000;
+/** Initial page load / post-goto stabilization (SPA; was 5s, too short for MILO). */
+const STABILIZE_MS = 15_000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -109,8 +110,140 @@ let outputDirGlobal = "";
 
 /**
  * @param {import('playwright').Page} page
+ * @param {string | import('playwright').Locator} locatorOrSelector
+ * @param {number} [timeoutMs]
+ * @returns {Promise<{ msWaited: number }>}
+ */
+export async function waitForElementEnabled(page, locatorOrSelector, timeoutMs = 10_000) {
+  const start = Date.now();
+  const first =
+    typeof locatorOrSelector === "string"
+      ? page.locator(locatorOrSelector).first()
+      : locatorOrSelector.first();
+  while (Date.now() - start < timeoutMs) {
+    const ok = await first
+      .evaluate((el) => {
+        if (!(el instanceof HTMLElement)) return false;
+        if (el.disabled) return false;
+        if (el.hasAttribute("disabled")) return false;
+        if (el.getAttribute("aria-disabled") === "true") return false;
+        if (el.querySelector(":scope .spinner-border")) return false;
+        const style = window.getComputedStyle(el);
+        if (style.visibility === "hidden" || style.display === "none" || parseFloat(style.opacity) === 0) {
+          return false;
+        }
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) return false;
+        return true;
+      })
+      .catch(() => false);
+    if (ok) return { msWaited: Date.now() - start };
+    await sleep(200);
+  }
+  const snippet = await first
+    .evaluate((el) => (el && "outerHTML" in el ? el.outerHTML.slice(0, 240) : ""))
+    .catch(() => "");
+  throw new Error(
+    `waitForElementEnabled: still disabled, hidden, or showing spinner after ${timeoutMs}ms. Snippet: ${snippet}`,
+  );
+}
+
+/**
+ * @param {import('playwright').Page} page
+ * @param {number} [timeoutMs]
+ */
+export async function waitForAngularStable(page, timeoutMs = 15_000) {
+  await page.waitForFunction(() => document.readyState === "complete", null, { timeout: timeoutMs });
+  await sleep(1000);
+}
+
+/**
+ * Wait for Angular client-side route + key UI to paint.
+ * @param {import('playwright').Page} page
+ * @param {string} expectedUrlSubstring
+ * @param {string | string[]} waitForSelector
+ * @param {number} [timeoutMs]
+ * @param {string} [stepLabel]
+ */
+/**
+ * After auth, MILO may land on `/milo/home` (navbar “select a license”) or already on `/milo/location`.
+ * @param {import('playwright').Page} page
+ * @param {number} [timeoutMs]
+ */
+async function waitForPostLoginShell(page, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastUrl = "";
+  while (Date.now() < deadline) {
+    lastUrl = page.url();
+    assertAllowedUrl(lastUrl, "post-login-shell");
+    if (lastUrl.includes("/milo/home")) {
+      const vis = await page
+        .locator('.navbar__help-text a >> text=/select a license/i')
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (vis) {
+        await sleep(500);
+        return;
+      }
+    }
+    if (lastUrl.includes("/milo/location")) {
+      const vis = await page
+        .getByRole("button", { name: /place order/i })
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (vis) {
+        await sleep(500);
+        return;
+      }
+    }
+    await sleep(200);
+  }
+  throw new Error(
+    `waitForPostLoginShell[post-login]: timed out after ${timeoutMs}ms waiting for /milo/home (navbar “select a license” link) or /milo/location (Place Order visible). Current URL: ${lastUrl}`,
+  );
+}
+
+export async function waitForSpaNavigation(
+  page,
+  expectedUrlSubstring,
+  waitForSelector,
+  timeoutMs = 15_000,
+  stepLabel = "spa-nav",
+) {
+  const deadline = Date.now() + timeoutMs;
+  const selectors = Array.isArray(waitForSelector) ? waitForSelector : [waitForSelector];
+  let lastUrl = "";
+  while (Date.now() < deadline) {
+    lastUrl = page.url();
+    assertAllowedUrl(lastUrl, stepLabel);
+    if (lastUrl.includes(expectedUrlSubstring)) {
+      for (const sel of selectors) {
+        const vis = await page
+          .locator(sel)
+          .first()
+          .isVisible()
+          .catch(() => false);
+        if (vis) {
+          await sleep(500);
+          return;
+        }
+      }
+    }
+    await sleep(200);
+  }
+  throw new Error(
+    `waitForSpaNavigation[${stepLabel}]: timed out after ${timeoutMs}ms waiting for URL to contain "${expectedUrlSubstring}" and one of ${JSON.stringify(
+      selectors,
+    )} to be visible. Current URL: ${lastUrl}`,
+  );
+}
+
+/**
+ * @param {import('playwright').Page} page
  * @param {import('playwright').Locator} locator
- * @param {{ step: string, selectorNote?: string, allowPlaceOrderLicenseNav?: boolean }} opts
+ * @param {{ step: string, selectorNote?: string, allowPlaceOrderLicenseNav?: boolean, msWaitedForReady?: number }} opts
  */
 export async function clickSafely(page, locator, opts) {
   const first = locator.first();
@@ -137,9 +270,9 @@ export async function clickSafely(page, locator, opts) {
   }
   if (opts.allowPlaceOrderLicenseNav && /place order/i.test(text)) {
     const url = page.url().toLowerCase();
-    const bodySnippet = (
-      await page.evaluate(() => (document.body?.innerText ?? "").slice(0, 4000).toLowerCase())
-    ).catch(() => "");
+    const bodySnippet = await page
+      .evaluate(() => (document.body?.innerText ?? "").slice(0, 4000).toLowerCase())
+      .catch(() => "");
     const looksLicense =
       url.includes("license") ||
       bodySnippet.includes("your license") ||
@@ -152,11 +285,16 @@ export async function clickSafely(page, locator, opts) {
     }
   }
 
+  const elementWasVisible = await first.isVisible().catch(() => false);
+  const elementWasEnabled = await first.isEnabled().catch(() => true);
   const urlBefore = page.url();
   await first.click({ timeout: 15_000 });
   await sleep(parseSlowMo());
   const urlAfter = page.url();
   assertAllowedUrl(urlAfter, opts.step);
+  await sleep(300);
+  const finalUrl = page.url();
+  assertAllowedUrl(finalUrl, `${opts.step}-final`);
   await appendActionLine({
     step: opts.step,
     selectorNote: opts.selectorNote ?? null,
@@ -165,6 +303,10 @@ export async function clickSafely(page, locator, opts) {
     typeAttr,
     url_before: urlBefore,
     url_after: urlAfter,
+    finalUrl,
+    elementWasEnabled,
+    elementWasVisible,
+    msWaitedForReady: opts.msWaitedForReady ?? 0,
     ts: new Date().toISOString(),
   });
 }
@@ -199,8 +341,8 @@ async function saveJson(name, data) {
 
 async function gotoStable(page, url, stepLabel) {
   assertAllowedUrl(url, `${stepLabel} pre-goto`);
-  await page.goto(url, { waitUntil: "networkidle", timeout: PAGE_LOAD_MS });
-  await page.waitForLoadState("networkidle", { timeout: STABILIZE_MS }).catch(() => {});
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: PAGE_LOAD_MS });
+  await waitForAngularStable(page, STABILIZE_MS);
   assertAllowedUrl(page.url(), `${stepLabel} post-goto`);
 }
 
@@ -459,7 +601,7 @@ async function main() {
 
     const loginBtn = await findLoginSubmitLocator(page);
     await clickSafely(page, loginBtn, { step: "04-login-submit", selectorNote: "login button" });
-    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    await waitForPostLoginShell(page, 20_000);
 
     // Step 5
     await saveBodyCapture(page, "03-dashboard");
@@ -478,11 +620,16 @@ async function main() {
     }
 
     // Step 6 — license selection (Place Order allowed here only)
-    const licenseLink = page.getByRole("link", { name: /select.*license|your license|license/i }).first();
+    const alreadyOnLocation = page.url().includes("/milo/location");
+    const licenseLink = page.getByRole("link", { name: /select a license/i }).first();
     const licenseDropdown = page.locator("select").first();
-    if ((await licenseLink.count()) > 0) {
-      await clickSafely(page, licenseLink, { step: "06-license-link", selectorNote: "license nav link" });
-      await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    if (!alreadyOnLocation && (await licenseLink.count()) > 0) {
+      await clickSafely(page, licenseLink, { step: "06-license-link", selectorNote: "select a license → /milo/location" });
+      await waitForAngularStable(page, 10_000);
+      await page.getByRole("button", { name: /place order/i }).first().waitFor({ state: "visible", timeout: 15_000 });
+    } else if (alreadyOnLocation) {
+      await waitForAngularStable(page, 10_000);
+      await page.getByRole("button", { name: /place order/i }).first().waitFor({ state: "visible", timeout: 15_000 });
     } else if ((await licenseDropdown.count()) > 0) {
       const opts = await licenseDropdown.locator("option").count();
       if (opts > 1) logWarning("License <select> has multiple options; choosing index 1 if available.");
@@ -490,6 +637,12 @@ async function main() {
         await licenseDropdown.selectOption({ index: 0 });
       });
       await sleep(slowMo);
+      await waitForAngularStable(page, 10_000);
+      await page
+        .getByRole("button", { name: /place order/i })
+        .first()
+        .waitFor({ state: "visible", timeout: 15_000 })
+        .catch(() => {});
     }
 
     const placeOrderButtons = page.getByRole("button", { name: /place order/i });
@@ -497,25 +650,29 @@ async function main() {
     if (poCount > 1) {
       logWarning(`Found ${poCount} "Place Order" buttons; clicking the first (test account assumption).`);
     }
-    if (poCount > 0) {
-      await clickSafely(page, placeOrderButtons.first(), {
-        step: "06-license-place-order",
-        selectorNote: "first Place Order on license list",
+    const poLink = page.getByRole("link", { name: /place order/i }).first();
+    const poLinkCount = await poLink.count();
+    const placeOrderTarget = poCount > 0 ? placeOrderButtons.first() : poLinkCount > 0 ? poLink : null;
+    if (placeOrderTarget) {
+      const { msWaited } = await waitForElementEnabled(page, placeOrderTarget, 10_000);
+      const stepId = poCount > 0 ? "06-license-place-order" : "06-license-place-order-link";
+      const note = poCount > 0 ? "first Place Order on license list" : "Place Order link";
+      await clickSafely(page, placeOrderTarget, {
+        step: stepId,
+        selectorNote: note,
         allowPlaceOrderLicenseNav: true,
+        msWaitedForReady: msWaited,
       });
+      await waitForSpaNavigation(
+        page,
+        "/milo/products",
+        "input[placeholder*='Search for products' i]",
+        20_000,
+        "post-license-products",
+      );
     } else {
-      const poLink = page.getByRole("link", { name: /place order/i }).first();
-      if ((await poLink.count()) > 0) {
-        await clickSafely(page, poLink, {
-          step: "06-license-place-order-link",
-          selectorNote: "Place Order link",
-          allowPlaceOrderLicenseNav: true,
-        });
-      } else {
-        logWarning('No "Place Order" button/link found; continuing — page may already be past license selection.');
-      }
+      logWarning('No "Place Order" button/link found; continuing — page may already be past license selection.');
     }
-    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
     await saveBodyCapture(page, "04-license-validated");
     assertAllowedUrl(page.url(), "04-after-license");
 
@@ -568,7 +725,12 @@ async function main() {
     }
     await searchLoc.fill("9121", { timeout: 15_000 });
     await page.keyboard.press("Enter").catch(() => {});
-    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    await waitForAngularStable(page, 10_000);
+    await page
+      .locator("table tbody tr, [role='row'], .search-result tr")
+      .first()
+      .waitFor({ state: "visible", timeout: 15_000 })
+      .catch(() => {});
     await sleep(Math.max(slowMo, 400));
     await saveBodyCapture(page, "06-search-results");
     assertAllowedUrl(page.url(), "06-search");
@@ -580,16 +742,44 @@ async function main() {
     ]);
     await saveJson("06-product-row-sample.json", { sample: rowSample });
 
-    // Step 9 — Quick Add
-    const quickLink = page.getByRole("link", { name: /add.*code|quick add|by code/i }).first();
-    if ((await quickLink.count()) > 0) {
-      await clickSafely(page, quickLink, { step: "09-quickadd-nav", selectorNote: "Quick Add / by code link" });
+    // Step 9 — Add By Code (/milo/products/bycode)
+    const quickByRole = page.getByRole("link", { name: /add by code/i }).first();
+    const quickByHref = page.locator('a[href*="bycode" i]').first();
+    const quickLegacy = page.getByRole("link", { name: /add.*code|quick add|by code/i }).first();
+    let quickNav = null;
+    let quickNote = "";
+    if ((await quickByRole.count()) > 0) {
+      quickNav = quickByRole;
+      quickNote = "Add By Code (nav text)";
+    } else if ((await quickByHref.count()) > 0) {
+      quickNav = quickByHref;
+      quickNote = "Add By Code (href contains bycode)";
+    } else if ((await quickLegacy.count()) > 0) {
+      quickNav = quickLegacy;
+      quickNote = "Add By Code (legacy nav match)";
+    }
+    if (quickNav) {
+      await clickSafely(page, quickNav, { step: "09-quickadd-nav", selectorNote: quickNote });
+      await waitForSpaNavigation(
+        page,
+        "/milo/products/bycode",
+        ["input[placeholder*='Search by code' i]", ".liquor-code input"],
+        20_000,
+        "quickadd-bycode",
+      );
     } else {
       const t = page.getByText(/click here to add products by code/i).first();
-      if ((await t.count()) > 0) await clickSafely(page, t, { step: "09-quickadd-text-click", selectorNote: "text click" });
-      else logWarning("Quick Add link not found; skipping dedicated Quick Add navigation.");
+      if ((await t.count()) > 0) {
+        await clickSafely(page, t, { step: "09-quickadd-text-click", selectorNote: "text click" });
+        await waitForSpaNavigation(
+          page,
+          "/milo/products/bycode",
+          ["input[placeholder*='Search by code' i]", ".liquor-code input"],
+          20_000,
+          "quickadd-bycode-text",
+        );
+      } else logWarning("Add By Code link not found; skipping dedicated by-code page.");
     }
-    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
     await saveBodyCapture(page, "07-quickadd-page");
     assertAllowedUrl(page.url(), "07-quickadd");
 
@@ -610,13 +800,36 @@ async function main() {
     });
     await saveJson("07-quickadd-elements.json", quickMeta);
 
-    // Step 10 — Orders
-    const ordersLink = page.getByRole("link", { name: /orders/i }).first();
-    if ((await ordersLink.count()) > 0) {
-      await clickSafely(page, ordersLink, { step: "10-orders-tab", selectorNote: "Orders nav" });
-      await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+    // Step 10 — Orders (/milo/account/orders)
+    const ordersHref = page.locator('a[href="/milo/account/orders"]').first();
+    const ordersNav = page.getByRole("link", { name: /^Orders$/i }).first();
+    let ordersClick = null;
+    let ordersNote = "";
+    if ((await ordersHref.count()) > 0) {
+      ordersClick = ordersHref;
+      ordersNote = "Orders (exact href)";
+    } else if ((await ordersNav.count()) > 0) {
+      ordersClick = ordersNav;
+      ordersNote = "Orders (nav text)";
+    }
+    if (ordersClick) {
+      await clickSafely(page, ordersClick, { step: "10-orders-tab", selectorNote: ordersNote });
+      await waitForSpaNavigation(
+        page,
+        "/milo/account/orders",
+        [
+          "text=/ORDER PLACED/i",
+          "text=/Order Summary/i",
+          'button:has-text("Search")',
+          "table",
+          ".order-card",
+          "[class*='order']",
+        ],
+        20_000,
+        "orders-page",
+      );
     } else {
-      logWarning("Orders nav link not found by role/name.");
+      logWarning("Orders nav link not found (href or main nav).");
     }
     await saveBodyCapture(page, "08-orders-page");
     assertAllowedUrl(page.url(), "08-orders");
@@ -626,15 +839,19 @@ async function main() {
     const orderRow = await deepSampleRow(page, ["table tbody tr", "[role='row']", ".order-row", "tr"]);
     await saveJson("08-order-row-sample.json", { sample: orderRow });
 
-    // Step 11 — Cart icon (not checkout)
+    // Step 11 — Cart (/milo/cart)
     const cartCandidates = page
-      .locator(
-        "a[href*='cart' i], [aria-label*='cart' i], button:has-text('Cart'), a:has(img[alt*='cart' i])",
-      )
+      .locator("a[href='/milo/cart'], a[href=\"/milo/cart\"], [class*='cart-icon'], img[alt*='cart' i]")
       .first();
     if ((await cartCandidates.count()) > 0) {
       await clickSafely(page, cartCandidates, { step: "11-cart-open", selectorNote: "cart icon/link" });
-      await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
+      await waitForSpaNavigation(
+        page,
+        "/milo/cart",
+        ['button:has-text("Validate")', "text=/Cart is empty/i", "text=/Clear Cart/i"],
+        20_000,
+        "cart-page",
+      );
     } else {
       logWarning("Cart icon not found with heuristics.");
     }
@@ -653,21 +870,50 @@ async function main() {
     );
     await saveJson("09-cart-elements.json", { controls: cartButtons });
 
-    // Step 12 — Logout
-    const logoutLink = page.getByRole("link", { name: /log\s*out|sign\s*out/i }).first();
-    const logoutBtn = page.getByRole("button", { name: /log\s*out|sign\s*out/i }).first();
-    if ((await logoutLink.count()) > 0) {
-      await clickSafely(page, logoutLink, { step: "12-logout", selectorNote: "logout link" });
-    } else if ((await logoutBtn.count()) > 0) {
-      await clickSafely(page, logoutBtn, { step: "12-logout", selectorNote: "logout button" });
-    } else {
-      const anyLogout = page.getByText(/log\s*out|sign\s*out/i).first();
-      if ((await anyLogout.count()) > 0)
-        await clickSafely(page, anyLogout, { step: "12-logout", selectorNote: "logout text" });
-      else logWarning("Logout control not found.");
+    // Step 12 — Logout (profile dropdown → Sign out); non-fatal if it fails
+    try {
+      const profileWidget = page.locator("#user-profile, app-user-profile, [class*='user-profile']").first();
+      if ((await profileWidget.count()) === 0) {
+        throw new Error("user profile widget not found (#user-profile, app-user-profile, [class*='user-profile'])");
+      }
+      await clickSafely(page, profileWidget, { step: "12a-open-user-menu", selectorNote: "user profile dropdown" });
+      await sleep(500);
+      const signOut = page.locator("a.dropdown-item").filter({ hasText: /sign\s*out/i }).first();
+      await signOut.waitFor({ state: "visible", timeout: 10_000 });
+      await clickSafely(page, signOut, { step: "12b-sign-out", selectorNote: "dropdown Sign out" });
+      const logoutDeadline = Date.now() + 20_000;
+      let onSignIn = false;
+      while (Date.now() < logoutDeadline) {
+        const u = page.url();
+        assertAllowedUrl(u, "12-logout-wait");
+        if (u.includes("/auth/sign-in")) {
+          onSignIn = true;
+          break;
+        }
+        const loginField = page
+          .locator(
+            'input[type="email"], input[name*="user" i], input[placeholder*="Username" i], input[placeholder*="email" i]',
+          )
+          .first();
+        if (await loginField.isVisible().catch(() => false)) {
+          onSignIn = true;
+          break;
+        }
+        await sleep(200);
+      }
+      if (!onSignIn) {
+        logWarning("Logout navigation did not reach /auth/sign-in or login field within 20s.");
+      }
+      await saveBodyCapture(page, "10-logout-confirmed");
+    } catch (err) {
+      await appendActionLine({
+        step: "12-logout-failed",
+        error: String(err && err.message ? err.message : err),
+        url: page.url(),
+        ts: new Date().toISOString(),
+      });
+      logWarning(`Logout failed (non-fatal): ${err && err.message ? err.message : err}`);
     }
-    await page.waitForLoadState("networkidle", { timeout: PAGE_LOAD_MS }).catch(() => {});
-    await saveBodyCapture(page, "10-logout-confirmed");
 
     // Step 13
     await context.storageState({ path: path.join(outputDirGlobal, "session-state.json") });
