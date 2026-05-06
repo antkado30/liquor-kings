@@ -884,15 +884,15 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     if (!Array.isArray(codes) || codes.length === 0) return {};
     const { data, error } = await workerSupabase
       .from("mlcc_items")
-      .select("mlcc_code, ada_number")
-      .in("mlcc_code", codes);
+      .select("code, ada_number")
+      .in("code", codes);
     if (error) {
       throw new Error(`mlccLookup failed: ${error.message}`);
     }
     const result = {};
     for (const row of data ?? []) {
-      if (row.mlcc_code) {
-        result[row.mlcc_code] = { ada_number: row.ada_number ?? null };
+      if (row.code) {
+        result[row.code] = { ada_number: row.ada_number ?? null };
       }
     }
     return result;
@@ -929,8 +929,8 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
           ...(loginUrl ? { loginUrl } : {}),
         },
         {
-          headless: true,
-          slowMo: 0,
+          headless: process.env.WORKER_HEADFUL !== "1",
+          slowMo: process.env.WORKER_HEADFUL === "1" ? 250 : 0,
           captureArtifacts: true,
         },
       );
