@@ -1,9 +1,15 @@
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { createClient } from "@supabase/supabase-js";
 
 import { buildMlccPreflightReport } from "./mlcc-adapter.js";
 import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
+import { loginToMilo } from "../rpa/stages/login.js";
+import { navigateToProducts } from "../rpa/stages/navigate-to-products.js";
+import { addItemsToCart } from "../rpa/stages/add-items-to-cart.js";
+import { validateCartOnMilo } from "../rpa/stages/validate-cart.js";
+import { checkoutOnMilo } from "../rpa/stages/checkout.js";
 import {
   FAILURE_TYPE,
   classifyFailureType,
@@ -94,6 +100,16 @@ function buildWorkerStepEvidence(stage, message, attrs = {}) {
     message,
     attributes: attrs,
   });
+}
+
+function normalizePayloadItemsForRpaStages(payloadItems) {
+  if (!Array.isArray(payloadItems)) return [];
+  return payloadItems.map((item) => ({
+    code: item?.bottle?.mlcc_code ?? null,
+    quantity: Number(item?.quantity ?? 0),
+    bottle_size_ml: Number(item?.bottle?.size_ml ?? 0),
+    expected_name: item?.bottle?.name ?? "",
+  }));
 }
 
 export function assertDeterministicExecutionPayload(payload) {
@@ -653,6 +669,633 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
   };
 }
 
+export async function processOneRpaRun({ apiBaseUrl, workerId }) {
+  const claimBody = await claimNextRun({
+    apiBaseUrl,
+    workerId,
+    workerNotes: "claimed by local RPA worker",
+  });
+
+  if (claimBody.data === null) {
+    return {
+      success: true,
+      claimed: false,
+    };
+  }
+
+  const { run, payload } = claimBody.data;
+  const storeId = run.store_id;
+  const stepEvidence = [
+    buildWorkerStepEvidence("claimed", "Run claimed for RPA execution", {
+      run_id: run.id,
+      worker_id: workerId ?? null,
+    }),
+  ];
+
+  if (payload?.metadata?.run_type !== "rpa_run") {
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "RPA worker rejected non-RPA payload",
+      errorMessage: "Worker in RPA mode claimed a non-RPA run",
+      failureType: FAILURE_TYPE.UNKNOWN,
+      evidence: [
+        ...stepEvidence,
+        buildEvidenceEntry({
+          kind: "cart_verification_snapshot",
+          stage: "rpa_run_dispatch",
+          message: "Payload metadata run_type was not rpa_run",
+          attributes: {
+            run_type: payload?.metadata?.run_type ?? null,
+          },
+        }),
+        buildNoSubmitAttestationEvidence("rpa_run_dispatch", "rpa_run"),
+      ],
+    });
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      reason: "non_rpa_run_claimed",
+    };
+  }
+
+  if (
+    !payload ||
+    !payload.cart ||
+    !payload.store ||
+    !Array.isArray(payload.items)
+  ) {
+    const failure = summarizeFailure(
+      "Execution payload missing required fields",
+      FAILURE_TYPE.UNKNOWN,
+      { stage: "payload_loaded" },
+    );
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "RPA payload validation failed in local worker",
+      errorMessage: failure.message,
+      failureType: failure.failureType,
+      failureDetails: failure.details,
+      evidence: [
+        ...stepEvidence,
+        buildEvidenceEntry({
+          kind: "cart_verification_snapshot",
+          stage: "payload_loaded",
+          message: "Payload shape was invalid",
+          attributes: { payload_present: !!payload },
+        }),
+        buildNoSubmitAttestationEvidence("payload_loaded", "rpa_run"),
+      ],
+    });
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      reason: "invalid_payload_shape",
+    };
+  }
+
+  const username = process.env.MILO_USERNAME;
+  const password = process.env.MILO_PASSWORD;
+  const loginUrl = process.env.MILO_LOGIN_URL;
+
+  if (!username || !password) {
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "RPA worker missing required MILO credentials",
+      errorMessage:
+        "Worker is missing MILO credentials in environment (MILO_USERNAME, MILO_PASSWORD required)",
+      failureType: FAILURE_TYPE.UNKNOWN,
+      evidence: [
+        ...stepEvidence,
+        buildNoSubmitAttestationEvidence("rpa_login", "rpa_run"),
+      ],
+    });
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      reason: "missing_credentials",
+    };
+  }
+
+  const normalizedItems = normalizePayloadItemsForRpaStages(payload.items);
+  const invalidItems = normalizedItems.filter(
+    (item) =>
+      typeof item?.code !== "string" ||
+      item.code.trim() === "" ||
+      !Number.isFinite(item.quantity) ||
+      item.quantity <= 0,
+  );
+  if (invalidItems.length > 0) {
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "RPA worker found invalid cart item mapping for stage 3",
+      errorMessage:
+        "Cart items have missing or invalid mlcc_code/quantity for RPA execution",
+      failureType: FAILURE_TYPE.UNKNOWN,
+      failureDetails: { invalid_items: invalidItems.length },
+      evidence: [
+        ...stepEvidence,
+        buildNoSubmitAttestationEvidence("rpa_add_items", "rpa_run"),
+      ],
+    });
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      reason: "invalid_rpa_items",
+    };
+  }
+
+  const licenseNumber =
+    payload?.metadata?.license_number ??
+    payload?.store?.liquor_license ??
+    process.env.MILO_TEST_LICENSE ??
+    null;
+  const normalizedLicenseNumber = String(licenseNumber ?? "").trim();
+  if (normalizedLicenseNumber === "") {
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "RPA worker missing license number",
+      errorMessage:
+        "RPA worker could not resolve license number from payload.store.liquor_license, payload.metadata.license_number, or MILO_TEST_LICENSE env",
+      failureType: FAILURE_TYPE.UNKNOWN,
+      evidence: [
+        ...stepEvidence,
+        buildNoSubmitAttestationEvidence("rpa_navigate", "rpa_run"),
+      ],
+    });
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      reason: "missing_license_number",
+    };
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !supabaseServiceKey) {
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "RPA worker missing Supabase environment for mlccLookup",
+      errorMessage:
+        "RPA worker missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars",
+      failureType: FAILURE_TYPE.UNKNOWN,
+      evidence: [
+        ...stepEvidence,
+        buildNoSubmitAttestationEvidence("rpa_add_items", "rpa_run"),
+      ],
+    });
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      reason: "missing_supabase_env",
+    };
+  }
+  const workerSupabase = createClient(supabaseUrl, supabaseServiceKey);
+  const mlccLookup = async (codes) => {
+    if (!Array.isArray(codes) || codes.length === 0) return {};
+    const { data, error } = await workerSupabase
+      .from("mlcc_items")
+      .select("mlcc_code, ada_number")
+      .in("mlcc_code", codes);
+    if (error) {
+      throw new Error(`mlccLookup failed: ${error.message}`);
+    }
+    const result = {};
+    for (const row of data ?? []) {
+      if (row.mlcc_code) {
+        result[row.mlcc_code] = { ada_number: row.ada_number ?? null };
+      }
+    }
+    return result;
+  };
+
+  const requestedMode = payload?.metadata?.mode ?? "dry_run";
+  const envAllow = process.env.LK_ALLOW_ORDER_SUBMISSION === "yes";
+  const stage5Mode =
+    requestedMode === "submit" && envAllow ? "submit" : "dry_run";
+  const allowOrderSubmission = stage5Mode === "submit";
+
+  let session;
+  let checkedOut;
+  try {
+    await heartbeatRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      workerId,
+      progressStage: "rpa_login",
+      progressMessage: "Starting RPA Stage 1: login",
+    });
+    stepEvidence.push(
+      buildWorkerStepEvidence("rpa_login_started", "RPA Stage 1 started", {
+        stage: 1,
+      }),
+    );
+
+    try {
+      session = await loginToMilo(
+        {
+          username,
+          password,
+          ...(loginUrl ? { loginUrl } : {}),
+        },
+        {
+          headless: true,
+          slowMo: 0,
+          captureArtifacts: true,
+        },
+      );
+    } catch (loginError) {
+      const failure = summarizeFailure(
+        loginError?.message ?? "RPA Stage 1 login failed",
+        loginError?.code ?? FAILURE_TYPE.UNKNOWN,
+        {
+          stage: "stage1_login",
+          details:
+            loginError?.details && typeof loginError.details === "object"
+              ? loginError.details
+              : {},
+        },
+      );
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "failed",
+        workerNotes: "RPA Stage 1 failed",
+        errorMessage: failure.message,
+        failureType: failure.failureType,
+        failureDetails: failure.details,
+        evidence: [
+          ...stepEvidence,
+          buildNoSubmitAttestationEvidence("stage1_login", "rpa_run"),
+        ],
+      });
+      return {
+        success: false,
+        claimed: true,
+        failed: true,
+        runId: run.id,
+        stage: "stage1_login",
+        error: loginError?.code ?? FAILURE_TYPE.UNKNOWN,
+      };
+    }
+
+    stepEvidence.push(
+      buildWorkerStepEvidence("rpa_login_complete", "Stage 1 login succeeded", {
+        current_url: session?.page?.url?.() ?? session?.currentUrl ?? null,
+      }),
+    );
+
+    await heartbeatRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      workerId,
+      progressStage: "rpa_navigate",
+      progressMessage: "Starting RPA Stage 2: navigate to products",
+    });
+    stepEvidence.push(
+      buildWorkerStepEvidence(
+        "rpa_navigate_started",
+        "RPA Stage 2 started",
+        { stage: 2 },
+      ),
+    );
+
+    try {
+      session = await navigateToProducts(session, {
+        licenseNumber: normalizedLicenseNumber,
+        captureArtifacts: true,
+      });
+    } catch (stage2Error) {
+      const failure = summarizeFailure(
+        stage2Error?.message ?? "RPA Stage 2 navigation failed",
+        stage2Error?.code ?? FAILURE_TYPE.UNKNOWN,
+        {
+          stage: "stage2_navigate",
+          details:
+            stage2Error?.details && typeof stage2Error.details === "object"
+              ? stage2Error.details
+              : {},
+        },
+      );
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "failed",
+        workerNotes: "RPA Stage 2 failed",
+        errorMessage: failure.message,
+        failureType: failure.failureType,
+        failureDetails: failure.details,
+        evidence: [
+          ...stepEvidence,
+          buildNoSubmitAttestationEvidence("stage2_navigate", "rpa_run"),
+        ],
+      });
+      return {
+        success: false,
+        claimed: true,
+        failed: true,
+        runId: run.id,
+        stage: "stage2_navigate",
+        error: stage2Error?.code ?? FAILURE_TYPE.UNKNOWN,
+      };
+    }
+
+    stepEvidence.push(
+      buildWorkerStepEvidence(
+        "rpa_navigate_complete",
+        "Stage 2 navigation succeeded",
+        { current_url: session?.currentUrl ?? session?.page?.url?.() ?? null },
+      ),
+    );
+
+    await heartbeatRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      workerId,
+      progressStage: "rpa_add_items",
+      progressMessage: "Starting RPA Stage 3: add items to cart",
+    });
+    stepEvidence.push(
+      buildWorkerStepEvidence(
+        "rpa_add_items_started",
+        "RPA Stage 3 started",
+        { stage: 3, item_count: normalizedItems.length },
+      ),
+    );
+
+    try {
+      session = await addItemsToCart(session, normalizedItems, {
+        captureArtifacts: true,
+        mlccLookup,
+      });
+    } catch (stage3Error) {
+      const failure = summarizeFailure(
+        stage3Error?.message ?? "RPA Stage 3 add items failed",
+        stage3Error?.code ?? FAILURE_TYPE.UNKNOWN,
+        {
+          stage: "stage3_add_items",
+          details:
+            stage3Error?.details && typeof stage3Error.details === "object"
+              ? stage3Error.details
+              : {},
+        },
+      );
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "failed",
+        workerNotes: "RPA Stage 3 failed",
+        errorMessage: failure.message,
+        failureType: failure.failureType,
+        failureDetails: failure.details,
+        evidence: [
+          ...stepEvidence,
+          buildNoSubmitAttestationEvidence("stage3_add_items", "rpa_run"),
+        ],
+      });
+      return {
+        success: false,
+        claimed: true,
+        failed: true,
+        runId: run.id,
+        stage: "stage3_add_items",
+        error: stage3Error?.code ?? FAILURE_TYPE.UNKNOWN,
+      };
+    }
+
+    stepEvidence.push(
+      buildWorkerStepEvidence("rpa_add_items_complete", "Stage 3 succeeded", {
+        items_added: Array.isArray(session?.itemsAdded)
+          ? session.itemsAdded.length
+          : null,
+        items_rejected: Array.isArray(session?.itemsRejected)
+          ? session.itemsRejected.length
+          : null,
+      }),
+    );
+
+    await heartbeatRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      workerId,
+      progressStage: "rpa_validate",
+      progressMessage: "Starting RPA Stage 4: validate cart",
+    });
+    stepEvidence.push(
+      buildWorkerStepEvidence("rpa_validate_started", "RPA Stage 4 started", {
+        stage: 4,
+      }),
+    );
+
+    try {
+      session = await validateCartOnMilo(session, {
+        captureArtifacts: true,
+      });
+    } catch (stage4Error) {
+      const failure = summarizeFailure(
+        stage4Error?.message ?? "RPA Stage 4 validate cart failed",
+        stage4Error?.code ?? FAILURE_TYPE.UNKNOWN,
+        {
+          stage: "stage4_validate",
+          details:
+            stage4Error?.details && typeof stage4Error.details === "object"
+              ? stage4Error.details
+              : {},
+        },
+      );
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "failed",
+        workerNotes: "RPA Stage 4 failed",
+        errorMessage: failure.message,
+        failureType: failure.failureType,
+        failureDetails: failure.details,
+        evidence: [
+          ...stepEvidence,
+          buildNoSubmitAttestationEvidence("stage4_validate", "rpa_run"),
+        ],
+      });
+      return {
+        success: false,
+        claimed: true,
+        failed: true,
+        runId: run.id,
+        stage: "stage4_validate",
+        error: stage4Error?.code ?? FAILURE_TYPE.UNKNOWN,
+      };
+    }
+
+    stepEvidence.push(
+      buildWorkerStepEvidence(
+        "rpa_validate_complete",
+        "Stage 4 validation succeeded",
+        {
+          can_checkout: session?.canCheckout ?? null,
+          out_of_stock_count: Array.isArray(session?.outOfStockItems)
+            ? session.outOfStockItems.length
+            : null,
+        },
+      ),
+    );
+
+    await heartbeatRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      workerId,
+      progressStage: "rpa_checkout",
+      progressMessage: "Starting RPA Stage 5: checkout",
+    });
+    stepEvidence.push(
+      buildWorkerStepEvidence("rpa_checkout_started", "RPA Stage 5 started", {
+        stage: 5,
+        mode: stage5Mode,
+      }),
+    );
+
+    try {
+      checkedOut = await checkoutOnMilo(session, {
+        mode: stage5Mode,
+        allowOrderSubmission,
+        timeoutMs: 60_000,
+      });
+    } catch (stage5Error) {
+      const failure = summarizeFailure(
+        stage5Error?.message ?? "RPA Stage 5 checkout failed",
+        stage5Error?.code ?? FAILURE_TYPE.UNKNOWN,
+        {
+          stage: "stage5_checkout",
+          details:
+            stage5Error?.details && typeof stage5Error.details === "object"
+              ? stage5Error.details
+              : {},
+        },
+      );
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "failed",
+        workerNotes: "RPA Stage 5 failed",
+        errorMessage: failure.message,
+        failureType: failure.failureType,
+        failureDetails: failure.details,
+        evidence: [
+          ...stepEvidence,
+          buildNoSubmitAttestationEvidence("stage5_checkout", "rpa_run"),
+        ],
+      });
+      return {
+        success: false,
+        claimed: true,
+        failed: true,
+        runId: run.id,
+        stage: "stage5_checkout",
+        error: stage5Error?.code ?? FAILURE_TYPE.UNKNOWN,
+      };
+    }
+
+    stepEvidence.push(
+      buildWorkerStepEvidence(
+        "rpa_checkout_complete",
+        "Stage 5 checkout completed",
+        {
+          mode: checkedOut?.mode ?? stage5Mode,
+          submitted: checkedOut?.submitted ?? false,
+        },
+      ),
+    );
+
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "succeeded",
+      workerNotes:
+        stage5Mode === "dry_run"
+          ? "RPA run completed in dry_run mode; cart prepared but NOT submitted"
+          : "RPA run completed with live submission",
+      errorMessage: undefined,
+      evidence: [
+        ...stepEvidence,
+        buildEvidenceEntry({
+          kind: "rpa_run_summary",
+          stage: "rpa_complete",
+          message:
+            stage5Mode === "dry_run"
+              ? "RPA pipeline completed in dry_run mode"
+              : "RPA pipeline completed with submission",
+          attributes: {
+            mode: checkedOut?.mode,
+            submitted: checkedOut?.submitted,
+            confirmation_numbers: checkedOut?.confirmationNumbers,
+            stage5_duration_ms: checkedOut?.stage5DurationMs,
+            current_url: checkedOut?.currentUrl,
+            output_dir: checkedOut?.outputDir,
+            dry_run_reason: checkedOut?.dryRunReason ?? null,
+          },
+        }),
+        ...(stage5Mode === "dry_run"
+          ? [buildNoSubmitAttestationEvidence("rpa_complete", "rpa_run")]
+          : []),
+      ],
+    });
+
+    return {
+      success: true,
+      claimed: true,
+      runId: run.id,
+      mode: checkedOut?.mode,
+      submitted: checkedOut?.submitted,
+      confirmationNumbers: checkedOut?.confirmationNumbers ?? null,
+      dryRunReason: checkedOut?.dryRunReason ?? null,
+      stage5DurationMs: checkedOut?.stage5DurationMs,
+    };
+  } finally {
+    if (session?.browser) {
+      await session.browser.close().catch(() => {});
+    }
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const isMainModule =
   path.resolve(process.argv[1] ?? "") === path.resolve(__filename);
@@ -660,9 +1303,17 @@ const isMainModule =
 if (isMainModule) {
   const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:4000";
   const workerId = process.env.WORKER_ID ?? "local-worker-1";
+  const workerMode = process.env.WORKER_MODE ?? "generic";
 
   try {
-    const result = await processOneRun({ apiBaseUrl, workerId });
+    let result;
+    if (workerMode === "rpa_run") {
+      result = await processOneRpaRun({ apiBaseUrl, workerId });
+    } else if (workerMode === "mlcc_dry_run") {
+      result = await processOneMlccDryRun({ apiBaseUrl, workerId });
+    } else {
+      result = await processOneRun({ apiBaseUrl, workerId });
+    }
 
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exit(0);

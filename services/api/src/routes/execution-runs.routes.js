@@ -42,12 +42,20 @@ router.post("/claim-next", requireServiceRole, async (req, res) => {
 
 router.post("/from-cart/:storeId/:cartId", async (req, res) => {
   const { storeId, cartId } = req.params;
+  const mode = req.body?.mode;
+
+  if (mode !== undefined && mode !== "rpa_run") {
+    return res.status(400).json({
+      error: "INVALID_MODE",
+      details: "mode must be one of: rpa_run",
+    });
+  }
 
   const { statusCode, body } = await createExecutionRunFromCart(
     supabase,
     storeId,
     cartId,
-    { userId: req.auth_user_id },
+    { userId: req.auth_user_id, mode },
   );
 
   return res.status(statusCode).json(body);

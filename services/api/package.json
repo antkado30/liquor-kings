@@ -10,6 +10,7 @@
     "test:watch": "vitest",
     "playwright:install": "PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium",
     "worker:run-once": "node src/workers/execution-worker.js",
+    "worker:rpa-run-once": "PLAYWRIGHT_BROWSERS_PATH=0 WORKER_MODE=rpa_run node src/workers/execution-worker.js",
     "worker:mlcc-browser-dry-run": "PLAYWRIGHT_BROWSERS_PATH=0 node src/workers/mlcc-browser-worker.js"
   },
   "keywords": [],

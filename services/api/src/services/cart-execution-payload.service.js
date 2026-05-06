@@ -61,6 +61,7 @@ export const buildExecutionPayloadForSubmittedCart = async (
   supabase,
   storeId,
   cartId,
+  { metadata } = {},
 ) => {
   if (!isUuid(cartId)) {
     return {
@@ -156,6 +157,7 @@ export const buildExecutionPayloadForSubmittedCart = async (
         },
         items,
         summary,
+        ...(metadata !== undefined ? { metadata } : {}),
       },
     },
   };

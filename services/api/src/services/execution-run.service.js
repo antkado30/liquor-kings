@@ -454,7 +454,7 @@ export const createExecutionRunFromCart = async (
   supabase,
   storeId,
   cartId,
-  { userId } = {},
+  { userId, mode } = {},
 ) => {
   if (!isUuid(cartId)) {
     return {
@@ -463,10 +463,21 @@ export const createExecutionRunFromCart = async (
     };
   }
 
+  const metadata =
+    mode === "rpa_run"
+      ? {
+          run_type: "rpa_run",
+          mode: "dry_run",
+          requested_at: new Date().toISOString(),
+          requested_by_user_id: userId ?? null,
+        }
+      : undefined;
+
   const payloadResult = await buildExecutionPayloadForSubmittedCart(
     supabase,
     storeId,
     cartId,
+    metadata !== undefined ? { metadata } : undefined,
   );
 
   if (payloadResult.statusCode !== 200) {
