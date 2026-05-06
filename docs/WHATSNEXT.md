@@ -1,35 +1,68 @@
-# What’s next — near-term snapshot
+# What's Next — Liquor Kings
 
-Short, **honest** list of active safety/correctness themes. Update this file when priorities shift, a major item ships, or a blocker appears. **Do not** paste the whole 90-day plan here.
+**Living priorities list. Update when priorities shift, a major item ships, or a blocker appears.**
 
-**Plan anchor (context, not duplicated):** [Strategic architecture](../lk/architecture/strategic-architecture.md) · [RPA safety rules](../lk/architecture/rpa-safety-rules.md) · [RPA rebuild phases](../lk/architecture/rpa-rebuild-phases.md) · [Developer anti-drift](../lk/DEVELOPER_ANTI_DRIFT.md)
-
----
-
-## 90-day plan “gates” (loose mapping)
-
-Use these as **checklist labels**, not as a full roadmap:
-
-| Gate (concept) | Near-term artifact / action |
-|----------------|-----------------------------|
-| **G1 — Visibility** | Keep safety/mapping/RLS/selector docs **current** with reality; rollup: [`RPA_SUBSYSTEM_DONE.md`](./RPA_SUBSYSTEM_DONE.md) (`docs/SAFETY_INVARIANTS.md`, `docs/SELECTORS.md`, `docs/MLCC_MAPPING.md`, `docs/RLS_AUDIT.md`). |
-| **G2 — Measurable posture** | Run read-only SQL audits on **staging** (or prod-read-only); refresh snapshot tables in `docs/RLS_AUDIT.md` and `docs/MLCC_MAPPING.md`. |
-| **G3 — Automation trust** | After doc/sql refresh, run `npm run safety:lk:rpa-local` (or CI-equivalent) before merging RPA-adjacent work. |
-| **G4 — Operator continuity** | Use [`SESSIONLOG.md`](./SESSIONLOG.md) every burst; trim or update **this** file when themes complete. |
+**Anchor docs:** [`PROJECT_STATE.md`](./PROJECT_STATE.md) (master state) · [`PRODUCT_SPEC.md`](./PRODUCT_SPEC.md) (external spec) · [`PRODUCT_SPEC_INTERNAL.md`](./PRODUCT_SPEC_INTERNAL.md) (internal spec) · [`SESSIONLOG.md`](./SESSIONLOG.md) (session continuity)
 
 ---
 
-## Current focus (edit as needed)
+## Current Focus: Phase A — Wire the engine end-to-end
 
-1. **RLS audit** — Execute `sql/rls_audit_query.sql`; align `docs/RLS_AUDIT.md` table with output; track RED tables for future hardening tasks (no policy edits in this lane).
-2. **MLCC mapping audit** — Execute `sql/mlcc_mapping_audit.sql`; refresh `docs/MLCC_MAPPING.md` snapshot; remember **runtime** `mappingconfidence` is enforced in dry-run code paths (see that doc).
-3. **Selector audit** — `docs/SELECTORS.md` is the inventory + **pilot disposition** for remaining RED; expand to GREEN only in scoped tasks.
-4. **Session continuity** — End each burst with a new `SESSIONLOG.md` entry; start each burst with last 2–3 entries + this file.
+The RPA stages work individually. The API + DB + workers are built. **The gap is integration.** Get a single end-to-end happy path working: customer hits submit → run created → worker claims → stages run → result back.
+
+### Active priorities (in order)
+
+1. **Wire RPA Stages 1-4 into execution-worker** — worker should call login, navigate, add-items, validate stages instead of just building preflight reports
+2. **Build Stage 5 (checkout submission) in dry_run mode** — final stage; locked behind `allowOrderSubmission` flag + `LK_ALLOW_ORDER_SUBMISSION=yes` env
+3. **API endpoint that triggers a full run from a cart** — POST that creates execution_run + enqueues + returns run id for customer to poll
+4. **End-to-end test against live MILO** — use real Thursday family liquor order as the test (when Tony's family is placing one)
 
 ---
 
-## Explicitly not listed here
+## Next Phases (don't start until Phase A is done)
 
-- Day-to-day product features unrelated to safety/correctness.
-- Full MILO vs browser lane strategy (see strategic architecture doc).
-- Anything that belongs in a ticket tracker — link tickets in SESSIONLOG instead of duplicating here.
+### Phase B — Customer-facing surface
+- Customer signup flow (vs operator/admin auth)
+- MILO credential onboarding with AES-256 encryption + Stage 1 verify on connect
+- Customer-facing cart review + submit UI in scanner
+- Order confirmation + history + re-order button
+- Email notifications (Resend or Postmark)
+
+### Phase C — Business operations (parallel admin work, not coding)
+- Form Michigan LLC ($200, this week)
+- Have Jacob conversation about equity (this week)
+- Buy liquorkings.com + variants ($60, this week)
+- Hire Michigan startup lawyer ($5-8K)
+- Buy ToS + Privacy Policy via Termly ($30/mo)
+- Business insurance ($1.5-3K/year)
+- Call Deja Vu POS support re: CSV export
+
+### Phase D — Saxon-killer features
+- Label printing (PDF generation per bottle in customer's inventory)
+- Thermal printer (Zebra ZD421) integration as Pro add-on
+- Status page (status.liquorkings.com)
+- Phase 2 RPA observability + self-healing selectors
+
+### Phase E — Launch
+- Marketing landing page
+- Onboard dad's store as customer #1
+- Onboard founders' tier customers 2-25 ($25/mo grandfathered)
+- Public launch to warm network
+
+---
+
+## Explicitly NOT in scope right now
+
+- AI assistant chat (V2 — defer until 100+ customers)
+- Multi-state expansion (PA/OH/UT — defer until 200+ MI customers)
+- Vendor-side product (Liquor Kings Vendor — defer until Year 4)
+- Native iOS app (NEVER — PWA only)
+- Browse/discover page (defer until customer demand emerges)
+
+---
+
+## How to use this file
+
+- **Edit at the end of every session** if priorities shift
+- **Read at the start of every session** to orient
+- Always pair with `PROJECT_STATE.md` (architectural reality) and last 1-2 `SESSIONLOG.md` entries (recent context)
