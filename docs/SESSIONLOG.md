@@ -126,3 +126,45 @@ The RPA stages work individually. The API + DB + workers are built. **The gap is
 - **Edit at the end of every session** if priorities shift
 - **Read at the start of every session** to orient
 - Always pair with `PROJECT_STATE.md` (architectural reality) and last 1-2 `SESSIONLOG.md` entries (recent context)
+---
+Date: 2026-05-05 (Tuesday late evening — second burst)
+Focus: Stage 5 checkout submission built in dry_run mode with triple-gated safety
+Files touched (high level):
+  - services/api/src/rpa/stages/checkout.js (NEW, 508 lines)
+  - services/api/src/rpa/stages/_test_checkout.js (NEW, 114 lines)
+  - No other files modified
+Commands / tests run:
+  - node --check services/api/src/rpa/stages/checkout.js — PASS
+  - node --check services/api/src/rpa/stages/_test_checkout.js — PASS
+  - cd services/api && npm test — first 30+ tests visible all PASS (full count not verified;
+    Cursor mentioned 40 pre-existing failures unrelated to Stage 5; flagged for future cleanup)
+  - git log: commit cda077b feat(rpa): Stage 5 checkout submission with triple-gated dry_run safety
+Observed state:
+  - Green: Stage 5 file syntax valid, 13 typed error codes implemented per spec
+  - Green: Triple-gate safety logic correctly enforces dry_run by default
+  - Green: Local clickCheckoutButtonSafely bypasses BLOCKLIST_RE only for the specific
+    Checkout case (no global modification)
+  - Green: Real DOM selector verified from April 24 cart-after-validate.html
+  - Green: Companion test script structured to default dry_run, live only when
+    MILO_TEST_ALLOW_SUBMIT=yes AND LK_ALLOW_ORDER_SUBMISSION=yes both set
+  - Yellow: 40 pre-existing test failures in api workspace test suite — unrelated to
+    Stage 5 work, separate technical debt
+  - Red: Stage 5 NOT yet run against live MILO. End-to-end pipeline exists in code but
+    not verified end-to-end against real cart yet
+What's next (1-3 bullets):
+  - Run _test_checkout.js against live MILO in dry_run mode to verify Stage 5 walks up
+    to Checkout button correctly (next session)
+  - Investigate the 40 failing pre-existing tests; categorize and triage
+  - Wire Stages 1-5 into execution-worker as new processOneRpaRun function (Phase A item 1)
+Notes:
+  - Tonight: confirmed dev environment fully working (Docker + Supabase + API),
+    created PROJECT_STATE.md context system, built Stage 5. Two real commits on main.
+  - Per Tony's stated goal "build the strongest way possible," chose strangler-fig
+    migration over rip-and-replace: stages 1-5 live alongside mlcc-browser-worker.js
+    until proven, then old worker deleted in future session.
+  - Live submission test deferred to a future session when both energy and MILO state
+    align. Default dry_run means even an accidental run won't submit anything.
+  - Goal sequence: dry_run test against live MILO (next session) → wire stages into
+    execution-worker (session after) → real Thursday family liquor order test
+    (when family is placing weekly order).
+---
