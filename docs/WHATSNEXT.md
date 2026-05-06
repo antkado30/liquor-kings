@@ -6,45 +6,84 @@
 
 ---
 
-## Current Focus: Phase A — Wire the engine end-to-end
+## Phase A ✅ COMPLETE (May 6, 2026)
 
-The RPA stages work individually. The API + DB + workers are built. **The gap is integration.** Get a single end-to-end happy path working: customer hits submit → run created → worker claims → stages run → result back.
+The full RPA pipeline is wired end-to-end and verified live against MILO.
 
-### Active priorities (in order)
+✅ Stage 5 built in dry_run mode with 13 typed errors and triple-gated safety  
+✅ Stages 1-5 wired into execution-worker as `processOneRpaRun`  
+✅ API endpoint `POST /from-cart/:storeId/:cartId` accepts `mode: "rpa_run"` and stamps metadata correctly  
+✅ End-to-end test verified — API call → execution_run created → worker claimed → all 5 stages ran live MILO → finalized as succeeded with 13 evidence entries  
 
-1. **Wire RPA Stages 1-4 into execution-worker** — worker should call login, navigate, add-items, validate stages instead of just building preflight reports
-2. **Build Stage 5 (checkout submission) in dry_run mode** — final stage; locked behind `allowOrderSubmission` flag + `LK_ALLOW_ORDER_SUBMISSION=yes` env
-3. **API endpoint that triggers a full run from a cart** — POST that creates execution_run + enqueues + returns run id for customer to poll
-4. **End-to-end test against live MILO** — use real Thursday family liquor order as the test (when Tony's family is placing one)
+Run e1617c49-798a-4b82-9ebf-4d928150a0c4 stands as the proof: ~26s wall clock, Stage 5 109ms, no submission (dry_run gate refused).
+
+Strangler-fig migration intact. Old `mlcc-browser-worker.js` and `processOneMlccDryRun` untouched. Will be removed in a future session after multi-customer real-order proof.
 
 ---
 
-## Next Phases (don't start until Phase A is done)
+## Phase B — Customer-facing surface (NEW CURRENT FOCUS)
 
-### Phase B — Customer-facing surface
-- Customer signup flow (vs operator/admin auth)
-- MILO credential onboarding with AES-256 encryption + Stage 1 verify on connect
-- Customer-facing cart review + submit UI in scanner
-- Order confirmation + history + re-order button
-- Email notifications (Resend or Postmark)
+Order matters. These are sequenced for highest leverage to first paying customer.
 
-### Phase C — Business operations (parallel admin work, not coding)
+### Phase B Priority #1: Encrypted MILO credential storage
+- AES-256 column on stores table
+- Stage 1 verify on credential save
+- Replaces hardcoded env vars in worker for per-customer credentials
+- Critical — every customer needs their own credentials before onboarding
+
+### Phase B Priority #2: Bulk UPC import tool
+- Admin UI for CSV ingestion (NRS, Deja Vu, Ash exports)
+- Three-tier confidence triage (auto-confirm / manual review / skip)
+- Process Tony's 9,378-row NRS export as proof
+- Becomes universal customer onboarding step
+
+### Phase B Priority #3: Customer-facing cart submit + progress UI
+- Wire scanner cart from in-memory to authenticated /cart API
+- Submit button triggers `mode: "rpa_run"` execution_run
+- Progress UI polls `GET /execution-runs/:runId/summary` until done
+- Shows confirmation numbers / dry-run cart-ready state
+
+### Phase B Priority #4: Customer signup + login flow
+- Real Supabase user auth (replacing service-role bypass for testing)
+- store_users membership row creation on signup
+- Multi-license switcher
+
+### Phase B Priority #5: Email + push notifications
+- Resend or Postmark integration
+- RPA failure → notify customer within 5 min
+- Order confirmation emails
+- Status update push
+
+### Phase B Priority #6: Order history + re-order button
+- List of past execution_runs by store
+- Tap to view details + receipt
+- "Re-order" creates a new cart with same items
+
+---
+
+## Phase C — Business operations (parallel admin, not coding)
+
 - Form Michigan LLC ($200, this week)
 - Have Jacob conversation about equity (this week)
 - Buy liquorkings.com + variants ($60, this week)
 - Hire Michigan startup lawyer ($5-8K)
 - Buy ToS + Privacy Policy via Termly ($30/mo)
 - Business insurance ($1.5-3K/year)
-- Call Deja Vu POS support re: CSV export
 
-### Phase D — Saxon-killer features
-- Label printing (PDF generation per bottle in customer's inventory)
+---
+
+## Phase D — Saxon-killer features
+
+- Label printing (PDF generation per bottle in inventory)
 - Thermal printer (Zebra ZD421) integration as Pro add-on
 - Status page (status.liquorkings.com)
 - Phase 2 RPA observability + self-healing selectors
 
-### Phase E — Launch
-- Marketing landing page
+---
+
+## Phase E — Launch
+
+- Marketing landing page on liquorkings.com
 - Onboard dad's store as customer #1
 - Onboard founders' tier customers 2-25 ($25/mo grandfathered)
 - Public launch to warm network

@@ -168,3 +168,51 @@ Notes:
     execution-worker (session after) → real Thursday family liquor order test
     (when family is placing weekly order).
 ---
+---
+Date: 2026-05-06 (Wednesday — full-day burn, ~1pm to ~6pm Michigan time)
+Focus: Phase A FULLY COMPLETE — Stage 5 live verification + worker integration + API trigger + end-to-end test against live MILO
+Files touched (high level):
+  - services/api/src/services/cart-execution-payload.service.js (metadata threading, +2 lines)
+  - services/api/src/services/execution-run.service.js (mode='rpa_run' support, +12 lines)
+  - services/api/src/routes/execution-runs.routes.js (mode body param, +9 lines)
+  - services/api/src/workers/execution-worker.js (NEW processOneRpaRun function ~571 lines + WORKER_MODE dispatch + WORKER_HEADFUL flag + mlcc_code→code fix)
+  - services/api/package.json (worker:rpa-run-once script + comma fix)
+  - .gitignore (tmp/data/ entry — NRS export protection)
+  - tmp/seed-rpa-test.sql (test seed — gitignored, customer data shape)
+Commands / tests run:
+  - Stage 5 dry_run live verification: validated:true, canCheckout:true, mode:dry_run, submitted:false, stage5DurationMs:97
+  - Cursor brief shipped processOneRpaRun (Block B) — 571 line implementation following processOneMlccDryRun lifecycle pattern
+  - Field-mapping fix Cursor brief shipped (license 3-tier, item normalize, mlccLookup callback)
+  - tmp/seed-rpa-test.sql created with idempotent SQL — 1 store + 2 mlcc_items + 2 bottles + 1 validated cart + 2 cart_items
+  - npm test: 40 failed (pre-existing baseline, unrelated) / 417 passed — no regressions from RPA wiring
+  - End-to-end test SUCCESS: API call → execution_run created → worker claimed → all 5 stages executed against live MILO → finalized as succeeded with 13 evidence entries (run e1617c49-798a-4b82-9ebf-4d928150a0c4, ~26s wall clock)
+Observed state:
+  - Green: Phase A items #1+#2+#3+#4 ALL DONE AND VERIFIED LIVE
+  - Green: Strangler-fig migration intact — mlcc-browser-worker.js (6243 lines legacy) + processOneMlccDryRun (existing) BOTH UNTOUCHED
+  - Green: FOUR-LAYER safety architecture in place — WORKER_MODE env + payload metadata.mode + Stage 5 options + LK_ALLOW_ORDER_SUBMISSION env
+  - Green: 13 evidence entries persisted on the test run — full audit trail
+  - Green: Scanner PWA confirmed booting (Vite on :5174) with camera + manual code entry working; manual code 9121 returned correct seed product
+  - Yellow: Scanner cart is currently in-memory only per code comment "Phase 2: sync with authenticated /cart API"
+  - Yellow: Scanner catalog search broken because local upc_mappings table is empty (BY DESIGN — fresh dev DB; cloud Supabase still has the 36 confirmed mappings)
+  - Yellow: 40 pre-existing test failures still flagged for cleanup
+  - Red: Encrypted MILO credential storage NOT BUILT (Phase B priority #1)
+  - Red: Bulk UPC import tool for NRS export (9,378 liquor rows) NOT BUILT (Phase B priority #2)
+  - Red: Customer-facing cart submit + progress polling UI NOT WIRED (Phase B priority #3)
+What's next (1-3 bullets):
+  - Set up Claude Cowork for tomorrow's session — file-read access removes grep+screenshot friction
+  - Phase B priority order locked: encrypted credentials FIRST, bulk UPC import SECOND, customer-facing UI THIRD
+  - Tomorrow's family liquor order goes through MILO normally — Liquor Kings stays as parallel verified-but-unused infrastructure for one more week before customer demo
+Notes:
+  - 3 commits on main today: 0d9b869 (worker integration), 826f4e9 (Block C polish fixes), one more for these docs
+  - Bug discoveries during Block C verification (caught and fixed live):
+    1. PLAYWRIGHT_BROWSERS_PATH=0 in npm script broke browser launch — Playwright was looking in node_modules but browsers installed system-wide
+    2. mlccLookup queried mlcc_items.mlcc_code but actual column is just 'code' (mlcc_code lives on bottles table only — easy field-name confusion)
+    3. package.json comma dropped during edit — JSON parse error
+  - Tony's strategic instinct correct on multiple fronts today:
+    1. Suspected Stage 5 needed live verification before worker integration (correct sequencing — caught nothing extra but proved the pattern)
+    2. Pushed back on "delete the old system" — accepted strangler-fig migration sequencing
+    3. Pushed back on "extract competitor data" — Claude reinforced legality concerns
+    4. Recognized scope explosion ("everything connected") signals need to slow down — chose Option 1 (clean close) over pushing low-energy code
+  - Tony's stated long-term values reinforced through session: "build the strongest way possible," "make sure nothing breaks," "I want this to never fail"
+  - Tonight ends Wednesday May 6 with Phase A officially complete and Phase B clearly scoped. Real win day.
+---
