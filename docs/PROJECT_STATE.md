@@ -205,7 +205,44 @@ A Michigan-first B2B SaaS platform that automates spirits ordering for MLCC lice
 - Sub-users allowed but require legal waiver/agreement
 - Scanner is core feature, NOT separate
 - MILO connection required before scanner usable
-- AES-256 encryption for MILO credentials, key in secrets manager, never logged
+- AES-256-GCM encryption for MILO credentials with versioned format `v1:<iv>:<authTag>:<ciphertext>` — SHIPPED May 7
+- Key currently in `LK_CREDENTIAL_ENCRYPTION_KEY` env var (Tier 1 dev posture) — MUST migrate to managed KMS before first paying customer (Phase B Priority #1.5)
+- Plaintext password never logged, never returned from any endpoint — exists only in Stage 1 browser session memory at use time
+- Hard-fail on decrypt error never silently falls back to env (operator visibility preserved)
+
+### Security posture (current tier + roadmap)
+
+**Tier 1 — SHIPPED May 7 (acceptable for dev / pre-launch / dad's store as test customer):**
+- AES-256-GCM at rest with random IV per encryption + auth tag verification
+- Versioned ciphertext format for future algorithm migration
+- Encryption key in env var on server
+- HTTPS everywhere
+- Supabase RLS for data isolation
+- Service-role bearer + X-Store-Id required for credential routes
+
+**Tier 2 — REQUIRED BEFORE FIRST PAYING CUSTOMER (Phase B Priority #1.5 + #1.6):**
+- Encryption key in managed KMS (Supabase Vault / AWS KMS / GCP KMS) — never in env file or app memory
+- Per-store Data Encryption Keys wrapped by master KEK (envelope encryption)
+- Credential access audit log (immutable, anomaly-detected, customer-visible)
+- Cyber liability insurance ($1.5-3K/year)
+- Lawyer review of security disclosures in ToS
+
+**Tier 3 — REQUIRED AT 25-100 CUSTOMERS:**
+- Third-party penetration test ($3-5K)
+- Dependency scanning in CI (Snyk / GitHub Dependabot enforced)
+- Network isolation: prod DB only reachable from worker IP
+- Customer-facing "last accessed" surface
+
+**Tier 4 — REQUIRED AT 100+ CUSTOMERS:**
+- SOC 2 Type II audit
+- Bug bounty program
+- Quarterly internal security review
+
+**Honest threat assessment:**
+- Right now (pre-launch, dev only): vanishingly small attack surface
+- At Tier 2 with paying customers: same security tier as well-run SaaS
+- At Tier 4: same tier as banks and password managers
+- 0% breach probability is not achievable for any system. The bar is "build the strongest way possible, detect breaches in minutes not months, limit blast radius, recover fast, document promises and limitations clearly."
 
 ### Operations
 - AI chatbot for ~60-70% of routine customer support tickets

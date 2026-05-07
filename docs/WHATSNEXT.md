@@ -41,7 +41,29 @@ Run 9a873bd4-6657-47d0-9074-4e426de8405f stands as proof. Customer onboarding no
 
 Order matters. These are sequenced for highest leverage to first paying customer.
 
-### Phase B Priority #2 (NEXT): Bulk UPC import tool
+### Phase B Priority #1.5 (NEXT — security hardening before customers): Move encryption key to managed KMS
+
+What we shipped May 7 is Tier 1 (env-var key). Before any paying customer touches the system, we upgrade to Tier 2 (KMS-backed).
+
+- Evaluate Supabase Vault (if GA) vs AWS KMS vs GCP KMS vs HashiCorp Vault
+- Migrate `LK_CREDENTIAL_ENCRYPTION_KEY` out of `.env` — key never lives in application memory or filesystem
+- Worker + API call KMS over authenticated channel for encrypt/decrypt operations
+- Even full server compromise cannot extract the key (HSM-backed)
+- Document key rotation procedure
+- Migrate existing ciphertext under new wrapping (envelope encryption pattern)
+- Per-store Data Encryption Keys (DEKs) wrapped by master Key Encryption Key (KEK) — single-customer blast radius if a DEK leaks
+
+**Why this matters:** the encryption itself is industry-standard. The weak link is where the key lives. Server compromise = all customer credentials decryptable. KMS removes that single point of failure. This is the difference between "we say we encrypt" and "we encrypt at the same tier as banks and password managers."
+
+### Phase B Priority #1.6 (paired with #1.5): Credential access audit log + anomaly detection
+
+- New `credential_access_log` table — every decrypt call recorded (storeId, timestamp, worker_id, run_id, success/failure)
+- Immutable / append-only — no UPDATE or DELETE permissions, even for service role
+- Anomaly detection rules: alert via Sentry if N decrypts/hour exceeds threshold per store, or if decrypts come from unexpected worker IDs
+- Customer-facing "last accessed" surface in dashboard — transparency builds trust + lets customer detect compromise themselves
+- Required for any future SOC 2 audit
+
+### Phase B Priority #2: Bulk UPC import tool
 - Admin UI for CSV ingestion (NRS, Deja Vu, Ash exports)
 - Three-tier confidence triage (auto-confirm / manual review / skip)
 - Process Tony's 9,378-row NRS export as proof
@@ -77,9 +99,12 @@ Order matters. These are sequenced for highest leverage to first paying customer
 - Form Michigan LLC ($200, this week)
 - Have Jacob conversation about equity (this week)
 - Buy liquorkings.com + variants ($60, this week)
-- Hire Michigan startup lawyer ($5-8K)
+- Hire Michigan startup lawyer ($5-8K) — review credential storage + ToS security disclosures
 - Buy ToS + Privacy Policy via Termly ($30/mo)
+- **Cyber liability insurance ($1.5-3K/year — required before first paying customer per security review May 7)**
 - Business insurance ($1.5-3K/year)
+- Penetration test before public launch ($3-5K — third-party security audit)
+- Plan for SOC 2 Type II at 100+ customers
 
 ---
 
