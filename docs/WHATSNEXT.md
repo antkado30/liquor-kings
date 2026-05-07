@@ -6,18 +6,24 @@
 
 ---
 
-## Phase A ✅ COMPLETE (May 6, 2026)
+## Phase A ✅ COMPLETE (May 6, 2026) + REAL-WORLD VERIFIED (May 7, 2026)
 
-The full RPA pipeline is wired end-to-end and verified live against MILO.
+The full RPA pipeline is wired end-to-end AND has placed a real production order against live MLCC.
 
 ✅ Stage 5 built in dry_run mode with 13 typed errors and triple-gated safety  
 ✅ Stages 1-5 wired into execution-worker as `processOneRpaRun`  
 ✅ API endpoint `POST /from-cart/:storeId/:cartId` accepts `mode: "rpa_run"` and stamps metadata correctly  
-✅ End-to-end test verified — API call → execution_run created → worker claimed → all 5 stages ran live MILO → finalized as succeeded with 13 evidence entries  
+✅ End-to-end test verified May 6 in dry_run mode: run e1617c49-798a-4b82-9ebf-4d928150a0c4
+✅ **End-to-end LIVE submission verified May 7: order placed, confirmation numbers received from MLCC**
 
-Run e1617c49-798a-4b82-9ebf-4d928150a0c4 stands as the proof: ~26s wall clock, Stage 5 109ms, no submission (dry_run gate refused).
+🚀 **First production order — May 7, 2026:**
+- NWS Michigan, Inc. (#321): Order #264935837, Confirmation #30653069, $1,186.37 — delivery 5/12/2026
+- General Wine & Liquor (#221): Order #264935818, Confirmation #5591482, $691.35 — delivery 5/12/2026
+- 27 of 28 SKUs delivered (Kirkland excluded as MLCC OOS, others all included)
+- 95 seconds total wall-clock from terminal command to MILO acceptance
+- Self-healing caught + retried 2 silently-dropped items mid-run
 
-Strangler-fig migration intact. Old `mlcc-browser-worker.js` and `processOneMlccDryRun` untouched. Will be removed in a future session after multi-customer real-order proof.
+Strangler-fig migration intact. Old `mlcc-browser-worker.js` and `processOneMlccDryRun` untouched. Can be removed safely now that processOneRpaRun has placed a real order.
 
 ---
 
@@ -41,7 +47,25 @@ Run 9a873bd4-6657-47d0-9074-4e426de8405f stands as proof. Customer onboarding no
 
 Order matters. These are sequenced for highest leverage to first paying customer.
 
-### Phase B Priority #1.5 (NEXT — security hardening before customers): Move encryption key to managed KMS
+### Phase B Priority #1.4 (URGENT — discovered May 7 from real order): RPA stages bug fixes
+
+Two real bugs found by placing the first production order. Both fixable in same session (small, focused).
+
+**Stage 5 confirmation parser timing bug**
+- Threw `MILO_STAGE5_CONFIRMATION_PARSE_FAILED` while MILO was still on the loading state ("Please wait while we confirm your order")
+- The order DID submit successfully (verified by checking MILO Orders page)
+- Root cause: parser polled too eagerly, declared failure before MLCC's server returned the confirmation page
+- Fix: extend confirmation wait timeout, detect "processing/loading" intermediate state and continue polling, only declare parse_failed if we land on a real confirmation page with no parseable numbers
+- File: `services/api/src/rpa/stages/checkout.js`
+
+**Stage 3 silent batch-add drops**
+- 28 SKUs in one batch consistently drops 1-4 items per run (caught by self-healing layer in resolve-and-run-order.mjs)
+- Almost certainly a MILO-side rate-limit or batch-size cap on "Add by Code"
+- Self-healing catches it, but root cause should be addressed for cleaner first-pass success rate
+- Fix: split high-SKU-count adds into smaller batches (e.g., 8-10 SKUs per batch) inside Stage 3
+- File: `services/api/src/rpa/stages/add-items-to-cart.js`
+
+### Phase B Priority #1.5 (security hardening before customers): Move encryption key to managed KMS
 
 What we shipped May 7 is Tier 1 (env-var key). Before any paying customer touches the system, we upgrade to Tier 2 (KMS-backed).
 

@@ -294,3 +294,56 @@ Notes:
   - Ship-it energy intact. Real partner moment — pushed back on unrealistic target, explained the engineering tradeoffs honestly, and Tony adjusted the plan accordingly without ego.
   - Tony's stated values reinforced again: "build the strongest way possible," "secure from hackers," "extra secure" while keeping the app not annoying. Documented these as the security philosophy in PROJECT_STATE.md.
 ---
+---
+Date: 2026-05-07 (Thursday — afternoon to late evening, ~6 hours)
+Focus: 🚀 LIQUOR KINGS PLACED ITS FIRST REAL CUSTOMER ORDER. Family weekly liquor order ($1,877.72 net, 27 SKUs, 173 bottles) submitted end-to-end via RPA against live MILO. Real MLCC confirmation numbers received.
+Files touched (high level):
+  - tmp/run-real-order.mjs (NEW — initial scoped script for known codes)
+  - tmp/resolve-and-run-order.mjs (NEW — full pipeline: human-readable order → catalog resolution → ADA validation → Stages 1-5 with self-healing)
+  - services/api/src/rpa/stages/checkout.js (UNCHANGED — bug discovered, fix queued)
+Commands / tests run:
+  - POST /price-book/ingest with empty body — ingested full Michigan spirits catalog (13,828 mlcc_items rows) from michigan.gov/lara/bureau-list/lcc/spirits-price-book-info
+  - Multiple GET /price-book/items?search=... calls to resolve product names to codes
+  - Direct mlcc_items DB queries via the resolver script
+  - Multiple full RPA runs across iteration cycles (resolved bugs as they appeared)
+  - Final live submit with SUBMIT_ORDER=1 LK_ALLOW_ORDER_SUBMISSION=yes RUN_RPA=1
+  - All Stage transitions verified: 1 (login) → 2 (navigate) → 3 (add 28 items) → self-heal (retry 2 silently-dropped) → 4 (validate, canCheckout=true) → 5 (live submit, click Checkout)
+Real production confirmation numbers received from MLCC:
+  - NWS Michigan, Inc. (#321): Order #264935837, Confirmation #30653069, $1,186.37 net, delivery 5/12/2026
+  - General Wine & Liquor (#221): Order #264935818, Confirmation #5591482, $691.35 net, delivery 5/12/2026
+  - Total order: $1,877.72 across 27 of 28 ordered SKUs (Kirkland 14415 ×30 excluded as MLCC OOS; rest shipped)
+What got built today:
+  - Price book ingestion pipeline used in anger — 13,828 rows ingested in ~90 seconds
+  - tmp/resolve-and-run-order.mjs — order resolver that takes human-readable {query, size_ml, qty} entries OR pre-resolved {code, qty}, looks up codes in local catalog with brand/flavor heuristics, computes ADA breakdown, validates 9L per ADA before going to MILO
+  - Self-healing layer — after Stage 3, scrapes MILO cart DOM by code, computes diff (need vs have), re-adds only the missing quantity, loops up to 3 times. Verified working across multiple runs (caught silent drops of 2-4 items per run).
+  - Anti-multiplication safety — if scraper finds rows but matches 0 of our codes, abort retry instead of blindly re-adding. Prevented a near-miss 4x quantity multiplication earlier.
+  - Stage 5 enrichment — merge Stage 4 result fields (validated, canCheckout, adaOrders, orderSummary, outputDir) into session before Stage 5 invocation
+  - End-to-end live submission with 5-second pre-submit countdown for last-second abort
+What was learned (real product backlog items):
+  - Stage 5's confirmation parser polls too eagerly — threw MILO_STAGE5_CONFIRMATION_PARSE_FAILED while MILO was still on the "Please wait while we confirm your order" loading state. The order itself submitted successfully (verified by checking MILO Orders page directly). Parser needs to wait for either a stable URL change OR the actual confirmation/error toast before declaring failure.
+  - Stage 3 silently drops 1-4 items per run on bulk adds (28 SKUs in one batch). Almost certainly a MILO-side rate-limit or batch-size cap. Self-healing covers it now but root cause should be addressed (batch into smaller groups in Stage 3 itself).
+  - MILO carts are session-isolated — Playwright session sees a different cart than concurrent browser session. Document this for customer-facing flow.
+  - The price book ingestor uses michigan.gov/lara/bureau-list/lcc/spirits-price-book-info as canonical source. Re-running the ingest weekly will keep catalog fresh.
+Observed state:
+  - 🟢 Green: First real production order placed. Confirmation numbers in hand. Pipeline works end-to-end.
+  - 🟢 Green: Self-healing verified working across 4 different runs — caught silent drops every time, recovered cleanly.
+  - 🟢 Green: Anti-multiplication safety verified — caught a scraper bug scenario without doubling the cart.
+  - 🟢 Green: 13,828-row Michigan spirits catalog ingested locally. Brand search works. Mom's "wheat green river not bourbon" got resolved to code 28645 in one query.
+  - 🟢 Green: Encrypted MLCC credentials decrypted on demand and used by Stage 1 — verified live for the third time today.
+  - 🟡 Yellow: Stage 5 confirmation parser threw a false-positive parse error. Need to fix before next week's order to avoid alarm.
+  - 🟡 Yellow: Kirkland 30 didn't ship this week (OOS). Need to either substitute or place separately when restocked.
+  - ⚪ Open: Stage 3 batch-add silent drop root cause not yet investigated.
+What's next (1-3 bullets):
+  - Tonight: fix Stage 5's confirmation parser timing — extend wait, detect "processing" loading state, only fail on real terminal failure
+  - Phase B Priority #1.5 + #1.6: KMS migration + credential audit log (security armor before scaling beyond family store)
+  - Phase B Priority #2: bulk UPC import for NRS export (Tony's 9,378-row file ready in tmp/data/)
+Notes:
+  - Total session time ~6 hours of focused build + iterate.
+  - Started with: 8 codes manually known, 7 product names needing lookup. Ended with: 27 SKUs delivered to two ADAs with real MLCC confirmation numbers.
+  - Tony's request that pushed the architecture forward: "I don't want to do it manually. I want the system to learn how to actually pick it up and fix it." → drove the self-healing implementation.
+  - Tony's escalation request: "press validate, then press checkout to see the whole actual flow... Make sure this shit is 100% accurate." → drove Stage 5 live integration tonight.
+  - Pre-launch / pre-customer / pre-LLC. This was a VERY successful test order on Tony's family store account before any customer onboarding.
+  - 95 seconds: time from `node tmp/resolve-and-run-order.mjs` enter-key-pressed to MILO accepting submission. Versus 2+ hours of manual data entry that this replaces. ~76x time reduction confirmed in production-grade conditions.
+  - Tony's reaction to the order placing: "LETS GOOOOO BABYYYY LETS FUCKING GOOOOO LETS GOOOOO IM SO HAPPY MUAHAHAHHAHAHAHAAHHA"
+  - Real win night. Liquor Kings has officially graduated from "infrastructure that might work someday" to "product that placed a real order today." 🥃🚀🔥
+---
