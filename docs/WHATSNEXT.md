@@ -49,20 +49,19 @@ Order matters. These are sequenced for highest leverage to first paying customer
 
 ### Phase B Priority #1.4 (URGENT — discovered May 7 from real order): RPA stages bug fixes
 
-Two real bugs found by placing the first production order. Both fixable in same session (small, focused).
+Two real bugs found by placing the first production order.
 
-**Stage 5 confirmation parser timing bug**
-- Threw `MILO_STAGE5_CONFIRMATION_PARSE_FAILED` while MILO was still on the loading state ("Please wait while we confirm your order")
-- The order DID submit successfully (verified by checking MILO Orders page)
-- Root cause: parser polled too eagerly, declared failure before MLCC's server returned the confirmation page
-- Fix: extend confirmation wait timeout, detect "processing/loading" intermediate state and continue polling, only declare parse_failed if we land on a real confirmation page with no parseable numbers
-- File: `services/api/src/rpa/stages/checkout.js`
+**Stage 5 confirmation parser timing bug — ✅ FIXED May 7 (commit b2e3f12)**
+- Was: threw `MILO_STAGE5_CONFIRMATION_PARSE_FAILED` while MILO was still on the loading state ("Please wait while we confirm your order"). Order DID submit, but parser declared failure too early.
+- Root cause: parser was treating any 6+ digit body match as a confirmation candidate. MILO's header always shows the 6-digit license number → false positive on every page.
+- Fix shipped: detect "Please wait..." loading state explicitly + continue polling, replace loose digit match with strict `Confirmation #` regex, keep URL change + toasts as terminal signals, add `wasInLoadingState` field to timeout error for diagnostics.
+- Verification deferred to next real order — can't easily re-test live without placing a 2nd order.
 
-**Stage 3 silent batch-add drops**
-- 28 SKUs in one batch consistently drops 1-4 items per run (caught by self-healing layer in resolve-and-run-order.mjs)
-- Almost certainly a MILO-side rate-limit or batch-size cap on "Add by Code"
-- Self-healing catches it, but root cause should be addressed for cleaner first-pass success rate
-- Fix: split high-SKU-count adds into smaller batches (e.g., 8-10 SKUs per batch) inside Stage 3
+**Stage 3 silent batch-add drops — STILL OPEN**
+- 28 SKUs in one batch consistently drops 1-4 items per run (caught by self-healing layer in resolve-and-run-order.mjs).
+- Almost certainly a MILO-side rate-limit or batch-size cap on "Add by Code".
+- Self-healing covers it, but root cause should be addressed for cleaner first-pass success rate.
+- Fix: split high-SKU-count adds into smaller batches (e.g., 8-10 SKUs per batch) inside Stage 3.
 - File: `services/api/src/rpa/stages/add-items-to-cart.js`
 
 ### Phase B Priority #1.5 (security hardening before customers): Move encryption key to managed KMS
