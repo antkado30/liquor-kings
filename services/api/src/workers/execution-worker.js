@@ -15,6 +15,7 @@ import {
   classifyFailureType,
   isRetryableFailureType,
 } from "../services/execution-failure.service.js";
+import { loadDecryptedStoreMlccCredentials } from "../services/store-mlcc-credentials.service.js";
 
 function joinApiPath(apiBaseUrl, pathname) {
   const base = apiBaseUrl.replace(/\/$/, "");
@@ -763,9 +764,93 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     };
   }
 
-  const username = process.env.MILO_USERNAME;
-  const password = process.env.MILO_PASSWORD;
-  const loginUrl = process.env.MILO_LOGIN_URL;
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !supabaseServiceKey) {
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "RPA worker missing Supabase environment for mlccLookup",
+      errorMessage:
+        "RPA worker missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars (required for credential lookup + mlccLookup)",
+      failureType: FAILURE_TYPE.UNKNOWN,
+      evidence: [
+        ...stepEvidence,
+        buildNoSubmitAttestationEvidence("rpa_dispatch", "rpa_run"),
+      ],
+    });
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      reason: "missing_supabase_env",
+    };
+  }
+  const workerSupabase = createClient(supabaseUrl, supabaseServiceKey);
+
+  // Resolve MLCC credentials with DB-first priority and env fallback.
+  // Production: DB has encrypted creds (saved + verified via API endpoints)
+  // Test fallback: MILO_USERNAME/MILO_PASSWORD env vars (preserves _test_*.js path)
+  let username;
+  let password;
+  let loginUrl = process.env.MILO_LOGIN_URL || null;
+  let credentialSource = null;
+
+  const dbResult = await loadDecryptedStoreMlccCredentials(
+    workerSupabase,
+    storeId,
+  );
+  if (dbResult.ok) {
+    username = dbResult.credentials.username;
+    password = dbResult.credentials.password;
+    // Service supplies a default loginUrl; prefer env override if set.
+    loginUrl = loginUrl || dbResult.credentials.loginUrl;
+    credentialSource = "db";
+  } else if (dbResult.code === "LK_DECRYPT_FAILED") {
+    // Hard fail — corrupted ciphertext or missing/wrong encryption key.
+    // Never fall back to env in this case; the operator needs to know.
+    await finalizeRun({
+      apiBaseUrl,
+      runId: run.id,
+      storeId,
+      status: "failed",
+      workerNotes: "RPA worker could not decrypt stored MLCC credentials",
+      errorMessage: dbResult.error,
+      failureType: FAILURE_TYPE.UNKNOWN,
+      failureDetails: { code: "LK_DECRYPT_FAILED" },
+      evidence: [
+        ...stepEvidence,
+        buildWorkerStepEvidence(
+          "rpa_login",
+          "Decryption of stored credentials failed",
+          {
+            credential_source_attempted: "db",
+            error_code: "LK_DECRYPT_FAILED",
+          },
+        ),
+        buildNoSubmitAttestationEvidence("rpa_login", "rpa_run"),
+      ],
+    });
+    return {
+      success: false,
+      claimed: true,
+      failed: true,
+      runId: run.id,
+      reason: "credential_decrypt_failed",
+    };
+  } else {
+    // No creds in DB — fall back to env vars (preserves test path)
+    const envUser = process.env.MILO_USERNAME;
+    const envPass = process.env.MILO_PASSWORD;
+    if (envUser && envPass) {
+      username = envUser;
+      password = envPass;
+      credentialSource = "env";
+    }
+  }
 
   if (!username || !password) {
     await finalizeRun({
@@ -773,12 +858,24 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       runId: run.id,
       storeId,
       status: "failed",
-      workerNotes: "RPA worker missing required MILO credentials",
+      workerNotes: "RPA worker has no MLCC credentials available (DB or env)",
       errorMessage:
-        "Worker is missing MILO credentials in environment (MILO_USERNAME, MILO_PASSWORD required)",
+        "No MLCC credentials available: stores.mlcc_password_encrypted is empty AND MILO_USERNAME/MILO_PASSWORD env vars are unset",
       failureType: FAILURE_TYPE.UNKNOWN,
+      failureDetails: { code: "LK_NO_CREDENTIALS" },
       evidence: [
         ...stepEvidence,
+        buildWorkerStepEvidence(
+          "rpa_login",
+          "No credentials available from DB or env",
+          {
+            db_lookup_status: dbResult.ok
+              ? "ok"
+              : (dbResult.code || "no_credentials_on_file"),
+            env_username_present: !!process.env.MILO_USERNAME,
+            env_password_present: !!process.env.MILO_PASSWORD,
+          },
+        ),
         buildNoSubmitAttestationEvidence("rpa_login", "rpa_run"),
       ],
     });
@@ -790,6 +887,14 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       reason: "missing_credentials",
     };
   }
+
+  // Trace which credential source was used (NEVER include username/password)
+  stepEvidence.push(
+    buildWorkerStepEvidence("rpa_login", "MLCC credential source resolved", {
+      credential_source: credentialSource,
+      has_loginurl_override: !!process.env.MILO_LOGIN_URL,
+    }),
+  );
 
   const normalizedItems = normalizePayloadItemsForRpaStages(payload.items);
   const invalidItems = normalizedItems.filter(
@@ -854,32 +959,6 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     };
   }
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !supabaseServiceKey) {
-    await finalizeRun({
-      apiBaseUrl,
-      runId: run.id,
-      storeId,
-      status: "failed",
-      workerNotes: "RPA worker missing Supabase environment for mlccLookup",
-      errorMessage:
-        "RPA worker missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars",
-      failureType: FAILURE_TYPE.UNKNOWN,
-      evidence: [
-        ...stepEvidence,
-        buildNoSubmitAttestationEvidence("rpa_add_items", "rpa_run"),
-      ],
-    });
-    return {
-      success: false,
-      claimed: true,
-      failed: true,
-      runId: run.id,
-      reason: "missing_supabase_env",
-    };
-  }
-  const workerSupabase = createClient(supabaseUrl, supabaseServiceKey);
   const mlccLookup = async (codes) => {
     if (!Array.isArray(codes) || codes.length === 0) return {};
     const { data, error } = await workerSupabase

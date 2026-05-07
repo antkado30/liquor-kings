@@ -15,6 +15,7 @@ import { fileURLToPath } from "url";
 import operatorReviewRouter from "./routes/operator-review.routes.js";
 import adminRouter from "./routes/admin.routes.js";
 import priceBookRouter, { priceBookUpcFlagHandler, priceBookUpcHandler } from "./routes/price-book.routes.js";
+import storeMlccCredentialsRouter from "./routes/store-mlcc-credentials.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -53,6 +54,7 @@ app.use(
 app.use("/inventory", resolveAuthenticatedStore, inventoryRouter);
 app.use("/bottles", resolveAuthenticatedStore, bottlesRouter);
 app.use("/execution-runs", resolveAuthenticatedStore, executionRunsRouter);
+app.use("/stores", resolveAuthenticatedStore, storeMlccCredentialsRouter);
 app.use("/operator-review", operatorReviewRouter);
 app.use("/price-book", priceBookRouter);
 
