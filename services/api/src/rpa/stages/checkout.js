@@ -202,7 +202,7 @@ async function clickCheckoutButtonSafely(page, button, outputDir, artifacts, ses
 
 async function waitForCheckoutConfirmation(page, timeoutMs = DEFAULT_TIMEOUT_MS, outputDir = null, artifacts = []) {
   const startedAt = Date.now();
-  let lastState = { currentUrl: page.url(), bodyTail: "" };
+  let lastState = { currentUrl: page.url(), bodyTail: "", isLoading: false };
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
@@ -214,12 +214,17 @@ async function waitForCheckoutConfirmation(page, timeoutMs = DEFAULT_TIMEOUT_MS,
         const errorToastMessages = [...document.querySelectorAll(".toast-message, .toast-title, .toast-error, .alert-danger, .text-danger")]
           .map((el) => (el.textContent || "").replace(/\s+/g, " ").trim())
           .filter((msg) => msg && /(error|failed|unable|invalid|denied)/i.test(msg));
-        const confirmationCandidates = [...new Set((bodyText.match(/\b\d{4,}\b/g) || []).filter((n) => n.length >= 6))];
+        // Strict confirmation signal: explicit "Confirmation #<digits>" pattern in body.
+        // Loose digit-pattern matching alone is unreliable because MILO's header always
+        // shows the 6-digit license number — that would always look like a confirmation.
+        const confirmationPatternMatches = [...new Set((bodyText.match(/confirmation\s*#?\s*:?\s*(\d{4,})/gi) || []))];
+        const isLoadingState = /please\s+wait\s+while\s+we\s+confirm\s+your\s+order|processing\s+your\s+order|submitting\s+order/i.test(bodyText);
         return {
           bodyText,
           successToastMessages,
           errorToastMessages,
-          confirmationCandidates,
+          confirmationPatternMatches,
+          isLoadingState,
           currentUrl: window.location.href,
         };
       });
@@ -227,16 +232,35 @@ async function waitForCheckoutConfirmation(page, timeoutMs = DEFAULT_TIMEOUT_MS,
       lastState = {
         currentUrl: state.currentUrl || page.url(),
         bodyTail: String(state.bodyText || "").slice(-12_000),
+        isLoading: state.isLoadingState,
       };
+
+      // If MILO is showing the loading state ("Please wait while we confirm..."),
+      // explicitly continue polling regardless of any other signal. The body
+      // contains other digits (license number) that look like false-positive
+      // confirmation candidates.
+      if (state.isLoadingState) {
+        await page.waitForTimeout(750);
+        continue;
+      }
+
       const urlLooksSubmitted = /\/milo\/orders|\/milo\/account\/orders/i.test(lastState.currentUrl);
-      if (state.confirmationCandidates.length > 0 || state.successToastMessages.length > 0 || urlLooksSubmitted) {
+      const hasErrorToast = state.errorToastMessages.length > 0;
+      // Terminal signal: real confirmation pattern OR URL change OR success toast OR error toast.
+      // Plain 6+ digit body match REMOVED as a signal (license number false-positives).
+      if (
+        state.confirmationPatternMatches.length > 0 ||
+        urlLooksSubmitted ||
+        state.successToastMessages.length > 0 ||
+        hasErrorToast
+      ) {
         await captureArtifact(page, outputDir, artifacts, "02-after-checkout-click");
         return {
           confirmed: true,
           currentUrl: lastState.currentUrl,
           successToastMessages: state.successToastMessages,
           errorToastMessages: state.errorToastMessages,
-          confirmationCandidates: state.confirmationCandidates,
+          confirmationPatternMatches: state.confirmationPatternMatches,
           waitedMs: Date.now() - startedAt,
         };
       }
@@ -254,6 +278,7 @@ async function waitForCheckoutConfirmation(page, timeoutMs = DEFAULT_TIMEOUT_MS,
     timeoutMs,
     currentUrl: page.url(),
     bodyTail: lastState.bodyTail,
+    wasInLoadingState: lastState.isLoading,
   });
 }
 
