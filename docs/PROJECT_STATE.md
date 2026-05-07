@@ -2,8 +2,8 @@
 
 **Living document. Update at end of every work session. Read at start of every work session.**
 
-**Last updated:** May 6, 2026
-**Last session:** May 6, 2026 — Phase A COMPLETE — stages 1-5 wired into execution-worker, end-to-end verified live against MILO
+**Last updated:** May 7, 2026
+**Last session:** May 7, 2026 — Phase B Priority #1 COMPLETE — encrypted MLCC credential storage end-to-end with worker DB integration
 **Founder / Primary Builder:** Tony Kado (19, Michigan)
 **Stage:** Pre-launch. Architecture mostly built. Wiring + customer-facing flows + business operations remaining.
 **Repo:** github.com/antkado30/liquor-kings
@@ -146,7 +146,7 @@ A Michigan-first B2B SaaS platform that automates spirits ordering for MLCC lice
 1. **Stage 5 RPA (checkout submission)** — last stage missing
 2. **RPA stages → execution-worker integration** — stages run from terminal tests but worker doesn't call them yet
 3. **Customer-facing signup/onboarding flow** — only operator/admin auth exists
-4. **Encrypted MILO credential storage** — architecture not yet built
+4. ~~**Encrypted MILO credential storage**~~ ✅ SHIPPED May 7 — AES-256-GCM via `services/api/src/lib/credential-encryption.js`, service at `store-mlcc-credentials.service.js`, routes under `/stores/:storeId/mlcc-credentials`, worker reads from DB
 5. **Stripe billing integration** — not present
 6. **Customer-facing landing page** — liquorkings.com not purchased, no marketing site
 7. **Customer-facing cart UI** — scanner has cart but the "review and submit to MLCC" customer journey hasn't been built

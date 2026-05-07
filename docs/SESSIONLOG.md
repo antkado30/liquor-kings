@@ -216,3 +216,53 @@ Notes:
   - Tony's stated long-term values reinforced through session: "build the strongest way possible," "make sure nothing breaks," "I want this to never fail"
   - Tonight ends Wednesday May 6 with Phase A officially complete and Phase B clearly scoped. Real win day.
 ---
+---
+Date: 2026-05-07 (Thursday evening, ~7:30pm-9:30pm Michigan, ~2 hours)
+Focus: Phase B Priority #1 SHIPPED — encrypted MLCC credential storage end-to-end with worker DB integration
+Files touched (high level):
+  - supabase/migrations/20260507120000_add_mlcc_credential_verification_metadata.sql (NEW)
+  - services/api/src/lib/credential-encryption.js (NEW — AES-256-GCM utility)
+  - services/api/src/services/store-mlcc-credentials.service.js (NEW — save/load/verify/clear + Stage 1 verify)
+  - services/api/src/routes/store-mlcc-credentials.routes.js (NEW — PUT/GET/POST/DELETE under /stores/:storeId/mlcc-credentials)
+  - services/api/src/app.js (mount + import for new router)
+  - services/api/.env.example (LK_CREDENTIAL_ENCRYPTION_KEY entry)
+  - services/api/src/workers/execution-worker.js (processOneRpaRun: DB-first credential resolution with env fallback, hard-fail on decrypt error)
+  - services/api/.env (local — added LK_CREDENTIAL_ENCRYPTION_KEY, gitignored)
+Commands / tests run:
+  - npx supabase migration up — PASS (new migration applied clean)
+  - node --check on all 4 new files + app.js + execution-worker.js — PASS (silent)
+  - cd services/api && npm test — 40 failed (pre-existing baseline, unrelated) / 417 passed — no regressions
+  - Encrypt/decrypt round-trip via inline ESM script — PASS (v1: prefix, format check, decrypt round-trip)
+  - PUT /stores/:storeId/mlcc-credentials with samkado@gmail.com + real password (read -s pattern, never echoed) — 200 OK with mlcc_credentials_updated_at populated
+  - psql direct read of stores.mlcc_password_encrypted — confirmed ciphertext starts with "v1:1d32c08b71002de53...", length 83 chars, ZERO trace of plaintext
+  - POST /stores/:storeId/mlcc-credentials/verify — SUCCESS, Stage 1 launched headless Playwright, logged into MILO, returned status:"success" + verifiedAt timestamp
+  - GET /stores/:storeId/mlcc-credentials/status — confirmed hasCredentials:true, lastStatus:"success", NO password in response
+  - End-to-end worker test with MILO_USERNAME/MILO_PASSWORD UNSET — npm run worker:rpa-run-once
+  - Run id 9a873bd4-6657-47d0-9074-4e426de8405f succeeded with stage5DurationMs:96, dryRunReason gate held
+  - psql evidence query confirmed credential_source:"db", has_loginurl_override:false
+Observed state:
+  - Green: Phase B Priority #1 100% complete and verified live against MILO
+  - Green: Customer credential pipeline ready — every future customer can save creds via API, worker decrypts on demand
+  - Green: Strangler-fig migration intact — env-var path still works (test fallback), DB takes priority when present
+  - Green: Plaintext password never logged, never returned from any endpoint, never persisted outside Stage 1's browser session memory
+  - Green: Hard-fail on decrypt error (LK_DECRYPT_FAILED never falls back to env) — operator visibility preserved
+  - Green: Evidence trail records credential_source ("db" or "env") for every run
+  - Green: 40 pre-existing test failures unchanged (no regressions from credential wiring)
+  - Yellow: Bulk UPC import for NRS export still NOT BUILT (Phase B Priority #2 — next session focus)
+  - Yellow: Customer-facing cart submit + progress UI still NOT WIRED (Phase B Priority #3)
+  - Yellow: 40 pre-existing test failures still flagged for cleanup at some point
+  - Red: No customer signup/login flow yet (Phase B Priority #4)
+What's next (1-3 bullets):
+  - Phase B Priority #2: bulk UPC import tool for NRS 9,378-row export — admin UI + 3-tier confidence triage
+  - Phase B Priority #3: wire scanner cart from in-memory to authenticated /cart API + submit button + progress polling
+  - Family liquor order tomorrow Friday May 8 still goes through MILO normally — Liquor Kings stays parallel infrastructure for at least one more week before customer demo
+Notes:
+  - Block A (read codebase): discovered stores table ALREADY had mlcc_username + mlcc_password_encrypted columns from foundational migration — saved a column-add migration. Only added verification metadata columns this session.
+  - Block B (Cursor brief): created 4 files + edited 2 in one shipped brief. Cursor caught my Node 24 ESM/CJS mismatch in the verification one-liner and fixed it inline.
+  - Block C (verification): confirmed encryption format v1:<iv_hex>:<authTag_hex>:<ciphertext_hex> is exactly 83 chars for an 11-char password. Stage 1 verify took ~7s headless against live MILO.
+  - Block D (worker integration): restructured processOneRpaRun to create supabase client BEFORE credential resolution, then DB-first lookup with env fallback. Hard-fail on decrypt error (never silently fall back). Evidence entry traces credential_source without leaking secrets.
+  - Block E (this entry): docs + commit + push.
+  - Cowork file-read access proved its value tonight. Wrote both Cursor briefs from real source (verified column names, exact line numbers, existing route patterns) instead of guessing. No "let me see what's in execution-worker.js" — just opened it.
+  - Tony's voice tonight: "i wanna get as much work done as possible... full strength full efficiency full speed but i don't wanna rush anything." Met that bar — clean ship, no shortcuts, real verification at every step.
+  - Real win night. Phase B Priority #1 done in one focused session with 5 distinct verification gates (encrypt round-trip, ciphertext-not-plaintext psql confirm, Stage 1 verify against live MILO, end-to-end worker run with NO env creds, evidence trail credential_source:"db").
+---

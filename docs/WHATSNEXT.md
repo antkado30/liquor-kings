@@ -21,21 +21,32 @@ Strangler-fig migration intact. Old `mlcc-browser-worker.js` and `processOneMlcc
 
 ---
 
-## Phase B — Customer-facing surface (NEW CURRENT FOCUS)
+## Phase B Priority #1 ✅ COMPLETE (May 7, 2026)
+
+Encrypted MLCC credential storage shipped end-to-end and verified live against MILO with worker DB integration.
+
+✅ AES-256-GCM credential encryption utility with versioned format `v1:<iv>:<authTag>:<ciphertext>`  
+✅ `stores.mlcc_password_encrypted` column populated with real ciphertext (verified ZERO plaintext via direct psql read)  
+✅ API routes: `PUT/GET/POST/DELETE /stores/:storeId/mlcc-credentials` with status, save, verify, clear  
+✅ Verify endpoint runs Stage 1 against live MILO and persists `verifiedAt` + `lastStatus` metadata  
+✅ Worker `processOneRpaRun` reads from DB first, env fallback for tests, hard-fail on decrypt error  
+✅ End-to-end run with `MILO_USERNAME`/`MILO_PASSWORD` UNSET succeeded — proves DB-only path works  
+✅ Evidence trail records `credential_source: "db"` per run
+
+Run 9a873bd4-6657-47d0-9074-4e426de8405f stands as proof. Customer onboarding now has the keystone it needed: every future customer can save encrypted creds via API, worker decrypts on demand.
+
+---
+
+## Phase B — Customer-facing surface (CURRENT FOCUS)
 
 Order matters. These are sequenced for highest leverage to first paying customer.
 
-### Phase B Priority #1: Encrypted MILO credential storage
-- AES-256 column on stores table
-- Stage 1 verify on credential save
-- Replaces hardcoded env vars in worker for per-customer credentials
-- Critical — every customer needs their own credentials before onboarding
-
-### Phase B Priority #2: Bulk UPC import tool
+### Phase B Priority #2 (NEXT): Bulk UPC import tool
 - Admin UI for CSV ingestion (NRS, Deja Vu, Ash exports)
 - Three-tier confidence triage (auto-confirm / manual review / skip)
 - Process Tony's 9,378-row NRS export as proof
 - Becomes universal customer onboarding step
+- Reminder: NRS size column unreliable — must use UPC + external DB + MLCC catalog as primary signals
 
 ### Phase B Priority #3: Customer-facing cart submit + progress UI
 - Wire scanner cart from in-memory to authenticated /cart API
