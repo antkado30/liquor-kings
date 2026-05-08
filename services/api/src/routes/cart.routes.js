@@ -2,7 +2,10 @@ import express from "express";
 import supabase from "../config/supabase.js";
 import { enforceParamStoreMatches } from "../middleware/store-param.middleware.js";
 import { enforceCartItemStoreScope } from "../middleware/cart-item-scope.middleware.js";
-import { resolveAndVerifyBottleIdentity } from "../services/bottle-identity.service.js";
+import {
+  resolveAndVerifyBottleIdentity,
+  findOrCreateBottleByMlccCode,
+} from "../services/bottle-identity.service.js";
 import {
   DIAGNOSTIC_KIND,
   logSystemDiagnostic,
@@ -197,6 +200,7 @@ router.post("/:storeId/items", async (req, res) => {
   const storeId = req.store_id;
   const {
     bottleId,
+    mlccCode,           // NEW: scanner path — find/create bottle from MLCC code
     quantity,
     liquor_code,
     mlcc_code,
@@ -205,8 +209,17 @@ router.post("/:storeId/items", async (req, res) => {
     fingerprint: requestedFingerprint,
   } = req.body ?? {};
 
-  if (!bottleId) {
-    return res.status(400).json({ error: "bottleId is required" });
+  // Accept any of: bottleId (admin path), mlccCode/liquor_code/mlcc_code (scanner path)
+  const codeForScannerPath =
+    (mlccCode != null && String(mlccCode).trim() !== "" && String(mlccCode).trim()) ||
+    (liquor_code != null && String(liquor_code).trim() !== "" && String(liquor_code).trim()) ||
+    (mlcc_code != null && String(mlcc_code).trim() !== "" && String(mlcc_code).trim()) ||
+    null;
+
+  if (!bottleId && !codeForScannerPath) {
+    return res
+      .status(400)
+      .json({ error: "bottleId or mlccCode is required" });
   }
 
   const qty = Number(quantity);
@@ -217,24 +230,46 @@ router.post("/:storeId/items", async (req, res) => {
       .json({ error: "quantity must be a positive integer" });
   }
 
-  const identity = await resolveAndVerifyBottleIdentity(supabase, {
-    bottleId,
-    liquorCode: liquor_code ?? mlcc_code,
-    requestedName,
-    requestedSizeMl,
-    requestedFingerprint,
-    storeId,
-    userId: req.auth_user_id,
-  });
+  let resolvedBottleId = bottleId;
+  let mlccItem = null;
 
-  if (!identity.ok) {
-    return res.status(400).json({
-      error: "CODE_MISMATCH",
-      details: identity.details,
+  if (!resolvedBottleId) {
+    // Scanner path: find or create the bottle for (storeId, mlccCode)
+    const result = await findOrCreateBottleByMlccCode(supabase, {
+      mlccCode: codeForScannerPath,
+      storeId,
+      userId: req.auth_user_id,
     });
+    if (!result.ok) {
+      return res.status(400).json({
+        error: result.code || "CODE_MISMATCH",
+        details: result.details,
+      });
+    }
+    resolvedBottleId = result.bottle.id;
+    mlccItem = result.mlccItem;
+  } else {
+    // Admin / legacy path: verify the supplied bottleId matches its MLCC catalog entry
+    const identity = await resolveAndVerifyBottleIdentity(supabase, {
+      bottleId,
+      liquorCode: codeForScannerPath,
+      requestedName,
+      requestedSizeMl,
+      requestedFingerprint,
+      storeId,
+      userId: req.auth_user_id,
+    });
+
+    if (!identity.ok) {
+      return res.status(400).json({
+        error: "CODE_MISMATCH",
+        details: identity.details,
+      });
+    }
+
+    mlccItem = identity.mlccItem;
   }
 
-  const { mlccItem } = identity;
   if (!mlccItem?.id) {
     await logSystemDiagnostic({
       kind: DIAGNOSTIC_KIND.IDENTITY_WRITE_MISSING_MLCC_ITEM_ID,
@@ -242,7 +277,7 @@ router.post("/:storeId/items", async (req, res) => {
       userId: req.auth_user_id,
       payload: {
         reason: "cart_add_missing_resolved_mlcc_item_id",
-        bottle_id: bottleId,
+        bottle_id: resolvedBottleId,
       },
     });
     return res
@@ -284,7 +319,7 @@ router.post("/:storeId/items", async (req, res) => {
     .from("cart_items")
     .select("*")
     .eq("cart_id", cart.id)
-    .eq("bottle_id", bottleId)
+    .eq("bottle_id", resolvedBottleId)
     .maybeSingle();
 
   if (existingItemError) {
@@ -318,7 +353,7 @@ router.post("/:storeId/items", async (req, res) => {
       .from("cart_items")
       .insert({
         cart_id: cart.id,
-        bottle_id: bottleId,
+        bottle_id: resolvedBottleId,
         mlcc_item_id: mlccItem.id,
         store_id: storeId,
         quantity: qty,

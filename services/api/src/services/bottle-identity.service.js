@@ -367,6 +367,169 @@ export async function resolveAndVerifyBottleIdentity(supabase, {
 }
 
 /**
+ * Find or create a per-store bottle from an MLCC code.
+ *
+ * Bottles are the per-store bridge between the global `mlcc_items` catalog and
+ * a store's cart_items / inventory. For scanner / customer flows, the customer
+ * only knows the MLCC `code` — they don't know (or shouldn't have to know)
+ * about per-store bottle records. This helper looks up the existing bottle for
+ * (store_id, mlcc_code) and creates one on first scan if it doesn't exist.
+ *
+ * Created bottles are stamped with mlcc_item_id (canonical link), name, and
+ * size_ml from the resolved mlcc_items row. shelf_price stays null until set
+ * via inventory management.
+ *
+ * Idempotent: scanning the same code twice returns the same bottle row.
+ *
+ * @returns {{ ok: true, bottle: object, mlccItem: object, created: boolean }}
+ *          | { ok: false, code: 'CODE_MISMATCH', details: object }
+ */
+export async function findOrCreateBottleByMlccCode(supabase, {
+  mlccCode,
+  storeId,
+  userId,
+}) {
+  const trimmedCode = mlccCode != null ? String(mlccCode).trim() : "";
+  if (!trimmedCode) {
+    return {
+      ok: false,
+      code: "CODE_MISMATCH",
+      details: { reason: "mlccCode is required" },
+    };
+  }
+  if (!storeId) {
+    return {
+      ok: false,
+      code: "CODE_MISMATCH",
+      details: { reason: "storeId is required" },
+    };
+  }
+
+  // 1. Resolve canonical mlcc_items row from the code
+  const { data: mlccItem, error: mlccErr } = await fetchMlccItemByPrimaryCode(
+    supabase,
+    trimmedCode,
+  );
+  if (mlccErr) {
+    return {
+      ok: false,
+      code: "CODE_MISMATCH",
+      details: { reason: "mlcc_resolve_failed", message: mlccErr.message },
+    };
+  }
+  if (!mlccItem) {
+    await logSystemDiagnostic({
+      kind: DIAGNOSTIC_KIND.CODE_MISMATCH,
+      storeId,
+      userId,
+      payload: {
+        reason: "mlcc_item_not_found_for_scanner_add",
+        liquor_code: trimmedCode,
+      },
+    });
+    return {
+      ok: false,
+      code: "CODE_MISMATCH",
+      details: { reason: "mlcc_item_not_found", liquor_code: trimmedCode },
+    };
+  }
+
+  // 2. Look up existing active bottle for (store_id, mlcc_code)
+  // Use .order + .limit(1) to gracefully handle the rare case where multiple
+  // active rows exist for the same code in the same store.
+  const { data: existingRows, error: lookupErr } = await supabase
+    .from("bottles")
+    .select("id, name, mlcc_code, size_ml, mlcc_item_id, is_active, store_id")
+    .eq("store_id", storeId)
+    .eq("mlcc_code", trimmedCode)
+    .eq("is_active", true)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (lookupErr) {
+    return {
+      ok: false,
+      code: "CODE_MISMATCH",
+      details: {
+        reason: "bottle_lookup_failed",
+        message: lookupErr.message,
+      },
+    };
+  }
+
+  const existing = (existingRows ?? [])[0];
+  if (existing) {
+    // Sanity check: if mlcc_item_id is set on existing bottle and differs from
+    // the resolved mlcc_item.id, log diagnostic but trust the existing row
+    // (don't auto-mutate). Operator review can reconcile.
+    if (existing.mlcc_item_id && existing.mlcc_item_id !== mlccItem.id) {
+      await logSystemDiagnostic({
+        kind: DIAGNOSTIC_KIND.CODE_MISMATCH,
+        storeId,
+        userId,
+        payload: {
+          reason: "existing_bottle_mlcc_item_id_drift",
+          bottle_id: existing.id,
+          bottle_mlcc_item_id: existing.mlcc_item_id,
+          resolved_mlcc_item_id: mlccItem.id,
+          liquor_code: trimmedCode,
+          non_blocking: true,
+        },
+      });
+    }
+    return {
+      ok: true,
+      bottle: existing,
+      mlccItem,
+      created: false,
+    };
+  }
+
+  // 3. Create a new bottle for this store, seeded from the mlcc_items row
+  const { data: created, error: insertErr } = await supabase
+    .from("bottles")
+    .insert({
+      store_id: storeId,
+      mlcc_code: trimmedCode,
+      mlcc_item_id: mlccItem.id,
+      name: mlccItem.name,
+      size_ml: mlccItem.size_ml,
+      is_active: true,
+    })
+    .select("id, name, mlcc_code, size_ml, mlcc_item_id, is_active, store_id")
+    .single();
+  if (insertErr) {
+    return {
+      ok: false,
+      code: "CODE_MISMATCH",
+      details: {
+        reason: "bottle_create_failed",
+        message: insertErr.message,
+      },
+    };
+  }
+
+  await logSystemDiagnostic({
+    kind: "bottle_auto_created_from_scanner",
+    storeId,
+    userId,
+    payload: {
+      bottle_id: created.id,
+      mlcc_code: trimmedCode,
+      mlcc_item_id: mlccItem.id,
+      seed_name: mlccItem.name,
+      seed_size_ml: mlccItem.size_ml,
+    },
+  });
+
+  return {
+    ok: true,
+    bottle: created,
+    mlccItem,
+    created: true,
+  };
+}
+
+/**
  * Validates every line on a cart before an execution run is created.
  */
 export async function verifyCartItemsBeforeExecution(supabase, {
