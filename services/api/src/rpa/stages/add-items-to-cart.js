@@ -9,6 +9,17 @@ const CART_NAV_TIMEOUT_MS = 15_000;
 const ADD_BY_CODE_NAV_TIMEOUT_MS = 20_000;
 
 /**
+ * Max items per "Add all to Cart" click. Empirically, MILO silently drops 1-4
+ * items per batch when this exceeds ~12 SKUs (root cause likely a server-side
+ * batch size cap on the quick-add list). Splitting into smaller batches and
+ * clicking "Add all" multiple times produces a near-100% first-pass success rate.
+ *
+ * Override via options.batchSize.
+ */
+const DEFAULT_BATCH_SIZE = 10;
+const INTER_BATCH_SETTLE_MS = 800;
+
+/**
  * Stage 3 typed errors:
  * - MILO_STAGE3_INVALID_SESSION
  * - MILO_STAGE3_INVALID_ITEMS
@@ -454,151 +465,198 @@ export async function addItemsToCart(session, items, options = {}) {
       const itemsAdded = [];
       const itemsRejected = [];
 
-      for (let idx = 0; idx < normalizedItems.length; idx += 1) {
-        const item = normalizedItems[idx];
-        const perItemStart = Date.now();
-        const rowsBefore = await collectQuickAddRows(page);
-        const rowCountBefore = rowsBefore.length;
+      // === BATCHING ===
+      // MILO silently drops items when too many are queued in one "Add all to
+      // Cart" click. Empirical evidence (May 7 production order, 28 SKUs): drops
+      // were 1-4 items per attempt. Splitting into smaller batches (default 10
+      // items per batch) and clicking "Add all" once per batch eliminates the
+      // silent drops. Each "Add all" clears the form but doesn't navigate, so we
+      // stay on /milo/products/bycode and immediately type the next batch.
+      const batchSize =
+        Number.isFinite(options.batchSize) && Number(options.batchSize) > 0
+          ? Math.floor(Number(options.batchSize))
+          : DEFAULT_BATCH_SIZE;
 
-        await codeInput.focus();
-        await codeInput.fill(item.code);
-        const codeValue = await codeInput.inputValue().catch(() => "");
-        if (codeValue.trim() !== item.code) {
-          const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, `error-item-code-fill-${item.code}`);
+      const itemBatches = [];
+      for (let i = 0; i < normalizedItems.length; i += batchSize) {
+        itemBatches.push(normalizedItems.slice(i, i + batchSize));
+      }
+
+      console.log(
+        `[stage3] Typing ${normalizedItems.length} items across ${itemBatches.length} batch(es) of up to ${batchSize}`,
+      );
+
+      for (let batchIdx = 0; batchIdx < itemBatches.length; batchIdx += 1) {
+        const batch = itemBatches[batchIdx];
+        const batchLabel = `${batchIdx + 1}/${itemBatches.length}`;
+        console.log(`[stage3] --- Batch ${batchLabel}: ${batch.length} item(s) ---`);
+
+        // Type each item in this batch
+        for (let idx = 0; idx < batch.length; idx += 1) {
+          const item = batch[idx];
+          const perItemStart = Date.now();
+          const rowsBefore = await collectQuickAddRows(page);
+          const rowCountBefore = rowsBefore.length;
+
+          await codeInput.focus();
+          await codeInput.fill(item.code);
+          const codeValue = await codeInput.inputValue().catch(() => "");
+          if (codeValue.trim() !== item.code) {
+            const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, `error-item-code-fill-${item.code}`);
+            throw createStage3Error(
+              "MILO_STAGE3_ITEM_NOT_ACCEPTED",
+              `Code input value mismatch for ${item.code}`,
+              { code: item.code, typedValue: codeValue, codeSelector, batch: batchLabel },
+              screenshotPath,
+            );
+          }
+
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(300);
+          const qtyFocused = await qtyInput.evaluate((el) => document.activeElement === el).catch(() => false);
+          if (!qtyFocused) {
+            await qtyInput.focus().catch(() => {});
+          }
+
+          await qtyInput.fill(String(item.quantity));
+          await page.keyboard.press("Tab");
+
+          const rowWait = await waitForRowCountIncrease(page, rowCountBefore, perItemTimeoutMs);
+          if (!rowWait.ok) {
+            const reasonHint = await inlineItemErrorHint(page);
+            const rejected = {
+              code: item.code,
+              quantity: item.quantity,
+              expected_name: item.expected_name,
+              reason: reasonHint || "Item did not appear in quick add list",
+              waitedMs: rowWait.waitedMs,
+              visibleRows: rowWait.rows.map((r) => r.text).slice(0, 8),
+              durationMs: Date.now() - perItemStart,
+              batch: batchLabel,
+            };
+            itemsRejected.push(rejected);
+            if (failOnRejected) {
+              const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, `error-item-not-accepted-${item.code}`);
+              throw createStage3Error(
+                "MILO_STAGE3_ITEM_NOT_ACCEPTED",
+                `Item ${item.code} was not accepted by MILO`,
+                rejected,
+                screenshotPath,
+              );
+            }
+            continue;
+          }
+
+          const rowsNow = rowWait.rows;
+          const matchedByCode = [...rowsNow].reverse().find((row) => row.code === item.code);
+          const newRow = matchedByCode || rowsNow[rowsNow.length - 1] || null;
+          const actualName = newRow?.nameGuess || "";
+          const expectedNameMatched = item.expected_name
+            ? actualName.toLowerCase().includes(item.expected_name.toLowerCase())
+            : null;
+
+          itemsAdded.push({
+            code: item.code,
+            quantity: item.quantity,
+            verified: true,
+            actualNameOnPage: actualName,
+            rowIndex: Math.max(rowsNow.length - 1, 0),
+            expectedNameMatched,
+            durationMs: Date.now() - perItemStart,
+            batch: batchLabel,
+          });
+        }
+
+        await captureArtifact(page, outputDir, stage3Artifacts, `02-batch-${batchIdx + 1}-typed`);
+
+        // Click "Add all to Cart" for this batch
+        const addAllBtn = page.getByRole("button", { name: /add all to cart/i }).first();
+        if ((await addAllBtn.count()) === 0) {
+          const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, `error-add-all-missing-batch-${batchIdx + 1}`);
           throw createStage3Error(
-            "MILO_STAGE3_ITEM_NOT_ACCEPTED",
-            `Code input value mismatch for ${item.code}`,
-            { code: item.code, typedValue: codeValue, codeSelector },
+            "MILO_STAGE3_ADD_ALL_BUTTON_DISABLED",
+            `Add all to Cart button was not found (batch ${batchLabel})`,
+            { currentUrl: page.url(), qtySelector, codeSelector, batch: batchLabel },
+            screenshotPath,
+          );
+        }
+        const addAllState = await addAllBtn
+          .evaluate((el) => ({
+            disabled: el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true" || el.disabled === true,
+            text: (el.textContent || "").replace(/\s+/g, " ").trim(),
+          }))
+          .catch(() => ({ disabled: true, text: "" }));
+        if (addAllState.disabled) {
+          const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, `error-add-all-disabled-batch-${batchIdx + 1}`);
+          throw createStage3Error(
+            "MILO_STAGE3_ADD_ALL_BUTTON_DISABLED",
+            `Add all to Cart button remained disabled after typing items (batch ${batchLabel})`,
+            {
+              currentUrl: page.url(),
+              addAllState,
+              itemsAddedCount: itemsAdded.length,
+              itemsRejectedCount: itemsRejected.length,
+              batch: batchLabel,
+            },
+            screenshotPath,
+          );
+        }
+        if (BLOCKLIST_RE.test(addAllState.text) && !/add all to cart/i.test(addAllState.text)) {
+          const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, `error-add-all-blocked-batch-${batchIdx + 1}`);
+          throw createStage3Error(
+            "MILO_STAGE3_ADD_ALL_BUTTON_DISABLED",
+            "SAFE MODE blocked unexpected action text on Add all to Cart button",
+            { currentUrl: page.url(), buttonText: addAllState.text, batch: batchLabel },
             screenshotPath,
           );
         }
 
-        await page.keyboard.press("Tab");
-        await page.waitForTimeout(300);
-        const qtyFocused = await qtyInput.evaluate((el) => document.activeElement === el).catch(() => false);
-        if (!qtyFocused) {
-          await qtyInput.focus().catch(() => {});
-        }
-
-        await qtyInput.fill(String(item.quantity));
-        await page.keyboard.press("Tab");
-
-        const rowWait = await waitForRowCountIncrease(page, rowCountBefore, perItemTimeoutMs);
-        if (!rowWait.ok) {
-          const reasonHint = await inlineItemErrorHint(page);
-          const rejected = {
-            code: item.code,
-            quantity: item.quantity,
-            expected_name: item.expected_name,
-            reason: reasonHint || "Item did not appear in quick add list",
-            waitedMs: rowWait.waitedMs,
-            visibleRows: rowWait.rows.map((r) => r.text).slice(0, 8),
-            durationMs: Date.now() - perItemStart,
-          };
-          itemsRejected.push(rejected);
-          if (failOnRejected) {
-            const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, `error-item-not-accepted-${item.code}`);
-            throw createStage3Error(
-              "MILO_STAGE3_ITEM_NOT_ACCEPTED",
-              `Item ${item.code} was not accepted by MILO`,
-              rejected,
-              screenshotPath,
-            );
-          }
-          continue;
-        }
-
-        const rowsNow = rowWait.rows;
-        const matchedByCode = [...rowsNow].reverse().find((row) => row.code === item.code);
-        const newRow = matchedByCode || rowsNow[rowsNow.length - 1] || null;
-        const actualName = newRow?.nameGuess || "";
-        const expectedNameMatched = item.expected_name
-          ? actualName.toLowerCase().includes(item.expected_name.toLowerCase())
-          : null;
-
-        itemsAdded.push({
-          code: item.code,
-          quantity: item.quantity,
-          verified: true,
-          actualNameOnPage: actualName,
-          rowIndex: Math.max(rowsNow.length - 1, 0),
-          expectedNameMatched,
-          durationMs: Date.now() - perItemStart,
+        await clickSafely(page, addAllBtn, {
+          step: `3b-add-all-batch-${batchIdx + 1}`,
+          selectorNote: `Add all to Cart on quick add page (batch ${batchLabel})`,
         });
-      }
 
-      await captureArtifact(page, outputDir, stage3Artifacts, "02-items-typed");
+        const addAllConfirmation = await waitForAddAllConfirmation(page, codeInput, qtyInput, 10_000);
+        if (!addAllConfirmation.ok) {
+          const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, `error-add-all-no-confirmation-batch-${batchIdx + 1}`);
+          throw createStage3Error(
+            "MILO_STAGE3_ADD_ALL_FAILED",
+            `Add all to Cart click did not move items to cart for batch ${batchLabel} (form did not clear, no cart badge update, no toast within 10s)`,
+            {
+              currentUrl: page.url(),
+              waitedMs: addAllConfirmation.waitedMs,
+              formValues: {
+                code: addAllConfirmation.state?.codeValue ?? "",
+                quantity: addAllConfirmation.state?.qtyValue ?? "",
+              },
+              cartBadgeText: addAllConfirmation.state?.cartBadgeText ?? "",
+              visibleAlerts: addAllConfirmation.state?.visibleAlerts ?? [],
+              batch: batchLabel,
+            },
+            screenshotPath,
+          );
+        }
+        console.log(`[stage3] Batch ${batchLabel} confirmed (form cleared/cart badge/toast).`);
+
+        // Brief settle pause between batches so MILO's quick-add list resets cleanly
+        if (batchIdx < itemBatches.length - 1) {
+          await page.waitForTimeout(INTER_BATCH_SETTLE_MS);
+        }
+      }
 
       if (itemsAdded.length === 0) {
         const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, "error-all-items-rejected");
         throw createStage3Error(
           "MILO_STAGE3_ITEM_NOT_ACCEPTED",
           "None of the requested items were accepted on Add By Code page",
-          { itemsRejected, requestedCount: normalizedItems.length },
+          { itemsRejected, requestedCount: normalizedItems.length, batchCount: itemBatches.length },
           screenshotPath,
         );
       }
 
-      const addAllBtn = page.getByRole("button", { name: /add all to cart/i }).first();
-      if ((await addAllBtn.count()) === 0) {
-        const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, "error-add-all-missing");
-        throw createStage3Error(
-          "MILO_STAGE3_ADD_ALL_BUTTON_DISABLED",
-          "Add all to Cart button was not found",
-          { currentUrl: page.url(), qtySelector, codeSelector },
-          screenshotPath,
-        );
-      }
-      const addAllState = await addAllBtn
-        .evaluate((el) => ({
-          disabled: el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true" || el.disabled === true,
-          text: (el.textContent || "").replace(/\s+/g, " ").trim(),
-        }))
-        .catch(() => ({ disabled: true, text: "" }));
-      if (addAllState.disabled) {
-        const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, "error-add-all-disabled");
-        throw createStage3Error(
-          "MILO_STAGE3_ADD_ALL_BUTTON_DISABLED",
-          "Add all to Cart button remained disabled after typing items",
-          { currentUrl: page.url(), addAllState, itemsAddedCount: itemsAdded.length, itemsRejectedCount: itemsRejected.length },
-          screenshotPath,
-        );
-      }
-      if (BLOCKLIST_RE.test(addAllState.text) && !/add all to cart/i.test(addAllState.text)) {
-        const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, "error-add-all-blocked");
-        throw createStage3Error(
-          "MILO_STAGE3_ADD_ALL_BUTTON_DISABLED",
-          "SAFE MODE blocked unexpected action text on Add all to Cart button",
-          { currentUrl: page.url(), buttonText: addAllState.text },
-          screenshotPath,
-        );
-      }
-
-      await clickSafely(page, addAllBtn, {
-        step: "3b-add-all-to-cart",
-        selectorNote: "Add all to Cart on quick add page",
-      });
-
-      const addAllConfirmation = await waitForAddAllConfirmation(page, codeInput, qtyInput, 10_000);
-      if (!addAllConfirmation.ok) {
-        const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, "error-add-all-no-confirmation");
-        throw createStage3Error(
-          "MILO_STAGE3_ADD_ALL_FAILED",
-          "Add all to Cart click did not appear to move items to cart (form did not clear, no cart badge update, no confirmation toast within 10s)",
-          {
-            currentUrl: page.url(),
-            waitedMs: addAllConfirmation.waitedMs,
-            formValues: {
-              code: addAllConfirmation.state?.codeValue ?? "",
-              quantity: addAllConfirmation.state?.qtyValue ?? "",
-            },
-            cartBadgeText: addAllConfirmation.state?.cartBadgeText ?? "",
-            visibleAlerts: addAllConfirmation.state?.visibleAlerts ?? [],
-          },
-          screenshotPath,
-        );
-      }
-      console.log("[stage3] Add all to Cart confirmed (form cleared/cart badge/toast).");
+      console.log(
+        `[stage3] All batches complete. Added ${itemsAdded.length}/${normalizedItems.length} items across ${itemBatches.length} batch(es).`,
+      );
 
       const cartNav = await (async () => {
         const direct = await findVisibleFirst(page, ["a[href='/milo/cart']"]);
