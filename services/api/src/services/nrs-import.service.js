@@ -52,30 +52,20 @@ const GIFT_PROMO_RE = /\bW\/|\bGIFT\b|\bPROMO\b|\bDECANTER\b|\bHERITAGE\b|\bLIMI
 const FLAVOR_RE = /\b(APPLE|HONEY|CHERRY|VANILLA|VANILIA|COCONUT|PEACH|MANGO|LEMON|LIME|BERRY|MELON|ORANGE|CITRUS|RASPBERRI?Y?|STRAWBERRY|GRAPE|PINEAPPLE|WATERMELON|CINNAMON|CARAMEL|GINGER|CUCUMBER|PEPPER|PEPPAR|MOJITO|MARGARITA|TABASCO|JALAPENO)\b/i;
 
 /**
- * Words to strip when normalizing brand tokens. Mirrors SEARCH_STOP_WORDS in
- * price-book.routes.js so that NRS tokens and search tokens behave identically:
+ * Words to strip when normalizing brand tokens.
  *
- *   - Size markers / units: ml, l, oz, fifth, pint, etc.
- *   - Articles / fillers: the, of, and, with, etc.
- *   - Packaging: pl, plastic, bottle, case, pack, etc.
- *   - Liquor TYPE words: vodka, rum, gin, etc. — present in NRS names like
- *     "SMIRNOFF VODKA 750ML" but rarely in MLCC names like "SMIRNOFF 80".
- *     Without dropping them, "vodka" becomes a required token that almost
- *     never matches MLCC, killing scores.
+ * IMPORTANT — asymmetry vs. price-book.routes.js SEARCH_STOP_WORDS:
+ * The interactive search drops liquor TYPE words (vodka, rum, gin, etc.)
+ * because user queries often include them while MLCC names don't, and a
+ * forced match would zero the result set. NRS scoring is the OPPOSITE
+ * problem: NRS export AND MLCC catalog both routinely include the type
+ * word, so dropping it costs both sides a +25 per-token-match contribution
+ * (verified on 2026-05-08 import: dropping type words regressed
+ * tier2NameSizeMatches from 4,169 to 3,810). Keep the strip set tight here.
  */
 const STRIP_TOKENS = new Set([
-  // Size markers / units
-  "ml", "l", "oz", "pk", "pack",
-  "fifth", "pint", "quart", "liter", "litre", "gallon", "handle",
-  "halfpint", "halfgallon", "halfliter", "mini",
-  // Articles / fillers
-  "the", "of", "and", "with", "w", "a", "an",
-  // Packaging
+  "ml", "l", "oz", "pk", "pack", "the", "of", "and", "with", "w",
   "pl", "plastic", "bottle", "bottles", "case", "single", "sgl",
-  // Liquor TYPE words (same set as price-book.routes.js SEARCH_STOP_WORDS)
-  "vodka", "rum", "gin", "tequila", "whiskey", "whisky", "rye",
-  "scotch", "bourbon", "cognac", "brandy", "liqueur",
-  "schnapps", "mezcal", "cordial", "spirit", "spirits",
 ]);
 
 /**
@@ -510,6 +500,92 @@ async function findMlccItemsByUpcBatch(supabase, upcs) {
 }
 
 /**
+ * Pull the underlying cause chain off a thrown error. Node's fetch wraps
+ * network failures as `TypeError: fetch failed` with the real cause on
+ * `error.cause` (e.g. ECONNRESET, ETIMEDOUT). The Supabase client surfaces
+ * this as an opaque message — we want the cause too.
+ */
+function describeError(e) {
+  if (!e) return "unknown_error";
+  const parts = [];
+  parts.push(e.message ?? String(e));
+  if (e.code) parts.push(`code=${e.code}`);
+  if (e.cause) {
+    const c = e.cause;
+    parts.push(`cause=${c.message ?? String(c)}`);
+    if (c.code) parts.push(`cause.code=${c.code}`);
+    if (c.errno) parts.push(`cause.errno=${c.errno}`);
+    if (c.syscall) parts.push(`cause.syscall=${c.syscall}`);
+  }
+  return parts.join(" | ");
+}
+
+/**
+ * Attempt a chunk upsert; on failure, fall back to per-row upserts so a single
+ * problematic row can't take down the whole batch. Returns counts + structured
+ * error list.
+ *
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {Array<{upc:string,mlcc_code:string,confidence_source:string,confirmed_by:string|null}>} chunk
+ */
+async function tryUpsertChunkWithFallback(supabase, chunk) {
+  const errors = [];
+  let succeeded = 0;
+  let failed = 0;
+
+  // First try: upsert the whole chunk
+  try {
+    const { error } = await supabase
+      .from("upc_mappings")
+      .upsert(chunk, { onConflict: "upc" });
+    if (!error) {
+      return { succeeded: chunk.length, failed: 0, errors: [] };
+    }
+    errors.push({
+      mode: "chunk",
+      message: error.message,
+      details: error.details ?? null,
+      hint: error.hint ?? null,
+      code: error.code ?? null,
+    });
+  } catch (e) {
+    errors.push({ mode: "chunk", message: describeError(e) });
+  }
+
+  // Fall back: per-row writes so one bad row doesn't kill the rest
+  for (const row of chunk) {
+    try {
+      const { error } = await supabase
+        .from("upc_mappings")
+        .upsert([row], { onConflict: "upc" });
+      if (error) {
+        failed += 1;
+        errors.push({
+          mode: "row",
+          upc: row.upc,
+          mlcc_code: row.mlcc_code,
+          message: error.message,
+          details: error.details ?? null,
+          hint: error.hint ?? null,
+          code: error.code ?? null,
+        });
+      } else {
+        succeeded += 1;
+      }
+    } catch (e) {
+      failed += 1;
+      errors.push({
+        mode: "row",
+        upc: row.upc,
+        mlcc_code: row.mlcc_code,
+        message: describeError(e),
+      });
+    }
+  }
+  return { succeeded, failed, errors };
+}
+
+/**
  * For a batch of UPCs, find which ones already have an authoritative
  * upc_mappings row (so we don't pointlessly write duplicates).
  * Returns Set<upc>.
@@ -726,29 +802,29 @@ export async function runNrsImport(supabase, csvText, options = {}) {
     }
   }
 
-  // Write Tier 2 auto-confirms in chunks of 500 to stay under any payload limit
+  // Write Tier 2 auto-confirms in small chunks. Smaller chunks reduce blast
+  // radius if one row triggers an upsert error (the whole chunk gets retried
+  // per-row on failure). The previous CHUNK=500 lost 26 rows in one failed
+  // call when "fetch failed" hit, so cut it down and add per-row fallback.
   if (tier2InsertRows.length > 0) {
-    const CHUNK = 500;
+    const CHUNK = 50;
     for (let i = 0; i < tier2InsertRows.length; i += CHUNK) {
       const chunk = tier2InsertRows.slice(i, i + CHUNK);
-      if (!dryRun) {
-        report.write.attempted += chunk.length;
-        const { error: insertErr } = await supabase
-          .from("upc_mappings")
-          .upsert(chunk, { onConflict: "upc" });
-        if (insertErr) {
-          report.write.failed += chunk.length;
-          report.write.writeErrors.push({
-            phase: "tier2",
-            chunk: i / CHUNK,
-            message: insertErr.message,
-          });
-        } else {
-          report.write.succeeded += chunk.length;
-        }
-      } else {
+      if (dryRun) {
         report.write.attempted += chunk.length;
         report.write.succeeded += chunk.length;
+        continue;
+      }
+      report.write.attempted += chunk.length;
+      const chunkResult = await tryUpsertChunkWithFallback(supabase, chunk);
+      report.write.succeeded += chunkResult.succeeded;
+      report.write.failed += chunkResult.failed;
+      for (const err of chunkResult.errors) {
+        report.write.writeErrors.push({
+          phase: "tier2",
+          chunkIndex: i / CHUNK,
+          ...err,
+        });
       }
     }
   }
