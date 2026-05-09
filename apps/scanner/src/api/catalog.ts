@@ -112,13 +112,16 @@ function mapRow(row: Record<string, unknown>): MlccProduct {
 
 export async function searchProducts(
   query: string,
-  options?: { adaNumber?: string; limit?: number },
+  options?: { adaNumber?: string; limit?: number; page?: number },
 ): Promise<MlccProduct[]> {
-  const limit = options?.limit ?? 20;
+  // Default 50 (was 20) — search results felt cut off too early.
+  // Scanner can request more pages via `page` for infinite scroll.
+  const limit = options?.limit ?? 50;
+  const page = options?.page ?? 1;
   const params = new URLSearchParams();
   params.set("search", query);
   params.set("limit", String(limit));
-  params.set("page", "1");
+  params.set("page", String(page));
   if (options?.adaNumber) params.set("adaNumber", options.adaNumber);
   const res = await fetchWithRetry(`${BASE}/items?${params.toString()}`, { credentials: "same-origin" });
   const data = (await res.json()) as { ok?: boolean; items?: unknown[] };

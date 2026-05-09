@@ -59,6 +59,78 @@ const RAW_BRAND_ALIAS_PAIRS = [
   ["absolut", "absolut vodka"],
   ["ciroc", "cîroc"],
   ["belvedere", "belvedr"],
+  // Stoli ↔ Stolichnaya — Tony's scanner test (2026-05-08) revealed
+  // searching "stoli" or "stoli vanilla" returned no Stolichnaya results.
+  // Brand legally rebranded 2022 but MLCC catalog still uses "STOLICHNAYA".
+  ["stolichnaya", "stoli"],
+  ["stolichnaya", "stol"],
+  // Tito's apostrophe variants
+  ["titos", "tito"],
+  ["titos", "tito s"],
+  ["titos handmade", "titos vodka"],
+  // Admiral Nelson nicknames
+  ["admiral nelson", "adm nelson"],
+  ["admiral nelson", "adm nelsons"],
+  // Royal Canadian
+  ["royal canadian", "royal canad"],
+  // J Daniels black variants
+  ["j daniels old 7 black", "jack daniels old 7"],
+  ["j daniels old 7 black", "jack daniels old no 7"],
+  // Casamigos
+  ["casamigos", "casa amigos"],
+  // Common shortened brand spellings retailers use
+  ["bulleit", "bullet"],
+  ["bulleit", "bulleit bourbon"],
+  ["bulleit", "bulleit rye"],
+  ["green river", "green riv"],
+  ["bookers", "booker s"],
+  ["knob creek", "knob crk"],
+  ["four roses", "4 roses"],
+  // === MLCC NAME TRUNCATIONS ===
+  // MLCC explicitly notes "some of the listed brand names are shortened due to
+  // space limitations." Below are the patterns observed in the catalog data
+  // (May 2026). Customer / NRS exports use full word; MLCC catalog uses truncated.
+  // Every alias is two-way (resolveSearchAliases expands both directions).
+  ["vanilla", "vanil"],
+  ["vanilla", "vanilia"], // Absolut Vanilia spelling
+  ["raspberry", "raspberri"],
+  ["raspberry", "raspberi"],
+  ["strawberry", "strawberri"],
+  ["strawberry", "strawberi"],
+  ["blueberry", "blueberi"],
+  ["blueberry", "blueberri"],
+  ["mandarin", "mandrin"],
+  ["mandarine", "mandrin"],
+  ["pepper", "peppar"],
+  ["citrus", "citros"],
+  ["cinnamon", "cinn"],
+  ["chocolate", "choc"],
+  ["lemon", "limon"], // Bacardi Limon
+  ["jalapeño", "jalapeno"],
+  ["jalapeno", "jalap"],
+  ["pineapple", "pineapp"],
+  ["watermelon", "watermel"],
+  ["coconut", "cocon"],
+  ["caramel", "caram"],
+  ["lemonade", "lemonad"],
+  ["original", "orig"],
+  ["reserve", "rsrv"],
+  ["reserve", "res"],
+  ["small batch", "sm batch"],
+  ["small batch", "sml batch"],
+  ["bourbon", "bbn"],
+  ["whiskey", "whsky"],
+  ["whisky", "whsky"],
+  ["liqueur", "liq"],
+  ["limited edition", "ltd ed"],
+  ["limited edition", "limited"],
+  ["single barrel", "sngl barrel"],
+  ["single barrel", "sngl brl"],
+  ["single malt", "sngl malt"],
+  ["single malt", "single mlt"],
+  ["scotch", "scot"],
+  ["tequila", "teq"],
+  ["margarita", "mrgrta"],
 ];
 
 /** @type {Map<string, string[]>} */

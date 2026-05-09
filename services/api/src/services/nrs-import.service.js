@@ -17,7 +17,21 @@
  *
  * Both tiers write to upc_mappings with confidence_source set so we can audit
  * which path each mapping came from.
+ *
+ * Token expansion for Tier 2 scoring (added 2026-05-08):
+ * The scoring engine now mirrors the unified token-AND search in
+ * price-book.routes.js. Each NRS token expands via three layers:
+ *   1. The literal token
+ *   2. Brand aliases from BRAND_ALIAS_MAP (e.g. stoli ↔ stolichnaya, vanilla ↔ vanil)
+ *   3. Auto-prefix shortening for tokens 6+ chars (catches MLCC truncations
+ *      we haven't manually aliased — "vanilla" tries "vanill" and "vanil")
+ * A token "matches" an MLCC item when ANY of its variants appears in the
+ * MLCC name. This recovers the hundreds of NRS rows that didn't match
+ * before because MLCC stores names like "STOLICHNAYA VANIL" without the
+ * full word.
  */
+
+import { resolveSearchAliases } from "../mlcc/mlcc-brand-aliases.js";
 
 const NRS_UPC_RE = /^="(.*)"$/;
 const BATCH_SIZE = 100;
@@ -37,11 +51,75 @@ const GIFT_PROMO_RE = /\bW\/|\bGIFT\b|\bPROMO\b|\bDECANTER\b|\bHERITAGE\b|\bLIMI
 /** Flavor / variant keywords commonly seen in MLCC product names. */
 const FLAVOR_RE = /\b(APPLE|HONEY|CHERRY|VANILLA|VANILIA|COCONUT|PEACH|MANGO|LEMON|LIME|BERRY|MELON|ORANGE|CITRUS|RASPBERRI?Y?|STRAWBERRY|GRAPE|PINEAPPLE|WATERMELON|CINNAMON|CARAMEL|GINGER|CUCUMBER|PEPPER|PEPPAR|MOJITO|MARGARITA|TABASCO|JALAPENO)\b/i;
 
-/** Words to strip when normalizing brand tokens (size markers, conjunctions, units). */
+/**
+ * Words to strip when normalizing brand tokens. Mirrors SEARCH_STOP_WORDS in
+ * price-book.routes.js so that NRS tokens and search tokens behave identically:
+ *
+ *   - Size markers / units: ml, l, oz, fifth, pint, etc.
+ *   - Articles / fillers: the, of, and, with, etc.
+ *   - Packaging: pl, plastic, bottle, case, pack, etc.
+ *   - Liquor TYPE words: vodka, rum, gin, etc. — present in NRS names like
+ *     "SMIRNOFF VODKA 750ML" but rarely in MLCC names like "SMIRNOFF 80".
+ *     Without dropping them, "vodka" becomes a required token that almost
+ *     never matches MLCC, killing scores.
+ */
 const STRIP_TOKENS = new Set([
-  "ml", "l", "oz", "pk", "pack", "the", "of", "and", "with", "w",
+  // Size markers / units
+  "ml", "l", "oz", "pk", "pack",
+  "fifth", "pint", "quart", "liter", "litre", "gallon", "handle",
+  "halfpint", "halfgallon", "halfliter", "mini",
+  // Articles / fillers
+  "the", "of", "and", "with", "w", "a", "an",
+  // Packaging
   "pl", "plastic", "bottle", "bottles", "case", "single", "sgl",
+  // Liquor TYPE words (same set as price-book.routes.js SEARCH_STOP_WORDS)
+  "vodka", "rum", "gin", "tequila", "whiskey", "whisky", "rye",
+  "scotch", "bourbon", "cognac", "brandy", "liqueur",
+  "schnapps", "mezcal", "cordial", "spirit", "spirits",
 ]);
+
+/**
+ * Expand a single brand/name token into all variants that should count as a
+ * match against an MLCC item. Mirrors `expandTokenForSearch` in
+ * price-book.routes.js so NRS scoring uses the same token-equivalence rules
+ * the search bar does.
+ *
+ * Three layers:
+ *   1. The literal token (always)
+ *   2. Brand aliases from BRAND_ALIAS_MAP via resolveSearchAliases
+ *      (e.g. "stolichnaya" → "stoli", "vanilla" → "vanil"/"vanilia")
+ *   3. Auto-prefix shortening for tokens 6+ chars long: also try the first
+ *      N-1 and N-2 chars (≥4 floor). Catches MLCC truncations we haven't
+ *      manually aliased ("smirnoff" → "smirnof", "smirno").
+ *
+ * Returns lowercase variants. Caller compares against lowercased MLCC tokens
+ * / name. Empty array if the token sanitizes away.
+ */
+function expandTokenForMatch(token) {
+  const base = String(token ?? "").trim().toLowerCase();
+  if (!base) return [];
+  const variants = new Set();
+  variants.add(base);
+
+  // Layer 1 — explicit aliases (resolveSearchAliases takes a normalized term
+  // and returns variants with each known common phrase swapped for its MLCC
+  // equivalent — and vice-versa, since both directions of every pair are in
+  // the map.)
+  for (const aliasV of resolveSearchAliases(base)) {
+    const v = String(aliasV ?? "").trim().toLowerCase();
+    if (v) variants.add(v);
+  }
+
+  // Layer 2 — auto-prefix shortening for 6+-char tokens (≥4 floor)
+  if (base.length >= 6) {
+    for (const cut of [1, 2]) {
+      const prefix = base.slice(0, base.length - cut);
+      if (prefix.length >= 4) variants.add(prefix);
+    }
+  }
+
+  return Array.from(variants);
+}
 
 /**
  * Strip the Excel formula wrapping NRS uses to preserve leading zeros on UPCs.
@@ -245,6 +323,13 @@ export function tokenizeName(name) {
 /**
  * Score how well an MLCC item matches a tokenized NRS query.
  * Higher = better match. Returns {score, reasons[]}.
+ *
+ * Token matching uses the unified expansion rule shared with search:
+ * each NRS token expands via aliases + auto-prefix, and the token counts as
+ * matched if ANY variant appears in the MLCC name (substring) OR the
+ * MLCC tokens (exact). This bridges MLCC truncations like
+ * VANILLA→VANIL, RASPBERRY→RASPBERRI, MANDARIN→MANDRIN that the old
+ * exact-match scorer missed.
  */
 function scoreMlccCandidate(nrsTokens, nrsHasFlavor, mlccItem) {
   const mlccName = String(mlccItem.name || "");
@@ -253,10 +338,19 @@ function scoreMlccCandidate(nrsTokens, nrsHasFlavor, mlccItem) {
   const reasons = [];
   let score = 0;
 
-  // Per-token brand match: every NRS token that appears in MLCC name
+  // Per-token brand match: every NRS token (or any of its alias / auto-prefix
+  // variants) that appears in MLCC name counts as 1 match.
   let matched = 0;
   for (const tok of nrsTokens) {
-    if (mlccTokens.includes(tok) || mlccLower.includes(tok)) matched += 1;
+    const variants = expandTokenForMatch(tok);
+    let hit = false;
+    for (const v of variants) {
+      if (mlccTokens.includes(v) || mlccLower.includes(v)) {
+        hit = true;
+        break;
+      }
+    }
+    if (hit) matched += 1;
   }
   score += matched * SCORE_BRAND_TOKEN_MATCH;
   if (matched > 0) reasons.push(`token_match:${matched}/${nrsTokens.length}`);

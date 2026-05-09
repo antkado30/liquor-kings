@@ -152,28 +152,154 @@ function filterMlccRowsClientSide(rows, adaNumber, isNewItemQ) {
   });
 }
 
-/** Applies the legacy name / name_normalized / code OR filter for non-brand-key text search. */
-function applyItemsOrSearchToQuery(q, search) {
-  const original = escapeIlikeOrToken(search);
-  const normalizedRaw = normalizeSearchTerm(search);
-  const normalized = escapeIlikeOrToken(normalizedRaw);
-  const aliasTerms = resolveSearchAliases(normalizedRaw);
-  const aliasOrParts = aliasTerms.map(
-    (t) => `name_normalized.ilike.%${escapeIlikeOrToken(t)}%`,
-  );
-  const aliasOrSuffix = aliasOrParts.length ? `,${aliasOrParts.join(",")}` : "";
+/**
+ * Stop words to drop from search queries. Without this, typing "stolichnaya
+ * vanilla 750 ml fifth" includes "750", "ml", "fifth" as match tokens, and
+ * "stolichnaya vanilla vodka" requires "vodka" to be in the MLCC name (which
+ * it usually isn't — MLCC stores names like "STOLICHNAYA VANIL" without the
+ * type word). Stop words are dropped before AND-token search, so they neither
+ * narrow nor pollute results.
+ */
+const SEARCH_STOP_WORDS = new Set([
+  // Bottle size unit / abbreviation
+  "ml", "l", "oz",
+  // Bottle size words / slang
+  "fifth", "pint", "quart", "liter", "litre", "gallon", "handle",
+  "halfpint", "halfgallon", "halfliter", "mini",
+  // Bottle qualifiers
+  "bottle", "bottles", "case", "pack", "single",
+  // Articles / fillers
+  "a", "an", "the", "of", "and", "with",
+  // Plastic / packaging shorthand
+  "pl", "plastic",
+  // Liquor TYPE words — present in user search but NOT always in MLCC names
+  // (e.g. "STOLICHNAYA VANIL" has no "VODKA" in name). Without this rule,
+  // typing "stoli vanilla vodka" requires "vodka" in name → 0 matches → falls
+  // to fuzzy → random vanillas. Drop them as stop words so the brand+flavor
+  // tokens carry the search.
+  "vodka", "rum", "gin", "tequila", "whiskey", "whisky", "rye",
+  "scotch", "bourbon", "cognac", "brandy", "liqueur",
+  "schnapps", "mezcal", "cordial", "spirit", "spirits",
+]);
 
-  if (normalized && normalized !== original) {
-    return q.or(
-      `name.ilike.%${original}%,name.ilike.%${normalized}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%${aliasOrSuffix}`,
-    );
+/**
+ * Tokenize search query and drop stop words / pure-numeric noise (sizes like
+ * "750"). Keeps short numeric tokens that are likely codes (3+ digits stay as
+ * potential code tokens) and any alphanumeric that's a valid match token.
+ *
+ * Examples:
+ *   "stolichnaya vanilla 750 ml fifth"  →  ["stolichnaya", "vanilla"]
+ *   "smirnoff 80 200 ml"                 →  ["smirnoff", "80"]
+ *   "tito"                                →  ["tito"]
+ *   "9247"                                →  ["9247"]
+ */
+function extractSearchTokens(rawQuery) {
+  const normalized = normalizeSearchTerm(rawQuery);
+  if (!normalized) return [];
+  return normalized
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .filter((t) => !SEARCH_STOP_WORDS.has(t))
+    // drop pure-numeric tokens that look like sizes (200/375/750/1000/1750)
+    // but keep proof numbers (80, 100, 90.4) and 4+ digit codes (9247, 14888)
+    .filter((t) => {
+      if (!/^\d+(\.\d+)?$/.test(t)) return true; // not numeric — keep
+      const n = Number(t);
+      // Drop common bottle sizes that travel with names
+      if ([50, 100, 200, 375, 700, 750, 1000, 1750].includes(n)) return false;
+      return true;
+    });
+}
+
+/**
+ * Expand a single search token into all variants that should match against
+ * MLCC's catalog. Returns an array of substring patterns (already escaped
+ * for ilike).
+ *
+ * Three sources of expansion:
+ *   1. The token itself (always)
+ *   2. Brand alias map (e.g. stoli → stolichnaya, vanilla → vanil/vanilia)
+ *   3. Auto-prefix shortening for tokens 6+ chars long: also include the
+ *      first N-1 and N-2 characters as a prefix substring. This catches
+ *      MLCC truncations we haven't manually aliased yet (e.g. some new
+ *      flavor word abbreviates to first-5-chars).
+ *
+ * The auto-prefix layer means we don't need to enumerate every possible
+ * MLCC truncation by hand — any token long enough naturally tries shorter
+ * forms.
+ */
+function expandTokenForSearch(token) {
+  const variants = new Set();
+  const safeBase = escapeIlikeOrToken(token);
+  if (!safeBase) return [];
+  variants.add(safeBase);
+
+  // Layer 1 — explicit aliases from BRAND_ALIAS_MAP
+  for (const aliasV of resolveSearchAliases(token)) {
+    const safe = escapeIlikeOrToken(aliasV);
+    if (safe) variants.add(safe);
   }
-  if (normalized) {
-    return q.or(
-      `name.ilike.%${original}%,name_normalized.ilike.%${normalized}%,code.ilike.%${original}%${aliasOrSuffix}`,
-    );
+
+  // Layer 2 — auto-prefix shortening for tokens 6+ chars
+  // "vanilla" (7) → also try "vanill" (6) and "vanil" (5)
+  // "stolichnaya" (11) → also try "stolichnay" (10) and "stolichna" (9)
+  // Stops at length 4 to avoid over-matching short tokens.
+  if (token.length >= 6) {
+    for (const cut of [1, 2]) {
+      const prefix = token.slice(0, token.length - cut);
+      if (prefix.length >= 4) {
+        const safe = escapeIlikeOrToken(prefix);
+        if (safe) variants.add(safe);
+      }
+    }
   }
-  return q.or(`name.ilike.%${original}%,code.ilike.%${original}%${aliasOrSuffix}`);
+
+  return Array.from(variants);
+}
+
+/**
+ * Build an AND-across-tokens query for mlcc_items. Every search token must
+ * appear (in name OR name_normalized) considering aliases AND auto-prefix
+ * truncations. This replaces the previous single-substring OR search which
+ * couldn't narrow multi-word queries.
+ *
+ * For each token we build an OR group of:
+ *   - name ilike each variant
+ *   - name_normalized ilike each variant
+ *   - code ilike the original token (for code-style search)
+ * Multiple .or() calls on the same query builder are AND'd at top level by
+ * Supabase / PostgREST.
+ */
+function applyTokenAndSearchToQuery(q, search) {
+  const tokens = extractSearchTokens(search);
+  if (tokens.length === 0) {
+    // No significant tokens — fall back to substring on the raw search
+    const original = escapeIlikeOrToken(search);
+    return q.or(`name.ilike.%${original}%,code.ilike.%${original}%`);
+  }
+
+  for (const token of tokens) {
+    const variants = expandTokenForSearch(token);
+    if (variants.length === 0) continue;
+    const orParts = [];
+    for (const v of variants) {
+      orParts.push(`name.ilike.%${v}%`);
+      orParts.push(`name_normalized.ilike.%${v}%`);
+    }
+    // Also let the original token match `code` directly (numeric code search)
+    orParts.push(`code.ilike.%${escapeIlikeOrToken(token)}%`);
+    q = q.or(orParts.join(","));
+  }
+  return q;
+}
+
+/**
+ * @deprecated Kept for compatibility with any caller still using the
+ * single-substring OR search. New code should use `applyTokenAndSearchToQuery`.
+ */
+function applyItemsOrSearchToQuery(q, search) {
+  return applyTokenAndSearchToQuery(q, search);
 }
 
 /** Escape %, _, \\ for ilike patterns; strip commas so .or() filter stays valid. */
@@ -1296,73 +1422,16 @@ router.get("/items", async (req, res) => {
     }
 
     if (search) {
-      const normalizedRaw = normalizeSearchTerm(search);
-      const brandKey = findLongestContainedBrandKey(normalizedRaw);
-
-      if (brandKey) {
-        const { rows: mergedRows, error: mergeErr } = await multiTermBrandSearch({
-          supabase,
-          brandKey,
-          normalizedRaw,
-          adaNumber,
-          isNewItemQ,
-        });
-        if (mergeErr) {
-          const msg =
-            mergeErr instanceof Error ? mergeErr.message : String(mergeErr?.message ?? mergeErr);
-          return res.status(500).json({ ok: false, error: msg });
-        }
-
-        if (mergedRows.length >= 3) {
-          const total = mergedRows.length;
-          const items = mergedRows.slice(from, from + limit);
-          return res.json({
-            ok: true,
-            items,
-            total,
-            page,
-          });
-        }
-
-        const { data: fuzzyRows, error: fuzzyErr } = await supabase.rpc("search_mlcc_items_fuzzy", {
-          search_query: search,
-          match_threshold: 0.15,
-          result_limit: limit * 3,
-        });
-        if (fuzzyErr) {
-          return res.status(500).json({ ok: false, error: fuzzyErr.message });
-        }
-        let filtered = filterMlccRowsClientSide(fuzzyRows, adaNumber, isNewItemQ);
-        filtered.sort((a, b) => {
-          const sa = Number(a.scan_count) || 0;
-          const sb = Number(b.scan_count) || 0;
-          if (sa !== sb) return sb - sa;
-          const na = String(a.name ?? "");
-          const nb = String(b.name ?? "");
-          if (na !== nb) return na.localeCompare(nb);
-          return String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true });
-        });
-        let total = filtered.length;
-        let items = filtered.slice(from, from + limit);
-        if (total === 0) {
-          const fb = await tryLevenshteinNameTokenSearch(
-            supabase,
-            search,
-            adaNumber,
-            isNewItemQ,
-            from,
-            limit,
-            page,
-          );
-          if (fb) return res.json(fb);
-        }
-        return res.json({
-          ok: true,
-          items,
-          total,
-          page,
-        });
-      }
+      // NOTE: previously there were TWO search paths — `multiTermBrandSearch`
+      // for queries containing a known brand alias key, and the
+      // `applyItemsOrSearchToQuery` path for everything else. The brand-key
+      // path didn't apply truncation aliases or auto-prefix to the SUFFIX
+      // words, which caused "stolichnaya vanilla" to require literal
+      // "vanilla" in MLCC name (which is stored as "VANIL") → 0 matches →
+      // fuzzy fallback returned random vanillas. Now there's ONE unified
+      // path: applyTokenAndSearchToQuery (alias `applyItemsOrSearchToQuery`)
+      // handles brand aliases AND suffix-word aliases AND auto-prefix
+      // truncation. It's a superset of the old brand-key path.
 
       let qOrHead = supabase.from("mlcc_items").select("*", { count: "exact", head: true });
       qOrHead = applyItemsOrSearchToQuery(qOrHead, search);
