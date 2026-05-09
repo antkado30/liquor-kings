@@ -51,6 +51,14 @@ type NativeBarcodeDetector = {
   detect(image: ImageBitmapSource): Promise<Array<{ rawValue?: string; format?: string }>>;
 };
 
+type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => NativeBarcodeDetector;
+
+declare global {
+  interface Window {
+    BarcodeDetector?: BarcodeDetectorConstructor;
+  }
+}
+
 type ScannerEngine = "native" | "zxing" | "unsupported";
 
 function hasNativeBarcodeDetector(): boolean {

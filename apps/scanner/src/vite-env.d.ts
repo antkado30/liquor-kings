@@ -1,15 +1,12 @@
 /// <reference types="vite/client" />
 
-/** Experimental BarcodeDetector (Chromium). */
-declare class BarcodeDetector {
-  constructor(options?: { formats?: string[] });
-  detect(image: ImageBitmapSource): Promise<Array<{ rawValue: string; format: string }>>;
+interface ImportMetaEnv {
+  readonly VITE_SCANNER_DEV_BEARER?: string;
+  readonly VITE_SCANNER_STORE_ID?: string;
+  readonly VITE_SCANNER_API_BASE?: string;
+  readonly VITE_UPC_CONFIRM_TOKEN?: string;
 }
 
-declare global {
-  interface Window {
-    BarcodeDetector?: typeof BarcodeDetector;
-  }
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
 }
-
-export {};
