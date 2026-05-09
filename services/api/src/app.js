@@ -16,6 +16,7 @@ import operatorReviewRouter from "./routes/operator-review.routes.js";
 import adminRouter from "./routes/admin.routes.js";
 import priceBookRouter, { priceBookUpcFlagHandler, priceBookUpcHandler } from "./routes/price-book.routes.js";
 import storeMlccCredentialsRouter from "./routes/store-mlcc-credentials.routes.js";
+import nrsImportRouter from "./routes/nrs-import.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -43,6 +44,8 @@ app.get("/price-book/upc/:upc", priceBookUpcHandler);
 app.post("/price-book/upc/:upc/flag", priceBookUpcFlagHandler);
 /** Admin JSON: optional `LK_ADMIN_TOKEN` + `X-Admin-Token` — see `services/api/src/routes/admin.routes.js`. */
 app.use("/admin", adminRouter);
+/** Admin: NRS POS export bulk import (X-Admin-Token auth, raw CSV body). */
+app.use("/admin", nrsImportRouter);
 
 app.use(
   "/cart",
