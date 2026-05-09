@@ -23,3 +23,7 @@ tmp/
 supabase/.temp/
 supabase/.branches/
 tmp/data/
+
+# Locally-trusted dev TLS certs (mkcert) — never commit private keys
+*.pem
+*-key.pem
