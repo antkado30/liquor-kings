@@ -5221,6 +5221,7 @@ export async function processOneMlccBrowserDryRun({
 
   try {
     const { chromium } = await import("playwright");
+    const { launchChromium } = await import("../lib/chromium-launch.js");
 
     const executablePath = chromium.executablePath();
     if (!executablePath || !fs.existsSync(executablePath)) {
@@ -5228,7 +5229,7 @@ export async function processOneMlccBrowserDryRun({
     }
 
     try {
-      browser = await chromium.launch({ headless: config.headless });
+      browser = await launchChromium({ headless: config.headless });
     } catch (launchError) {
       throw new Error(normalizeLaunchError(launchError));
     }

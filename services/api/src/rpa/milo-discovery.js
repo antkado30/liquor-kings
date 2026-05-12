@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
+import { launchChromium } from "../lib/chromium-launch.js";
 
 /** Buttons / actions that must never be clicked in discovery (case-insensitive). */
 export const BLOCKLIST_RE = /checkout|validate|place order|submit|confirm order/i;
@@ -538,7 +539,7 @@ async function main() {
   const harPath = path.join(outputDirGlobal, "network.har");
   networkStream = createWriteStream(path.join(outputDirGlobal, "network-log.jsonl"), { flags: "a" });
 
-  const browser = await chromium.launch({ headless, slowMo });
+  const browser = await launchChromium({ headless, slowMo });
   const context = await browser.newContext({
     recordHar: { path: harPath, omitContent: false },
     recordVideo: { dir: outputDirGlobal },

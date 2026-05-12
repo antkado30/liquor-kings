@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright";
+import { launchChromium } from "../../lib/chromium-launch.js";
 import { BLOCKLIST_RE } from "../milo-discovery.js";
 
 const DEFAULT_LOGIN_URL = "https://www.lara.michigan.gov/milo/auth/sign-in";
@@ -243,7 +244,7 @@ export async function loginToMilo(credentials, options = {}) {
     }
 
     try {
-      browser = await chromium.launch({ headless, slowMo });
+      browser = await launchChromium({ headless, slowMo });
       const contextOptions = {};
       if (outputDir) {
         contextOptions.recordVideo = { dir: outputDir };
