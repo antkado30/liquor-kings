@@ -33,6 +33,8 @@ import {
   sanitizeIlikeForFamily,
 } from "../mlcc/mlcc-product-family.js";
 import { getLatestPriceBookRun, ingestMlccPriceBook } from "../mlcc/mlcc-price-book-ingestor.js";
+import { runUpcEnrichment } from "../mlcc/mlcc-price-book-upc-enrichment.js";
+import { normalizeUpc } from "../lib/upc-normalize.js";
 
 /** When true, picker confirmations persist UPC onto `mlcc_items` (local cache for future scans). */
 const ENABLE_PICKER_SELECTION_CACHE = false;
@@ -115,12 +117,55 @@ router.post("/ingest", async (req, res) => {
   try {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const url = typeof body.url === "string" ? body.url : undefined;
+    const txtUrl = typeof body.txtUrl === "string" ? body.txtUrl : undefined;
     const dryRun = Boolean(body.dryRun);
+    const skipUpcEnrichment = Boolean(body.skipUpcEnrichment);
     const result = await ingestMlccPriceBook(supabase, { url, dryRun });
     if (!result.ok) {
       return res.json({ ok: false, error: result.error || "Ingest failed" });
     }
-    res.json({ ok: true, result });
+    // After the xlsx catalog upsert, enrich mlcc_items.upc from the TXT
+    // version of the same price book (TXT has a GTIN/UPC column xlsx doesn't).
+    // Failing this step does NOT fail the overall ingest — catalog data is
+    // already in place; UPCs are an enrichment.
+    let upcEnrichment = null;
+    if (!skipUpcEnrichment && !dryRun) {
+      try {
+        upcEnrichment = await runUpcEnrichment(supabase, { urlOverride: txtUrl });
+      } catch (e) {
+        upcEnrichment = {
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    }
+    res.json({ ok: true, result, upcEnrichment });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+});
+
+/**
+ * Standalone UPC-only enrichment endpoint.
+ * Use when you want to refresh mlcc_items.upc without re-ingesting catalog
+ * data, or as a smoke test of the parse + write pipeline.
+ *
+ * Body: { txtUrl?: string, dryRun?: boolean }
+ */
+router.post("/enrich-upcs", async (req, res) => {
+  if (!requireServiceRole(req, res)) return;
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const txtUrl = typeof body.txtUrl === "string" ? body.txtUrl : undefined;
+    const dryRun = Boolean(body.dryRun);
+    const result = await runUpcEnrichment(supabase, { urlOverride: txtUrl, dryRun });
+    if (!result.ok) {
+      return res.json({ ok: false, ...result });
+    }
+    res.json(result);
   } catch (e) {
     res.status(500).json({
       ok: false,
@@ -923,11 +968,15 @@ export async function priceBookUpcFlagHandler(req, res) {
 
 export async function priceBookUpcHandler(req, res) {
   try {
-    const upc = String(req.params.upc ?? "").trim();
-    if (!upc) {
+    const rawUpc = String(req.params.upc ?? "").trim();
+    if (!rawUpc) {
       return res.status(400).json({ ok: false, error: "upc_required" });
     }
-    console.log("[price-book-upc] lookup", upc);
+    // Normalize to canonical 12-digit UPC-A (handles 14-digit GTIN-14 from
+    // MLCC's price book, 12-digit UPC from scanner, anything in between).
+    // Both sides of comparisons go through normalizeUpc — equality match works.
+    const upc = normalizeUpc(rawUpc) ?? rawUpc;
+    console.log("[price-book-upc] lookup", { rawUpc, normalized: upc });
 
     const mapping = await getUpcMapping(supabase, upc);
     if (mapping) {
@@ -1441,7 +1490,13 @@ router.get("/items", async (req, res) => {
         return res.status(500).json({ ok: false, error: orHeadErr.message });
       }
 
-      if (orCount != null && orCount >= 3) {
+      // If the AND-of-tokens query returns ANY rows, return those — the user
+      // typed a query that narrowed the catalog to specific matches and that's
+      // the most precise answer we have. Falling through to fuzzy RPC only
+      // helps when there were ZERO precise matches (probable typo). The
+      // previous `>= 3` threshold silently dropped niche but valid hits like
+      // "valentine white blossom" (1 exact MLCC row, fell to fuzzy, lost).
+      if (orCount != null && orCount >= 1) {
         let qOr = supabase.from("mlcc_items").select("*", { count: "exact" });
         qOr = applyItemsOrSearchToQuery(qOr, search);
         qOr = applyMlccItemsFilters(qOr, adaNumber, isNewItemQ);
