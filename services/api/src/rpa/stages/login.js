@@ -6,7 +6,11 @@ import { launchChromium } from "../../lib/chromium-launch.js";
 import { BLOCKLIST_RE } from "../milo-discovery.js";
 
 const DEFAULT_LOGIN_URL = "https://www.lara.michigan.gov/milo/auth/sign-in";
-const DEFAULT_TIMEOUT_MS = 30_000;
+// 90s default — observed 2026-05-14 that cold-start logins from Fly (Chicago)
+// can take >30s on the first attempt against a new IP. Subsequent logins
+// land in ~5-6s. 90s tolerates the worst observed cold start without
+// affecting successful runs (they finish well under the cap).
+const DEFAULT_TIMEOUT_MS = 90_000;
 const LOGIN_CLICK_TIMEOUT_MS = 15_000;
 const GOTO_TIMEOUT_MS = 15_000;
 const INVALID_CREDENTIALS_RE = /invalid|incorrect|wrong|not\s*found|does\s*not\s*match/i;
