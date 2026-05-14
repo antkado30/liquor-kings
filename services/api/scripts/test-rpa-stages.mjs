@@ -176,9 +176,11 @@ if (stages.has("3")) {
       outputDir: `${outputDir}/stage3`,
     });
     console.log(`[stage 3] OK in ${stage3Result.stage3DurationMs ?? "?"}ms`);
-    console.log(`  items added: ${stage3Result.addedCount ?? "?"}/${codes.length}`);
-    if (stage3Result.failedItems?.length) {
-      console.log(`  failed items: ${JSON.stringify(stage3Result.failedItems)}`);
+    const added = Array.isArray(stage3Result.itemsAdded) ? stage3Result.itemsAdded.length : "?";
+    const rejected = Array.isArray(stage3Result.itemsRejected) ? stage3Result.itemsRejected.length : 0;
+    console.log(`  items added: ${added}/${codes.length}`);
+    if (rejected > 0) {
+      console.log(`  items rejected: ${JSON.stringify(stage3Result.itemsRejected)}`);
     }
   } catch (e) {
     console.error(`[stage 3] FAILED — ${e.code ?? "(no code)"}: ${e.message}`);
@@ -204,7 +206,17 @@ if (stages.has("4")) {
       outputDir: `${outputDir}/stage4`,
     });
     console.log(`[stage 4] OK in ${stage4Result.stage4DurationMs ?? "?"}ms`);
-    console.log(`  validated: ${JSON.stringify(stage4Result.validationSummary ?? {})}`);
+    console.log(`  validated: ${stage4Result.validated}`);
+    console.log(`  canCheckout: ${stage4Result.canCheckout}`);
+    if (stage4Result.outOfStockItems?.length) {
+      console.log(`  out-of-stock: ${JSON.stringify(stage4Result.outOfStockItems)}`);
+    }
+    if (stage4Result.validationMessages?.length) {
+      console.log(`  messages: ${JSON.stringify(stage4Result.validationMessages)}`);
+    }
+    if (stage4Result.orderSummary) {
+      console.log(`  orderSummary: ${JSON.stringify(stage4Result.orderSummary)}`);
+    }
   } catch (e) {
     console.error(`[stage 4] FAILED — ${e.code ?? "(no code)"}: ${e.message}`);
     if (e.details) console.error("  details:", JSON.stringify(e.details));
