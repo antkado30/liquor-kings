@@ -62,6 +62,14 @@ RUN cd services/api && npm ci --omit=dev
 # API source.
 COPY services/api/src ./services/api/src
 
+# Operational scripts (RPA stage-by-stage tests, etc.) — kept out of the
+# default request path but available inside the container for SSH-driven
+# verification. Safe to ship because:
+#   - they're not wired into any route
+#   - they only run when invoked explicitly via `node /app/services/api/scripts/...`
+#   - the stage test script never executes Stage 5 (checkout/submit)
+COPY services/api/scripts ./services/api/scripts
+
 # Admin SPA from stage 1.
 COPY --from=admin-builder /build/apps/admin/dist ./apps/admin/dist
 

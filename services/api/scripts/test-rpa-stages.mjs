@@ -35,7 +35,7 @@
 import { loginToMilo } from "../src/rpa/stages/login.js";
 import { navigateToProducts } from "../src/rpa/stages/navigate-to-products.js";
 import { addItemsToCart } from "../src/rpa/stages/add-items-to-cart.js";
-import { validateCart } from "../src/rpa/stages/validate-cart.js";
+import { validateCartOnMilo } from "../src/rpa/stages/validate-cart.js";
 
 function ts() {
   const d = new Date();
@@ -161,7 +161,7 @@ if (stages.has("4")) {
   }
   console.log(`\n[stage 4] validating cart...`);
   try {
-    const stage4Result = await validateCart(stage3Result, {
+    const stage4Result = await validateCartOnMilo(stage3Result, {
       captureArtifacts: true,
       outputDir: `${outputDir}/stage4`,
     });
