@@ -131,9 +131,47 @@ if (stages.has("3")) {
     process.exit(1);
   }
   console.log(`\n[stage 3] adding ${codes.length} items to cart: ${codes.join(", ")}...`);
+
+  // Stage 3 validation requires bottle_size_ml + code (not mlccCode). Look up
+  // size_ml for each code from mlcc_items so the test is self-contained and
+  // doesn't require the caller to know bottle sizes.
+  let items;
   try {
-    stage3Result = await addItemsToCart(stage2Result, {
-      items: codes.map((code) => ({ mlccCode: code, quantity: 1 })),
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY env vars must be set in the container");
+    }
+    const { createClient } = await import("@supabase/supabase-js");
+    const sb = createClient(supabaseUrl, supabaseKey);
+    const { data, error } = await sb
+      .from("mlcc_items")
+      .select("code,size_ml")
+      .in("code", codes);
+    if (error) throw error;
+    const sizeByCode = new Map((data ?? []).map((r) => [String(r.code), r.size_ml]));
+    const missing = codes.filter((c) => !sizeByCode.has(c) || !sizeByCode.get(c));
+    if (missing.length) {
+      console.error(`[stage 3] missing size_ml in mlcc_items for codes: ${missing.join(", ")}`);
+      console.error("  (the test script requires bottle_size_ml; ensure the catalog has size data for these codes)");
+      process.exit(1);
+    }
+    items = codes.map((code) => ({
+      code,
+      quantity: 1,
+      bottle_size_ml: Number(sizeByCode.get(code)),
+    }));
+    console.log(`  resolved sizes: ${items.map((i) => `${i.code}=${i.bottle_size_ml}mL`).join(", ")}`);
+  } catch (e) {
+    console.error(`[stage 3] size lookup FAILED — ${e.message ?? e}`);
+    process.exit(1);
+  }
+
+  try {
+    // Signature: addItemsToCart(session, items, options). skipPreValidation
+    // bypasses the ada_number lookup that would otherwise require mlccLookup.
+    stage3Result = await addItemsToCart(stage2Result, items, {
+      skipPreValidation: true,
       captureArtifacts: true,
       outputDir: `${outputDir}/stage3`,
     });
