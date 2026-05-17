@@ -3,7 +3,14 @@ import path from "node:path";
 import { BLOCKLIST_RE, clickSafely, waitForAngularStable, waitForElementEnabled, waitForSpaNavigation } from "../milo-discovery.js";
 import { KNOWN_ADAS } from "../../mlcc/milo-ordering-rules.js";
 
-const DEFAULT_TIMEOUT_MS = 45_000;
+// 90s default — matches Stage 1's bump (2026-05-14). Internal waits can
+// stack to ~65s on slower MILO responses (license card 10s + Place Order
+// readiness 15s + products load 20s + angular stable 10s + delivery dates
+// 10s). At 45s the outer timer was killing `run()` mid-wait, swallowing the
+// inner typed error that would tell us WHICH step was slow. 90s lets each
+// inner wait fire its own specific error first. Warm sessions still finish
+// in ~10s; this only changes worst-case behavior.
+const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
 const PRODUCTS_LOAD_TIMEOUT_MS = 20_000;
 const HOME_TO_LOCATION_TIMEOUT_MS = 10_000;
