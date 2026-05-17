@@ -34,6 +34,8 @@ const INTER_BATCH_SETTLE_MS = 800;
  * - MILO_STAGE3_ADD_ALL_FAILED
  * - MILO_STAGE3_CART_NAV_TIMEOUT
  * - MILO_STAGE3_CART_VERIFICATION_EMPTY
+ * - MILO_STAGE3_ITEMS_OUT_OF_STOCK
+ * - MILO_STAGE3_QUANTITY_CLAMPED
  * - MILO_STAGE3_TIMEOUT
  */
 function createStage3Error(code, message, details = {}, screenshotPath = null) {
@@ -710,65 +712,215 @@ export async function addItemsToCart(session, items, options = {}) {
       });
       await captureArtifact(page, outputDir, stage3Artifacts, "03-cart-populated");
 
-      // ─── Cart-state verification ─────────────────────────────────────────
+      // ─── Cart-state verification (v2) ────────────────────────────────────
       // The add-by-code page declares "success" based on three UI signals
       // (form clear / cart badge digits / toast). All three can fire on
-      // false positives — most notably, the cart-badge regex matches the
-      // literal "0" in "Cart (0)" on a fresh page. Verified 2026-05-14:
-      // a Stage 3 run reported `Added 2/2` against codes 100001 + 100009
-      // but Tony confirmed the family-store MILO cart was empty hours later.
+      // false positives. Two more failure modes observed 2026-05-17:
       //
-      // Ground truth: enumerate the product codes on /milo/cart and
-      // cross-reference against the items we believed we added. Anything
-      // claimed-added but not present gets demoted to itemsRejected with
-      // a clear reason. If ZERO items survive verification, throw a typed
-      // error so the test runner can distinguish "add UI broken" from
-      // "MILO rejected specific items".
+      //   1. ITEMS LANDED IN OOS SECTION, NOT ACTIVE CART. MILO accepts an
+      //      add for an out-of-stock item but moves it to the "Out of stock
+      //      items" section. v1 of this verifier picked up codes from
+      //      ANY table.table-bordered, including the OOS table — counted
+      //      OOS items as "confirmed". Real example: code 100001 (1792
+      //      Single Barrel BBN) requested qty=6, MILO put it in OOS,
+      //      v1 verifier said "all confirmed", orderSummary showed only
+      //      the FRIS portion at $29.34 instead of the expected ~$265.
       //
-      // Selector pattern reused from Stage 4 (validate-cart.js parseCartState):
-      // each cart row has a `<span class="text-muted">` inside the product
-      // <td> that contains the bare MLCC code.
-      const cartCodes = await page.evaluate(() => {
-        const codeSpans = [
-          ...document.querySelectorAll(
-            "table.table-bordered tbody td span.text-muted",
-          ),
-        ];
-        return codeSpans
-          .map((el) => (el.textContent || "").trim())
-          .filter((t) => /^\d+$/.test(t));
+      //   2. QUANTITY SILENTLY CLAMPED. MILO accepts an add but applies a
+      //      different quantity than what was typed — e.g. requesting
+      //      qty=13 for a 750mL produced an "Invalid split quantities"
+      //      banner because 13 isn't a legal MLCC split for 750mL. v1
+      //      verifier only checked code presence, not the quantity value.
+      //
+      // v2 reads the cart structure with both pieces of state:
+      //   - active: { code, quantity } for rows in active-cart tables
+      //   - oos:    { code, quantity } for rows in the OOS section
+      // The OOS section is identified by walking from an "Out of stock
+      // items" heading down to the next table; everything else is active.
+      // We then cross-reference each itemsAdded entry against three buckets
+      // (active-with-matching-qty, active-with-clamped-qty, OOS, missing)
+      // and surface specific demotion reasons.
+      const cartContents = await page.evaluate(() => {
+        const parseQtyFromRow = (row) => {
+          const qtyCell = row.querySelectorAll("td")[1];
+          if (!qtyCell) return null;
+          const qtyInput = qtyCell.querySelector("input");
+          if (qtyInput && qtyInput.value) {
+            const n = parseInt(qtyInput.value, 10);
+            return Number.isFinite(n) ? n : null;
+          }
+          const m = (qtyCell.textContent || "").match(/(\d+)/);
+          return m ? parseInt(m[1], 10) : null;
+        };
+
+        // Find the "Out of stock items" anchor (any element whose text
+        // matches that label). Tables that come AFTER this anchor in DOM
+        // order are OOS tables; tables BEFORE it are active-cart tables.
+        const oosAnchor = [...document.querySelectorAll("*")].find((el) => {
+          const txt = (el.textContent || "").trim();
+          // Match only elements whose own text label is the OOS heading,
+          // not large containers that contain it as nested text.
+          return (
+            /^out of stock items$/i.test(txt) &&
+            el.children.length === 0
+          );
+        });
+
+        const active = [];
+        const oos = [];
+        const tables = [...document.querySelectorAll("table.table-bordered")];
+
+        for (const table of tables) {
+          // Position relative to OOS anchor decides bucket.
+          const isAfterOosAnchor =
+            oosAnchor &&
+            (oosAnchor.compareDocumentPosition(table) &
+              Node.DOCUMENT_POSITION_FOLLOWING) !==
+              0;
+
+          const rows = [...table.querySelectorAll("tbody > tr")];
+          for (const row of rows) {
+            const codeEl = row.querySelector("td span.text-muted");
+            if (!codeEl) continue;
+            const codeText = (codeEl.textContent || "").trim();
+            if (!/^\d+$/.test(codeText)) continue;
+            const qty = parseQtyFromRow(row);
+            const entry = { code: codeText, quantity: qty };
+            (isAfterOosAnchor ? oos : active).push(entry);
+          }
+        }
+
+        return { active, oos, oosHeadingFound: Boolean(oosAnchor) };
       });
 
-      const cartCodeSet = new Set(cartCodes);
+      const activeMap = new Map(
+        cartContents.active.map((r) => [r.code, r.quantity]),
+      );
+      const oosMap = new Map(
+        cartContents.oos.map((r) => [r.code, r.quantity]),
+      );
+
       const verificationRejected = [];
       const verifiedItemsAdded = [];
+      const clampedItems = [];
+      const oosItems = [];
+      const missingItems = [];
+
       for (const item of itemsAdded) {
-        if (cartCodeSet.has(String(item.code))) {
-          verifiedItemsAdded.push(item);
+        const codeStr = String(item.code);
+        const requestedQty = Number(item.quantity);
+
+        if (activeMap.has(codeStr)) {
+          const actualQty = activeMap.get(codeStr);
+          if (actualQty === requestedQty) {
+            verifiedItemsAdded.push({ ...item, verifiedQuantity: actualQty });
+          } else {
+            // Quantity differs from what we requested. MILO may have
+            // clamped, rejected the typed value, or merged with existing.
+            const rejection = {
+              ...item,
+              requestedQuantity: requestedQty,
+              actualQuantity: actualQty,
+              rejectionReason: `Quantity mismatch: requested ${requestedQty}, MILO has ${actualQty} in active cart`,
+              rejectionStage: "post-add-cart-quantity-check",
+            };
+            verificationRejected.push(rejection);
+            clampedItems.push({
+              code: codeStr,
+              requested: requestedQty,
+              actual: actualQty,
+            });
+          }
+        } else if (oosMap.has(codeStr)) {
+          const oosQty = oosMap.get(codeStr);
+          const rejection = {
+            ...item,
+            oosQuantity: oosQty,
+            rejectionReason: `Item moved to OOS section by MILO (qty=${oosQty}); not in active cart`,
+            rejectionStage: "post-add-out-of-stock",
+          };
+          verificationRejected.push(rejection);
+          oosItems.push({ code: codeStr, oosQuantity: oosQty });
         } else {
-          verificationRejected.push({
+          const rejection = {
             ...item,
             rejectionReason:
-              "Reported as added by Add-by-Code UI but not present on /milo/cart after navigation",
-            rejectionStage: "post-add-cart-verification",
-          });
+              "Reported as added by Add-by-Code UI but not present anywhere on /milo/cart (active or OOS)",
+            rejectionStage: "post-add-cart-missing",
+          };
+          verificationRejected.push(rejection);
+          missingItems.push(codeStr);
         }
       }
 
       const finalItemsAdded = verifiedItemsAdded;
       const finalItemsRejected = [...itemsRejected, ...verificationRejected];
 
-      if (verificationRejected.length > 0) {
+      // Verbose verification summary so test runs make the failure mode
+      // obvious at a glance.
+      console.log(
+        `[stage3] cart-verification: active rows=${cartContents.active.length}, oos rows=${cartContents.oos.length}, oos-heading=${cartContents.oosHeadingFound ? "found" : "missing"}`,
+      );
+      if (clampedItems.length > 0) {
         console.log(
-          `[stage3] cart-verification: ${finalItemsAdded.length}/${itemsAdded.length} reported-added items confirmed in cart; ${verificationRejected.length} demoted to rejected.`,
-        );
-      } else {
-        console.log(
-          `[stage3] cart-verification: all ${finalItemsAdded.length} reported-added items confirmed in /milo/cart.`,
+          `[stage3]   quantity-clamped: ${JSON.stringify(clampedItems)}`,
         );
       }
+      if (oosItems.length > 0) {
+        console.log(`[stage3]   in-oos: ${JSON.stringify(oosItems)}`);
+      }
+      if (missingItems.length > 0) {
+        console.log(`[stage3]   missing: ${JSON.stringify(missingItems)}`);
+      }
+      console.log(
+        `[stage3] ${finalItemsAdded.length}/${itemsAdded.length} items verified in active cart with matching quantity.`,
+      );
 
+      // Surface specific failure modes via typed errors. Priority order
+      // matters: quantity-clamp is most actionable for the caller (it
+      // means "you asked for an invalid quantity"); OOS-only is a real
+      // MILO state ("item is out of stock"); missing means the add
+      // mechanism failed entirely.
       if (normalizedItems.length > 0 && finalItemsAdded.length === 0) {
+        // All items failed verification — pick the most descriptive error.
+        if (clampedItems.length === normalizedItems.length) {
+          const screenshotPath = await captureFailure(
+            page,
+            outputDir,
+            stage3Artifacts,
+            "error-quantity-clamped",
+          );
+          throw createStage3Error(
+            "MILO_STAGE3_QUANTITY_CLAMPED",
+            "Every requested item appears in the active cart at a different quantity than requested. MILO likely rejected the quantities as invalid splits (check SPLIT_CASE_RULES_BY_SIZE_ML for the bottle size).",
+            {
+              requestedCount: normalizedItems.length,
+              clampedItems,
+              activeCartContents: cartContents.active,
+              currentUrl: page.url(),
+            },
+            screenshotPath,
+          );
+        }
+        if (oosItems.length === normalizedItems.length) {
+          const screenshotPath = await captureFailure(
+            page,
+            outputDir,
+            stage3Artifacts,
+            "error-all-items-oos",
+          );
+          throw createStage3Error(
+            "MILO_STAGE3_ITEMS_OUT_OF_STOCK",
+            "Every requested item was accepted by MILO but moved to the Out of Stock section; nothing in active cart.",
+            {
+              requestedCount: normalizedItems.length,
+              oosItems,
+              currentUrl: page.url(),
+            },
+            screenshotPath,
+          );
+        }
+        // Otherwise: completely missing — the add UI lied.
         const screenshotPath = await captureFailure(
           page,
           outputDir,
@@ -777,11 +929,12 @@ export async function addItemsToCart(session, items, options = {}) {
         );
         throw createStage3Error(
           "MILO_STAGE3_CART_VERIFICATION_EMPTY",
-          "Stage 3 reported items added but /milo/cart is empty after navigation. The add-page UI signals (form-clear/cart-badge/toast) fire on false positives — only the cart-page enumeration is ground truth.",
+          "Stage 3 reported items added but /milo/cart contains zero matching rows (active or OOS). The add-page UI signals (form-clear/cart-badge/toast) fire on false positives.",
           {
             requestedCount: normalizedItems.length,
             reportedAddedCount: itemsAdded.length,
-            cartCodesFound: cartCodes,
+            activeCartContents: cartContents.active,
+            oosContents: cartContents.oos,
             currentUrl: page.url(),
             notTrusted: ["formCleared", "cartBadgeUpdated", "toastVisible"],
           },
@@ -800,7 +953,12 @@ export async function addItemsToCart(session, items, options = {}) {
           reportedAddedCount: itemsAdded.length,
           confirmedInCartCount: finalItemsAdded.length,
           demotedCount: verificationRejected.length,
-          cartCodesFound: cartCodes,
+          activeCart: cartContents.active,
+          oosSection: cartContents.oos,
+          oosHeadingFound: cartContents.oosHeadingFound,
+          clampedItems,
+          oosItems,
+          missingItems,
         },
         stage3StartedAt,
         stage3CompletedAt: stage3CompletedAtDate.toISOString(),

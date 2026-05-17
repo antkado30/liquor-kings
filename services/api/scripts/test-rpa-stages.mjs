@@ -206,8 +206,20 @@ if (stages.has("3")) {
       console.log(
         `  cart verification: reported=${cv.reportedAddedCount}, confirmed=${cv.confirmedInCartCount}, demoted=${cv.demotedCount}`,
       );
-      if (cv.demotedCount > 0) {
-        console.log(`  cart codes found on /milo/cart: ${JSON.stringify(cv.cartCodesFound)}`);
+      if (cv.activeCart) {
+        console.log(`  active cart: ${JSON.stringify(cv.activeCart)}`);
+      }
+      if (cv.oosSection?.length) {
+        console.log(`  OOS section: ${JSON.stringify(cv.oosSection)}`);
+      }
+      if (cv.clampedItems?.length) {
+        console.log(`  quantity-clamped: ${JSON.stringify(cv.clampedItems)}`);
+      }
+      if (cv.oosItems?.length) {
+        console.log(`  items in OOS: ${JSON.stringify(cv.oosItems)}`);
+      }
+      if (cv.missingItems?.length) {
+        console.log(`  items missing from cart: ${JSON.stringify(cv.missingItems)}`);
       }
     }
   } catch (e) {
