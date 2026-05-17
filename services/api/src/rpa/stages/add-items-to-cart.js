@@ -561,9 +561,48 @@ async function navigateBackToProducts(page) {
       /* best-effort */
     }
   }
+
+  // Wait for the products page to actually be interactive — not just the
+  // URL changed. Without this, Stage 3's subsequent click on "Add by Code"
+  // can race against a not-yet-bound Angular controller, leading to
+  // MILO_STAGE3_ITEM_NOT_ACCEPTED downstream. Observed 2026-05-17:
+  // post-clear navigation completed but the add-by-code form wasn't
+  // responsive for 8+ seconds. We wait explicitly for either:
+  //   - product search input visible (means /milo/products is bound)
+  //   - "Add by Code" link visible (means we can proceed)
+  // Whichever lands first. 20s ceiling.
   await waitForAngularStable(page, 5_000).catch(async () => {
     await page.waitForTimeout(500);
   });
+
+  const waitStart = Date.now();
+  while (Date.now() - waitStart < 20_000) {
+    const url = page.url();
+    if (url.includes("/milo/products")) {
+      const searchVisible = await page
+        .locator("input[placeholder*='Search for products' i]")
+        .first()
+        .isVisible()
+        .catch(() => false);
+      const addByCodeVisible = await page
+        .getByRole("link", { name: /add by code/i })
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (searchVisible || addByCodeVisible) {
+        // Page is interactive. One more angular settle for safety.
+        await waitForAngularStable(page, 3_000).catch(() => {});
+        return;
+      }
+    }
+    await page.waitForTimeout(500);
+  }
+  // Couldn't confirm interactive state within 20s — log but continue.
+  // Stage 3's existing addByCodeNav resolution will surface the real
+  // error if the page is genuinely broken.
+  console.warn(
+    `[stage3] navigateBackToProducts: did not confirm interactive products page within 20s (current url: ${page.url()}); continuing best-effort`,
+  );
 }
 
 export async function addItemsToCart(session, items, options = {}) {
