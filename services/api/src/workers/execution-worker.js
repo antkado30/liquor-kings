@@ -977,11 +977,56 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     return result;
   };
 
+  // Stage 5 arming is defense-in-depth:
+  //   1. Caller must request mode='submit' in execution run metadata
+  //   2. Process env LK_ALLOW_ORDER_SUBMISSION must equal "yes"
+  //      (kill-switch — flipping back to "no" disables all submission)
+  //   3. The specific store row must have allow_order_submission=true
+  //      (per-store arming via migration 20260517210000)
+  //
+  // ALL THREE must align or Stage 5 falls back to dry_run. This prevents
+  // accidental submission when:
+  //   - A dev forgets to flip the env back to no after testing
+  //   - A new store is onboarded but operator hasn't explicitly armed it
+  //   - A code path requests mode='submit' for a store the operator
+  //     never intended to enable real orders for
   const requestedMode = payload?.metadata?.mode ?? "dry_run";
   const envAllow = process.env.LK_ALLOW_ORDER_SUBMISSION === "yes";
+
+  // Per-store check. If the column read fails (network error, RLS
+  // surprise, table not migrated yet), default to disarmed — safest
+  // behavior is to refuse submission rather than risk a stale-read
+  // false-positive.
+  let storeAllowsSubmission = false;
+  try {
+    const { data: storeRow, error: storeErr } = await workerSupabase
+      .from("stores")
+      .select("allow_order_submission")
+      .eq("id", storeId)
+      .maybeSingle();
+    if (storeErr) {
+      console.warn(
+        `[worker] could not read stores.allow_order_submission for store ${storeId}: ${storeErr.message} — defaulting to disarmed (dry_run only)`,
+      );
+    } else if (storeRow?.allow_order_submission === true) {
+      storeAllowsSubmission = true;
+    }
+  } catch (e) {
+    console.warn(
+      `[worker] unexpected error reading stores.allow_order_submission: ${e?.message || e} — defaulting to disarmed (dry_run only)`,
+    );
+  }
+
   const stage5Mode =
-    requestedMode === "submit" && envAllow ? "submit" : "dry_run";
+    requestedMode === "submit" && envAllow && storeAllowsSubmission
+      ? "submit"
+      : "dry_run";
   const allowOrderSubmission = stage5Mode === "submit";
+
+  // Loud log line so the audit trail in Fly logs makes the decision obvious.
+  console.log(
+    `[worker] Stage 5 arming: requestedMode=${requestedMode}, envAllow=${envAllow}, storeAllowsSubmission=${storeAllowsSubmission}, finalMode=${stage5Mode}`,
+  );
 
   let session;
   let checkedOut;
