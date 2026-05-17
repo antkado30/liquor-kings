@@ -57,6 +57,85 @@ async function appendAction(outputDir, payload) {
   await appendFile(path.join(outputDir, "actions.jsonl"), `${JSON.stringify(payload)}\n`, "utf8").catch(() => {});
 }
 
+/**
+ * Extract visible error banner text from the cart page. Used to surface
+ * MILO's actual reason for disabling Validate (instead of a generic
+ * "button is disabled" message). Banners observed in real MILO output:
+ *   - "You must order at least nine liters from this distributor"
+ *     (per-ADA 9L gate)
+ *   - "Invalid split quantities, please fix your quantities and click
+ *     validate." (split-rule violation per SPLIT_CASE_RULES_BY_SIZE_ML)
+ *
+ * Returns an array of distinct visible messages, filtering hidden/empty
+ * elements. Always best-effort — never throws.
+ */
+async function captureVisibleCartErrors(page) {
+  try {
+    return await page.evaluate(() => {
+      const selectors = [
+        ".alert-danger",
+        ".alert.alert-danger",
+        "[class*='alert' i][class*='danger' i]",
+      ];
+      const candidates = new Set();
+      for (const sel of selectors) {
+        for (const el of document.querySelectorAll(sel)) {
+          candidates.add(el);
+        }
+      }
+      const seen = new Set();
+      const messages = [];
+      for (const el of candidates) {
+        const txt = (el.textContent || "").replace(/\s+/g, " ").trim();
+        if (!txt || txt.length < 5 || seen.has(txt)) continue;
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          rect.width === 0 ||
+          rect.height === 0
+        ) {
+          continue;
+        }
+        seen.add(txt);
+        messages.push(txt);
+      }
+      return messages;
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Classify visible cart-error banners into a specific MILO_STAGE4_* code.
+ * Returns null when no banner matches a known pattern — the caller should
+ * fall back to MILO_STAGE4_VALIDATE_BUTTON_DISABLED in that case.
+ *
+ * Known patterns derived from screenshots captured during 2026-05-17 RPA
+ * testing against real MILO with license 430342.
+ */
+function classifyCartErrorMessages(messages) {
+  for (const msg of messages || []) {
+    if (/nine\s*liters|9\s*liters|at\s*least\s*9\s*l/i.test(msg)) {
+      return {
+        code: "MILO_STAGE4_BELOW_9L_MINIMUM",
+        message: `Cart blocked by per-ADA 9L minimum: ${msg}`,
+      };
+    }
+    if (
+      /invalid\s+split\s+quantities|whole\s+packs|valid\s+split/i.test(msg)
+    ) {
+      return {
+        code: "MILO_STAGE4_INVALID_SPLIT_QUANTITIES",
+        message: `Cart blocked by invalid split quantity: ${msg}`,
+      };
+    }
+  }
+  return null;
+}
+
 async function snapshotSignals(page) {
   return page.evaluate(() => {
     const text = (document.body?.innerText || "").replace(/\s+/g, " ");
@@ -152,7 +231,20 @@ async function clickValidateButtonSafely(page, button, outputDir) {
     throw createStage4Error("MILO_STAGE4_VALIDATE_BUTTON_NOT_FOUND", "Validate button is not visible", { currentUrl, buttonText });
   }
   if (!enabled) {
-    throw createStage4Error("MILO_STAGE4_VALIDATE_BUTTON_DISABLED", "Validate button is disabled", { currentUrl, buttonText });
+    const visibleErrors = await captureVisibleCartErrors(page);
+    const classified = classifyCartErrorMessages(visibleErrors);
+    if (classified) {
+      throw createStage4Error(classified.code, classified.message, {
+        currentUrl,
+        buttonText,
+        visibleErrors,
+      });
+    }
+    throw createStage4Error(
+      "MILO_STAGE4_VALIDATE_BUTTON_DISABLED",
+      "Validate button is disabled",
+      { currentUrl, buttonText, visibleErrors },
+    );
   }
   await appendAction(outputDir, { step: "4a-validate-click", url: currentUrl, buttonText, ts: new Date().toISOString() });
   await button.click({ timeout: 15_000 });
@@ -485,7 +577,22 @@ export async function validateCartOnMilo(session, options = {}) {
       const isEnabled = await validateButton.isEnabled().catch(() => false);
       if (!isEnabled) {
         const screenshotPath = await captureFailure(page, outputDir, stage4Artifacts, "error-validate-button-disabled");
-        throw createStage4Error("MILO_STAGE4_VALIDATE_BUTTON_DISABLED", "Validate button is disabled", { currentUrl }, screenshotPath);
+        const visibleErrors = await captureVisibleCartErrors(page);
+        const classified = classifyCartErrorMessages(visibleErrors);
+        if (classified) {
+          throw createStage4Error(
+            classified.code,
+            classified.message,
+            { currentUrl, visibleErrors },
+            screenshotPath,
+          );
+        }
+        throw createStage4Error(
+          "MILO_STAGE4_VALIDATE_BUTTON_DISABLED",
+          "Validate button is disabled",
+          { currentUrl, visibleErrors },
+          screenshotPath,
+        );
       }
 
       const beforeSignals = await snapshotSignals(page);
