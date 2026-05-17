@@ -36,6 +36,7 @@ const INTER_BATCH_SETTLE_MS = 800;
  * - MILO_STAGE3_CART_VERIFICATION_EMPTY
  * - MILO_STAGE3_ITEMS_OUT_OF_STOCK
  * - MILO_STAGE3_QUANTITY_CLAMPED
+ * - MILO_STAGE3_CART_CLEAR_FAILED
  * - MILO_STAGE3_TIMEOUT
  */
 function createStage3Error(code, message, details = {}, screenshotPath = null) {
@@ -347,6 +348,224 @@ async function waitForAddAllConfirmation(page, codeInput, qtyInput, timeoutMs = 
   return { ok: false, waitedMs: Date.now() - start, state: lastState };
 }
 
+/**
+ * Pre-flight: navigate to /milo/cart and clear any existing items so
+ * Stage 3 starts from a known-empty state. Prevents accumulation when:
+ *   - A prior RPA run failed mid-way and left stale items in cart
+ *   - The same RPA test runs twice in quick succession
+ *   - A customer-side scanner-submit retry fires before the prior cart
+ *     state was wiped
+ *
+ * Best-effort: if any step fails (cart link not visible, Clear Cart
+ * button missing, modal unhandled), this function logs a warning and
+ * returns without throwing. The v2 cart-verification check downstream
+ * is still the authoritative guard against unexpected cart state.
+ *
+ * If Clear Cart IS clicked but the cart doesn't actually empty within
+ * 15s, MILO_STAGE3_CART_CLEAR_FAILED IS thrown — that's a real failure
+ * mode we want surfaced (MILO may have errored, item may be locked).
+ *
+ * Returns:
+ *   { skipped: true, reason }      — couldn't navigate / find cart link
+ *   { cleared: false, itemCountBefore: 0 } — cart already empty
+ *   { cleared: true, itemCountBefore: N }  — N items removed
+ */
+async function clearCartIfPopulated(page, outputDir, stage3Artifacts) {
+  // Step 1: locate cart link from current page (typically /milo/products)
+  const cartNav = await (async () => {
+    const direct = await findVisibleFirst(page, ["a[href='/milo/cart']"]);
+    if (direct.locator) return direct;
+    const classed = await findVisibleFirst(page, [
+      "a[href*='cart'][class*='cart']",
+      "a[href*='/milo/cart']",
+    ]);
+    if (classed.locator) return classed;
+    const iconish = await findVisibleFirst(page, [
+      "[class*='cart'] a",
+      "a[class*='cart']",
+      "[aria-label*='cart' i]",
+    ]);
+    if (iconish.locator) return iconish;
+    const byRole = page.getByRole("link", { name: /cart/i }).first();
+    if (
+      (await byRole.count()) > 0 &&
+      (await byRole.isVisible().catch(() => false))
+    ) {
+      return { locator: byRole, selector: "role=link[name=cart]" };
+    }
+    return { locator: null, selector: null };
+  })();
+
+  if (!cartNav.locator) {
+    console.log(
+      `[stage3] pre-flight cart-clear: skipped (cart link not visible from ${page.url()})`,
+    );
+    return { skipped: true, reason: "cart-link-not-visible" };
+  }
+
+  await clickSafely(page, cartNav.locator, {
+    step: "3pre-nav-to-cart-for-clear",
+    selectorNote: cartNav.selector || "header cart link",
+  });
+
+  try {
+    await waitForSpaNavigation(
+      page,
+      "/milo/cart",
+      [
+        "button:has-text('Validate')",
+        "button:has-text('Clear Cart')",
+        "text=/Cart is empty/i",
+        "text=/Your cart/i",
+        "text=/Continue Shopping/i",
+      ],
+      15_000,
+      "stage3-pre-clear-cart-nav",
+    );
+  } catch (e) {
+    console.warn(
+      `[stage3] pre-flight cart-clear: skipped (cart nav timeout: ${String(e?.message || e)})`,
+    );
+    return { skipped: true, reason: "cart-nav-timeout" };
+  }
+
+  await waitForAngularStable(page, 5_000).catch(async () => {
+    await page.waitForTimeout(500);
+  });
+
+  // Step 2: count existing rows (active + OOS)
+  const itemCountBefore = await page.evaluate(() => {
+    return document.querySelectorAll(
+      "table.table-bordered tbody tr",
+    ).length;
+  });
+
+  if (itemCountBefore === 0) {
+    // Already empty — return to products page so the rest of Stage 3 picks up.
+    console.log(`[stage3] pre-flight cart-clear: cart already empty.`);
+    await navigateBackToProducts(page);
+    return { cleared: false, itemCountBefore: 0 };
+  }
+
+  // Step 3: find Clear Cart button + click
+  const clearButton = page
+    .getByRole("button", { name: /^Clear Cart$/i })
+    .first();
+  if (
+    (await clearButton.count()) === 0 ||
+    !(await clearButton.isVisible().catch(() => false))
+  ) {
+    console.warn(
+      `[stage3] pre-flight cart-clear: ${itemCountBefore} item(s) in cart but Clear Cart button not visible. Proceeding anyway; v2 verifier will catch accumulation.`,
+    );
+    await navigateBackToProducts(page);
+    return { skipped: true, reason: "clear-button-not-visible", itemCountBefore };
+  }
+
+  await captureArtifact(page, outputDir, stage3Artifacts, "0pre-cart-before-auto-clear");
+
+  await clickSafely(page, clearButton, {
+    step: "3pre-click-clear-cart",
+    selectorNote: "Clear Cart button",
+  });
+
+  // Step 4: handle confirmation modal if it appears (MILO sometimes
+  // shows "Are you sure?" — best-effort: click any visible Yes/Confirm/OK).
+  await page.waitForTimeout(750);
+  const confirmButton = page
+    .getByRole("button", { name: /^(Yes|Confirm|Clear|OK|Continue)$/i })
+    .first();
+  if (
+    (await confirmButton.count()) > 0 &&
+    (await confirmButton.isVisible().catch(() => false))
+  ) {
+    await clickSafely(page, confirmButton, {
+      step: "3pre-confirm-clear",
+      selectorNote: "Clear Cart confirmation",
+    }).catch(() => {});
+  }
+
+  // Step 5: wait for cart to actually empty (15s budget)
+  const clearWaitStart = Date.now();
+  let emptied = false;
+  while (Date.now() - clearWaitStart < 15_000) {
+    const remaining = await page.evaluate(() => {
+      return document.querySelectorAll(
+        "table.table-bordered tbody tr",
+      ).length;
+    });
+    if (remaining === 0) {
+      emptied = true;
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  if (!emptied) {
+    const screenshotPath = await captureFailure(
+      page,
+      outputDir,
+      stage3Artifacts,
+      "error-cart-clear-failed",
+    );
+    throw createStage3Error(
+      "MILO_STAGE3_CART_CLEAR_FAILED",
+      `Clear Cart was clicked on a cart with ${itemCountBefore} item(s) but the cart did not empty within 15s`,
+      { itemCountBefore, currentUrl: page.url() },
+      screenshotPath,
+    );
+  }
+
+  await captureArtifact(page, outputDir, stage3Artifacts, "0pre-cart-after-auto-clear");
+  console.log(
+    `[stage3] pre-flight cart-clear: removed ${itemCountBefore} stale item row(s).`,
+  );
+
+  await navigateBackToProducts(page);
+  return { cleared: true, itemCountBefore };
+}
+
+/**
+ * Return to /milo/products from /milo/cart using MILO's own "Continue
+ * Shopping" navigation (falls back to direct page.goto if button not
+ * found). Used by clearCartIfPopulated so the rest of Stage 3 picks up
+ * at the expected URL.
+ */
+async function navigateBackToProducts(page) {
+  const continueButton = page
+    .getByRole("button", { name: /^Continue Shopping$/i })
+    .first();
+  const continueLink = page
+    .getByRole("link", { name: /^Continue Shopping$/i })
+    .first();
+  const tryClick = async (locator) => {
+    if (
+      (await locator.count()) > 0 &&
+      (await locator.isVisible().catch(() => false))
+    ) {
+      await locator.click({ timeout: 5_000 }).catch(() => {});
+      return true;
+    }
+    return false;
+  };
+  if (await tryClick(continueButton)) {
+    /* clicked */
+  } else if (await tryClick(continueLink)) {
+    /* clicked */
+  } else {
+    // Fallback: direct nav
+    try {
+      const productsUrl = new URL("/milo/products", page.url()).toString();
+      await page.goto(productsUrl, { waitUntil: "domcontentloaded" });
+    } catch {
+      /* best-effort */
+    }
+  }
+  await waitForAngularStable(page, 5_000).catch(async () => {
+    await page.waitForTimeout(500);
+  });
+}
+
 export async function addItemsToCart(session, items, options = {}) {
   validateStage3Session(session);
   const skipPreValidation = options.skipPreValidation === true;
@@ -381,11 +600,31 @@ export async function addItemsToCart(session, items, options = {}) {
           : null
       : null;
 
+  const skipCartClear = options.skipCartClear === true;
   const run = async () => {
     const page = session.page;
     if (outputDir) await mkdir(outputDir, { recursive: true });
 
+    let cartClearResult = null;
+
     try {
+      // Pre-flight: clear any existing cart state before adding new items.
+      // Eliminates the entire class of "stale cart pollution" bugs we hit
+      // repeatedly during 2026-05-17 testing. Best-effort — if clear can't
+      // be performed (button missing, etc.) we log and continue; the v2
+      // cart-state verification downstream will still catch unexpected
+      // contents. The only hard failure is MILO_STAGE3_CART_CLEAR_FAILED
+      // which fires when Clear Cart WAS clicked but cart didn't empty.
+      if (!skipCartClear) {
+        cartClearResult = await clearCartIfPopulated(
+          page,
+          outputDir,
+          stage3Artifacts,
+        );
+      } else {
+        console.log("[stage3] pre-flight cart-clear: skipped (skipCartClear=true)");
+      }
+
       const addByCodeNav = await (async () => {
         const direct = await findVisibleFirst(page, ["a[href*='/milo/products/bycode']"]);
         if (direct.locator) return direct;
@@ -960,6 +1199,7 @@ export async function addItemsToCart(session, items, options = {}) {
           oosItems,
           missingItems,
         },
+        cartClearResult,
         stage3StartedAt,
         stage3CompletedAt: stage3CompletedAtDate.toISOString(),
         stage3DurationMs: stage3CompletedAtDate.getTime() - stage3StartedAtDate.getTime(),

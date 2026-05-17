@@ -195,6 +195,16 @@ if (stages.has("3")) {
       outputDir: `${outputDir}/stage3`,
     });
     console.log(`[stage 3] OK in ${stage3Result.stage3DurationMs ?? "?"}ms`);
+    if (stage3Result.cartClearResult) {
+      const c = stage3Result.cartClearResult;
+      if (c.cleared) {
+        console.log(`  pre-flight cart-clear: removed ${c.itemCountBefore} stale item(s)`);
+      } else if (c.skipped) {
+        console.log(`  pre-flight cart-clear: skipped (${c.reason})`);
+      } else {
+        console.log(`  pre-flight cart-clear: cart was already empty`);
+      }
+    }
     const added = Array.isArray(stage3Result.itemsAdded) ? stage3Result.itemsAdded.length : "?";
     const rejected = Array.isArray(stage3Result.itemsRejected) ? stage3Result.itemsRejected.length : 0;
     console.log(`  items added (verified in cart): ${added}/${codes.length}`);
