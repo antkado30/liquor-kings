@@ -25,6 +25,9 @@
  *   STAGES=1,2,3,4 — login + navigate + add + validate (requires MLCC_CODES)
  *
  * MLCC_CODES — comma-separated MLCC codes to add in Stage 3, e.g. "5246,12184"
+ * MLCC_QUANTITY — quantity to apply to every code (default 1). Use to build
+ *   a cart that meets MLCC's per-ADA 9L minimum, e.g. MLCC_QUANTITY=6 with
+ *   two 750mL codes on the same ADA = 9L exactly.
  *
  * Stage 5 (checkout/submit) is intentionally never run by this script.
  *
@@ -50,6 +53,12 @@ const stagesEnv = (process.env.STAGES ?? "1,2").trim();
 const stages = new Set(stagesEnv.split(",").map((s) => s.trim()).filter(Boolean));
 const codesEnv = (process.env.MLCC_CODES ?? "").trim();
 const codes = codesEnv ? codesEnv.split(",").map((s) => s.trim()).filter(Boolean) : [];
+// MLCC_QUANTITY applies the same quantity to every code (default 1). Used to
+// build a cart that clears MLCC's per-ADA 9L minimum without listing each
+// bottle individually. Example: MLCC_CODES="100001,100009" MLCC_QUANTITY=6
+// → 6 bottles of each code = 12 bottles total. If both codes are ADA 221,
+// total ADA 221 volume = 12 × 750mL = 9L exactly.
+const quantityPerCode = Math.max(1, parseInt(process.env.MLCC_QUANTITY ?? "1", 10) || 1);
 
 if (!username || !password) {
   console.error("Missing MLCC_USERNAME or MLCC_PASSWORD");
@@ -158,10 +167,20 @@ if (stages.has("3")) {
     }
     items = codes.map((code) => ({
       code,
-      quantity: 1,
+      quantity: quantityPerCode,
       bottle_size_ml: Number(sizeByCode.get(code)),
     }));
-    console.log(`  resolved sizes: ${items.map((i) => `${i.code}=${i.bottle_size_ml}mL`).join(", ")}`);
+    const totalBottles = items.reduce((sum, i) => sum + i.quantity, 0);
+    const totalLiters = items.reduce(
+      (sum, i) => sum + (i.bottle_size_ml * i.quantity) / 1000,
+      0,
+    );
+    console.log(
+      `  resolved sizes: ${items.map((i) => `${i.code}×${i.quantity}=${i.bottle_size_ml}mL`).join(", ")}`,
+    );
+    console.log(
+      `  cart volume: ${totalBottles} bottles, ${totalLiters.toFixed(2)}L total (NOT yet split by ADA; per-ADA 9L check happens at MILO Validate)`,
+    );
   } catch (e) {
     console.error(`[stage 3] size lookup FAILED — ${e.message ?? e}`);
     process.exit(1);
