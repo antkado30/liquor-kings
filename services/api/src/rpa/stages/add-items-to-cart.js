@@ -33,6 +33,7 @@ const INTER_BATCH_SETTLE_MS = 800;
  * - MILO_STAGE3_ADD_ALL_BUTTON_DISABLED
  * - MILO_STAGE3_ADD_ALL_FAILED
  * - MILO_STAGE3_CART_NAV_TIMEOUT
+ * - MILO_STAGE3_CART_VERIFICATION_EMPTY
  * - MILO_STAGE3_TIMEOUT
  */
 function createStage3Error(code, message, details = {}, screenshotPath = null) {
@@ -709,13 +710,98 @@ export async function addItemsToCart(session, items, options = {}) {
       });
       await captureArtifact(page, outputDir, stage3Artifacts, "03-cart-populated");
 
+      // ─── Cart-state verification ─────────────────────────────────────────
+      // The add-by-code page declares "success" based on three UI signals
+      // (form clear / cart badge digits / toast). All three can fire on
+      // false positives — most notably, the cart-badge regex matches the
+      // literal "0" in "Cart (0)" on a fresh page. Verified 2026-05-14:
+      // a Stage 3 run reported `Added 2/2` against codes 100001 + 100009
+      // but Tony confirmed the family-store MILO cart was empty hours later.
+      //
+      // Ground truth: enumerate the product codes on /milo/cart and
+      // cross-reference against the items we believed we added. Anything
+      // claimed-added but not present gets demoted to itemsRejected with
+      // a clear reason. If ZERO items survive verification, throw a typed
+      // error so the test runner can distinguish "add UI broken" from
+      // "MILO rejected specific items".
+      //
+      // Selector pattern reused from Stage 4 (validate-cart.js parseCartState):
+      // each cart row has a `<span class="text-muted">` inside the product
+      // <td> that contains the bare MLCC code.
+      const cartCodes = await page.evaluate(() => {
+        const codeSpans = [
+          ...document.querySelectorAll(
+            "table.table-bordered tbody td span.text-muted",
+          ),
+        ];
+        return codeSpans
+          .map((el) => (el.textContent || "").trim())
+          .filter((t) => /^\d+$/.test(t));
+      });
+
+      const cartCodeSet = new Set(cartCodes);
+      const verificationRejected = [];
+      const verifiedItemsAdded = [];
+      for (const item of itemsAdded) {
+        if (cartCodeSet.has(String(item.code))) {
+          verifiedItemsAdded.push(item);
+        } else {
+          verificationRejected.push({
+            ...item,
+            rejectionReason:
+              "Reported as added by Add-by-Code UI but not present on /milo/cart after navigation",
+            rejectionStage: "post-add-cart-verification",
+          });
+        }
+      }
+
+      const finalItemsAdded = verifiedItemsAdded;
+      const finalItemsRejected = [...itemsRejected, ...verificationRejected];
+
+      if (verificationRejected.length > 0) {
+        console.log(
+          `[stage3] cart-verification: ${finalItemsAdded.length}/${itemsAdded.length} reported-added items confirmed in cart; ${verificationRejected.length} demoted to rejected.`,
+        );
+      } else {
+        console.log(
+          `[stage3] cart-verification: all ${finalItemsAdded.length} reported-added items confirmed in /milo/cart.`,
+        );
+      }
+
+      if (normalizedItems.length > 0 && finalItemsAdded.length === 0) {
+        const screenshotPath = await captureFailure(
+          page,
+          outputDir,
+          stage3Artifacts,
+          "error-cart-verification-empty",
+        );
+        throw createStage3Error(
+          "MILO_STAGE3_CART_VERIFICATION_EMPTY",
+          "Stage 3 reported items added but /milo/cart is empty after navigation. The add-page UI signals (form-clear/cart-badge/toast) fire on false positives — only the cart-page enumeration is ground truth.",
+          {
+            requestedCount: normalizedItems.length,
+            reportedAddedCount: itemsAdded.length,
+            cartCodesFound: cartCodes,
+            currentUrl: page.url(),
+            notTrusted: ["formCleared", "cartBadgeUpdated", "toastVisible"],
+          },
+          screenshotPath,
+        );
+      }
+
       const stage3CompletedAtDate = new Date();
       return {
         ...session,
         currentPage: "cart",
         currentUrl: page.url(),
-        itemsAdded,
-        itemsRejected,
+        itemsAdded: finalItemsAdded,
+        itemsRejected: finalItemsRejected,
+        cartVerification: {
+          reportedAddedCount: itemsAdded.length,
+          confirmedInCartCount: finalItemsAdded.length,
+          demotedCount: verificationRejected.length,
+          cartCodesFound: cartCodes,
+        },
         stage3StartedAt,
         stage3CompletedAt: stage3CompletedAtDate.toISOString(),
         stage3DurationMs: stage3CompletedAtDate.getTime() - stage3StartedAtDate.getTime(),
