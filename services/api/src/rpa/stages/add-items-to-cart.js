@@ -3,7 +3,17 @@ import path from "node:path";
 import { BLOCKLIST_RE, clickSafely, waitForAngularStable, waitForSpaNavigation } from "../milo-discovery.js";
 import { validateCart } from "../../mlcc/milo-ordering-rules.js";
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+// 240s overall budget for Stage 3 — same reasoning as the Stage 2 bump
+// from 45s → 90s on 2026-05-14. Internal waits on a slow-MILO day can
+// stack: cart-clear (~30s w/ populated cart) + navigateBackToProducts
+// (up to 20s) + addByCodeNav + waitForSpaNavigation (20s) +
+// per-batch typing (~10s per item × batch size) + waitForRowCountIncrease
+// (perItemTimeoutMs × items). On 2026-05-17 a Stage 3 run with auto-clear
+// hit the previous 120s outer budget on a slow-MILO day, killing the
+// run before any specific inner error could surface. 240s lets the
+// inner stages either complete or fire their own typed errors.
+// Happy-path warm-session Stage 3 still finishes in ~10-20s.
+const DEFAULT_TIMEOUT_MS = 240_000;
 const DEFAULT_PER_ITEM_TIMEOUT_MS = 8_000;
 const CART_NAV_TIMEOUT_MS = 15_000;
 const ADD_BY_CODE_NAV_TIMEOUT_MS = 20_000;
@@ -434,10 +444,19 @@ async function clearCartIfPopulated(page, outputDir, stage3Artifacts) {
   });
 
   // Step 2: count existing rows (active + OOS)
+  // Count ONLY rows that contain a product code (td > span.text-muted with
+  // digits). Excludes the Order Summary panel which also uses
+  // table.table-bordered but has Gross/Tax/Discount/Net rows that should
+  // NOT be counted as cart items.
   const itemCountBefore = await page.evaluate(() => {
-    return document.querySelectorAll(
-      "table.table-bordered tbody tr",
-    ).length;
+    const rows = [
+      ...document.querySelectorAll("table.table-bordered tbody tr"),
+    ];
+    return rows.filter((row) => {
+      const codeEl = row.querySelector("td span.text-muted");
+      const text = (codeEl?.textContent || "").trim();
+      return /^\d+$/.test(text);
+    }).length;
   });
 
   if (itemCountBefore === 0) {
