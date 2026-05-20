@@ -148,7 +148,7 @@ const TOOLS = [
   {
     name: "price_quote",
     description:
-      "Compute the cost of ordering a quantity of a specific MLCC product, using the state minimum retail price from the catalog. Returns per-unit price and line total.",
+      "Compute the cost of ordering a quantity of a specific MLCC product. Returns the licensee price (the store's approximate per-bottle cost — quote THIS for 'what will it cost me'), the base price (MILO's gross line basis), the state minimum retail price (legal shelf floor), case size, and when the price last changed.",
     input_schema: {
       type: "object",
       properties: {
@@ -262,7 +262,9 @@ function clampLimit(value, fallback, max) {
 async function toolQueryCatalog(input, { supabase }) {
   let query = supabase
     .from("mlcc_items")
-    .select("code,name,size_ml,category,subcategory,abv,state_min_price,upc");
+    .select(
+      "code,name,size_ml,case_size,category,subcategory,abv,proof,state_min_price,licensee_price,base_price,upc,price_changed_at",
+    );
   if (input.code) {
     query = query.eq("code", String(input.code).trim());
   } else {
@@ -307,23 +309,41 @@ async function toolPriceQuote(input, { supabase }) {
   }
   const { data, error } = await supabase
     .from("mlcc_items")
-    .select("code,name,size_ml,state_min_price")
+    .select(
+      "code,name,size_ml,case_size,state_min_price,licensee_price,base_price,price_changed_at",
+    )
     .eq("code", code)
     .maybeSingle();
   if (error) return { error: `price lookup failed: ${error.message}` };
   if (!data) return { error: `no catalog item found for code ${code}` };
-  const unitPrice = Number(data.state_min_price);
-  const hasPrice = Number.isFinite(unitPrice) && unitPrice > 0;
+
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const licensee = num(data.licensee_price);
+  const base = num(data.base_price);
+  const stateMin = num(data.state_min_price);
+  const lineTotal = (unit) =>
+    unit != null ? Number((unit * quantity).toFixed(2)) : null;
+
   return {
     code: data.code,
     name: data.name,
     size_ml: data.size_ml,
-    unit_price_state_minimum: hasPrice ? unitPrice : null,
+    case_size: data.case_size ?? null,
     quantity,
-    line_total_state_minimum: hasPrice
-      ? Number((unitPrice * quantity).toFixed(2))
-      : null,
-    note: "Price is the MLCC state minimum retail price. Licensee cost is lower (licensee discount applies). This is a ballpark, not the exact licensee invoice total.",
+    // licensee_price is the number the owner actually cares about — the
+    // approximate per-bottle cost to the store. Lead with this.
+    licensee_price_per_bottle: licensee,
+    licensee_line_total: lineTotal(licensee),
+    // base_price is the gross line basis MILO shows before tax/discount.
+    base_price_per_bottle: base,
+    base_line_total: lineTotal(base),
+    // state minimum retail = the legal price floor for selling on the shelf.
+    state_minimum_retail_per_bottle: stateMin,
+    last_price_change: data.price_changed_at ?? null,
+    note: "licensee_price is the store's approximate per-bottle cost — quote this as the answer to 'what will this cost me'. base_price is MILO's gross line basis (before tax and discount). state_minimum_retail is the lowest the store may legally sell at on the shelf. The exact invoice total is confirmed by MILO when the cart is validated.",
   };
 }
 
