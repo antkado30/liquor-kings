@@ -17,6 +17,8 @@ import adminRouter from "./routes/admin.routes.js";
 import priceBookRouter, { priceBookUpcFlagHandler, priceBookUpcHandler } from "./routes/price-book.routes.js";
 import storeMlccCredentialsRouter from "./routes/store-mlcc-credentials.routes.js";
 import nrsImportRouter from "./routes/nrs-import.routes.js";
+import nrsReviewRouter from "./routes/nrs-review.routes.js";
+import assistantRouter from "./routes/assistant.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -46,6 +48,8 @@ app.post("/price-book/upc/:upc/flag", priceBookUpcFlagHandler);
 app.use("/admin", adminRouter);
 /** Admin: NRS POS export bulk import (X-Admin-Token auth, raw CSV body). */
 app.use("/admin", nrsImportRouter);
+/** Admin: operator review queue for Tier 2 ambiguous NRS matches. */
+app.use("/admin", nrsReviewRouter);
 
 app.use(
   "/cart",
@@ -60,6 +64,8 @@ app.use("/execution-runs", resolveAuthenticatedStore, executionRunsRouter);
 app.use("/stores", resolveAuthenticatedStore, storeMlccCredentialsRouter);
 app.use("/operator-review", operatorReviewRouter);
 app.use("/price-book", priceBookRouter);
+/** AI Assistant: POST /assistant/ask — Claude tool-use over store data. */
+app.use("/assistant", assistantRouter);
 
 /**
  * Operator admin SPA (built apps/admin). Same origin as session + API under /operator-review/*.
