@@ -30,6 +30,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import supabaseDefault from "../config/supabase.js";
 import { getAllActiveRules, getRulesByType } from "./mlcc-rules.js";
+import {
+  validateQuantityForSize,
+  validateCart as validateCartRules,
+  SPLIT_CASE_RULES_BY_SIZE_ML,
+} from "../mlcc/milo-ordering-rules.js";
 
 // Sonnet — the V1 model choice (strong tool-use, low per-question cost).
 // Override with ANTHROPIC_MODEL if the string changes.
@@ -41,21 +46,35 @@ const MAX_TOKENS = 1024;
 
 const SYSTEM_PROMPT = `You are the Liquor Kings assistant — an in-app helper for the owner or manager of a Michigan liquor store.
 
-Liquor Kings automates spirits ordering through the Michigan Liquor Control Commission (MLCC). The store operator uses it to scan bottles, build a cart, and submit orders to MLCC.
+ABOUT LIQUOR KINGS:
+Liquor Kings automates spirits ordering through the Michigan Liquor Control Commission (MLCC). The operator scans bottles, builds a cart, reviews it, and submits. Liquor Kings then logs into MLCC's MILO system, enters the order, validates it, and submits — returning the MLCC confirmation number. The operator always reviews and approves the cart before anything is submitted; Liquor Kings never places an order the operator did not approve.
 
-Your job: answer the operator's questions accurately and concisely, grounded in their REAL data. Always use the provided tools to look up facts — never guess at prices, codes, stock, order history, or rules.
+WHAT YOU CAN DO:
+You have tools to query the store's real data — the MLCC catalog, MLCC ordering rules, pricing, the store's order history and inventory — and to validate order quantities and whole carts against MLCC's rules. ALWAYS use these tools for any factual question. Never guess at a code, price, rule, quantity, or stock status.
 
-Key MLCC facts you should know:
-- All Michigan spirits ordering goes through MLCC. There is no other supplier.
-- Orders are grouped by ADA (Authorized Distribution Agent / distributor). ADA 221 = General Wine & Liquor, ADA 321 = NWS Michigan.
-- MLCC requires a minimum of 9 liters PER ADA per order — not per cart.
-- Bottle quantities must follow split-case rules that vary by bottle size.
+KEY MLCC FACTS:
+- All Michigan spirits ordering goes through MLCC. There is no other wholesaler for spirits.
+- Orders are grouped by ADA (distributor). ADA 221 = General Wine & Liquor, ADA 321 = NWS Michigan.
+- MLCC requires at least 9 liters PER ADA per order — evaluated for each ADA separately, not for the cart as a whole.
+- Bottle quantities must follow split-case rules that vary by bottle size. An invalid quantity on a single line blocks the entire cart from validating.
 
-Style:
-- Be concise and practical. Operators are busy.
-- Lead with the answer, then supporting detail.
-- When you use data from a tool, state the concrete numbers.
-- If a tool returns no data (e.g. the store has no order history yet), say so plainly — do not invent data.
+HANDLING TOUGHER QUESTIONS:
+Owners are experienced business people and may be skeptical. Answer skeptical or challenging questions honestly and calmly — never dismissive, never overselling:
+- "Can I trust it to order correctly?" — The operator reviews and approves every cart before submission. Liquor Kings verifies the cart contents against what was requested, and validates MLCC's rules before submitting. Nothing is ordered without the operator's approval.
+- "Is this legal?" — Yes. Liquor Kings places orders through the same MLCC MILO system the operator uses manually. It changes how fast the order is entered — not what is ordered or who it goes to.
+- "What if it gets something wrong?" — Liquor Kings surfaces specific problems (out-of-stock items, invalid split quantities, under-minimum ADAs) before submitting, and the operator sees the full cart for review. If something is off, the operator catches it before it goes out.
+- If you genuinely do not know something, say so and point the owner to where they can find it. Never invent facts.
+
+YOUR LIMITS — be honest about these:
+- You cannot change MLCC's rules. You can only explain them.
+- The prices you report are the MLCC state-minimum retail price from the catalog. The actual licensee cost is lower after the licensee discount applies. ALWAYS note this when quoting a price.
+- You do not place orders yourself. The operator submits orders through the app.
+
+STYLE:
+- Concise and practical. Owners are busy.
+- Lead with the answer, then the supporting detail.
+- State concrete numbers from tool results.
+- If a tool returns no data, say so plainly — never invent data.
 - For general liquor questions not about the store's data (cocktail recipes, brand history), you may answer from general knowledge, but make clear it is general info.`;
 
 // ── Tool definitions (Anthropic tool-use schema) ──────────────────────────
@@ -164,6 +183,54 @@ const TOOLS = [
           description: "Max rows to return (default 25, max 100)",
         },
       },
+    },
+  },
+  {
+    name: "check_order_quantity",
+    description:
+      "Check whether an order quantity is valid for a bottle size under MLCC split-case rules, and get the list of legal quantities for that size. Use for 'can I order 8 of this', 'is 13 a valid quantity for a 750ml', or 'what quantities can I order for a 1.75L'. Provide a bottle size in mL OR an MLCC code (its size is looked up).",
+    input_schema: {
+      type: "object",
+      properties: {
+        quantity: {
+          type: "number",
+          description: "The quantity the owner wants to order",
+        },
+        size_ml: {
+          type: "number",
+          description:
+            "Bottle size in mL (e.g. 750, 1750). Provide this OR code.",
+        },
+        code: {
+          type: "string",
+          description:
+            "MLCC code — its bottle size will be looked up. Provide this OR size_ml.",
+        },
+      },
+      required: ["quantity"],
+    },
+  },
+  {
+    name: "validate_cart",
+    description:
+      "Validate a full cart of items against ALL MLCC rules at once — the per-ADA 9-liter minimum AND the per-size split-case quantity rules. Use this to answer 'why won't my cart validate', 'is this cart OK to submit', or to check a hypothetical order. Returns the per-ADA liter breakdown and every blocking problem with suggested fixes.",
+    input_schema: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          description: "The cart items to validate",
+          items: {
+            type: "object",
+            properties: {
+              code: { type: "string", description: "MLCC product code" },
+              quantity: { type: "number", description: "Quantity of bottles" },
+            },
+            required: ["code", "quantity"],
+          },
+        },
+      },
+      required: ["items"],
     },
   },
 ];
@@ -313,12 +380,115 @@ async function toolQueryInventory(input, { supabase, storeId }) {
   };
 }
 
+async function toolCheckOrderQuantity(input, { supabase }) {
+  const quantity = Number(input.quantity);
+  if (!Number.isFinite(quantity)) {
+    return { error: "check_order_quantity requires a numeric quantity" };
+  }
+  let sizeMl = Number(input.size_ml);
+  const code = input.code ? String(input.code).trim() : null;
+
+  // If no size given, look it up from the code.
+  if (!Number.isFinite(sizeMl) || sizeMl <= 0) {
+    if (!code) {
+      return { error: "provide either size_ml or code" };
+    }
+    const { data, error } = await supabase
+      .from("mlcc_items")
+      .select("code,name,size_ml")
+      .eq("code", code)
+      .maybeSingle();
+    if (error) return { error: `catalog lookup failed: ${error.message}` };
+    if (!data) return { error: `no catalog item found for code ${code}` };
+    sizeMl = Number(data.size_ml);
+  }
+
+  const result = validateQuantityForSize(quantity, sizeMl, code);
+  const allowed = SPLIT_CASE_RULES_BY_SIZE_ML[sizeMl];
+  return {
+    quantity,
+    size_ml: sizeMl,
+    code: code ?? undefined,
+    valid: result.valid,
+    reason:
+      result.reason ??
+      (result.valid ? "Quantity is valid for this bottle size." : undefined),
+    suggested_alternatives: result.suggestedAlternatives,
+    legal_split_quantities_for_size: Array.isArray(allowed)
+      ? allowed.length === 0
+        ? "full case only — no split orders allowed for this size"
+        : allowed
+      : "this size is not in the MLCC split-case table",
+  };
+}
+
+async function toolValidateCart(input, { supabase }) {
+  const items = Array.isArray(input.items) ? input.items : [];
+  if (items.length === 0) {
+    return { error: "validate_cart requires a non-empty items array" };
+  }
+
+  const codes = [
+    ...new Set(
+      items.map((i) => String(i?.code ?? "").trim()).filter(Boolean),
+    ),
+  ];
+  const { data, error } = await supabase
+    .from("mlcc_items")
+    .select("code,name,size_ml,ada_number,state_min_price")
+    .in("code", codes);
+  if (error) return { error: `catalog lookup failed: ${error.message}` };
+
+  const byCode = new Map((data ?? []).map((r) => [String(r.code), r]));
+  const unknownCodes = codes.filter((c) => !byCode.has(c));
+
+  // Build the cartItems shape validateCart expects: { code, bottle_size_ml,
+  // quantity, ada_number }. Enrich each requested code from the catalog.
+  const cartItems = [];
+  for (const item of items) {
+    const code = String(item?.code ?? "").trim();
+    const meta = byCode.get(code);
+    if (!meta) continue;
+    cartItems.push({
+      code,
+      name: meta.name,
+      bottle_size_ml: Number(meta.size_ml),
+      quantity: Number(item?.quantity),
+      ada_number: meta.ada_number,
+    });
+  }
+
+  if (cartItems.length === 0) {
+    return {
+      error: "none of the cart codes were found in the MLCC catalog",
+      unknown_codes: unknownCodes,
+    };
+  }
+
+  const result = validateCartRules(cartItems);
+  return {
+    valid: result.valid,
+    errors: result.errors,
+    ada_breakdown: result.adaBreakdown,
+    items_validated: cartItems.map((i) => ({
+      code: i.code,
+      name: i.name,
+      quantity: i.quantity,
+      size_ml: i.bottle_size_ml,
+      ada_number: i.ada_number,
+    })),
+    unknown_codes: unknownCodes.length ? unknownCodes : undefined,
+  };
+}
+
 const TOOL_IMPL = {
   query_catalog: toolQueryCatalog,
   query_rules: toolQueryRules,
   price_quote: toolPriceQuote,
   query_order_history: toolQueryOrderHistory,
   query_inventory: toolQueryInventory,
+  check_order_quantity: toolCheckOrderQuantity,
+  validate_cart: toolValidateCart,
 };
 
 async function runTool(name, input, ctx) {

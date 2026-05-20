@@ -34,17 +34,27 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-// Questions chosen to exercise different tools:
-//  1. catalog lookup
-//  2. rules lookup
-//  3. price math (catalog + price_quote)
-//  4. order history (store-scoped — empty until a store has runs)
-//  5. general knowledge fallback
+// Questions chosen to exercise every tool + the rebuttal handling.
 const QUESTIONS = [
+  // catalog
   "What's the MLCC code for Fris Vodka?",
+  // rules
   "What's the minimum order size from each distributor?",
+  // price_quote
   "How much would 12 bottles of MLCC code 100009 cost at state minimum?",
+  // check_order_quantity — valid split question
+  "Can I order 8 bottles of a 750ml product?",
+  // check_order_quantity — what's legal for a size
+  "What quantities am I allowed to order for a 1.75 liter bottle?",
+  // validate_cart — the 'why won't my cart validate' killer question
+  "Why won't my cart validate if it only has 6 bottles of code 100009?",
+  // order history (store-scoped — empty until a store has runs)
   "What were my last few orders?",
+  // rebuttal — trust
+  "How do I know this won't order the wrong thing?",
+  // rebuttal — legality
+  "Is it even legal to automate my liquor ordering like this?",
+  // general knowledge fallback
   "What's a classic cocktail made with vodka?",
 ];
 
