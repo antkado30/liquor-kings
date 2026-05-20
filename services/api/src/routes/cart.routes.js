@@ -10,10 +10,43 @@ import {
   DIAGNOSTIC_KIND,
   logSystemDiagnostic,
 } from "../services/diagnostics.service.js";
+import { validateCartByCodes } from "../lib/cart-validation.js";
 
 const router = express.Router();
 
 router.param("storeId", enforceParamStoreMatches);
+
+/**
+ * POST /cart/:storeId/validate
+ *
+ * Live cart validation against MLCC rules — per-ADA 9-liter minimum +
+ * per-size split-case quantity rules. The scanner calls this as the
+ * operator builds a cart, so per-ADA liter totals and rule violations
+ * surface BEFORE submit (instead of failing later at MILO).
+ *
+ * Body: { items: [{ code, quantity }, ...] }
+ * 200 → { ok, valid, errors, adaBreakdown, itemsValidated, unknownCodes }
+ * 400 → { ok:false, error } when items missing / no known codes
+ */
+router.post("/:storeId/validate", async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const result = await validateCartByCodes(supabase, body.items);
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        error: result.error,
+        unknownCodes: result.unknownCodes,
+      });
+    }
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    return res.status(500).json({
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+});
 
 router.patch(
   "/items/:itemId",

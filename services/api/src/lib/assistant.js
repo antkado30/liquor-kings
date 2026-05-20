@@ -32,9 +32,9 @@ import supabaseDefault from "../config/supabase.js";
 import { getAllActiveRules, getRulesByType } from "./mlcc-rules.js";
 import {
   validateQuantityForSize,
-  validateCart as validateCartRules,
   SPLIT_CASE_RULES_BY_SIZE_ML,
 } from "../mlcc/milo-ordering-rules.js";
+import { validateCartByCodes } from "./cart-validation.js";
 
 // Sonnet — the V1 model choice (strong tool-use, low per-question cost).
 // Override with ANTHROPIC_MODEL if the string changes.
@@ -459,61 +459,18 @@ async function toolCheckOrderQuantity(input, { supabase }) {
 }
 
 async function toolValidateCart(input, { supabase }) {
-  const items = Array.isArray(input.items) ? input.items : [];
-  if (items.length === 0) {
-    return { error: "validate_cart requires a non-empty items array" };
+  // Shared with the POST /cart/:storeId/validate endpoint — see
+  // lib/cart-validation.js. One rule engine, one enrichment path.
+  const result = await validateCartByCodes(supabase, input?.items);
+  if (!result.ok) {
+    return { error: result.error, unknown_codes: result.unknownCodes };
   }
-
-  const codes = [
-    ...new Set(
-      items.map((i) => String(i?.code ?? "").trim()).filter(Boolean),
-    ),
-  ];
-  const { data, error } = await supabase
-    .from("mlcc_items")
-    .select("code,name,size_ml,ada_number,state_min_price")
-    .in("code", codes);
-  if (error) return { error: `catalog lookup failed: ${error.message}` };
-
-  const byCode = new Map((data ?? []).map((r) => [String(r.code), r]));
-  const unknownCodes = codes.filter((c) => !byCode.has(c));
-
-  // Build the cartItems shape validateCart expects: { code, bottle_size_ml,
-  // quantity, ada_number }. Enrich each requested code from the catalog.
-  const cartItems = [];
-  for (const item of items) {
-    const code = String(item?.code ?? "").trim();
-    const meta = byCode.get(code);
-    if (!meta) continue;
-    cartItems.push({
-      code,
-      name: meta.name,
-      bottle_size_ml: Number(meta.size_ml),
-      quantity: Number(item?.quantity),
-      ada_number: meta.ada_number,
-    });
-  }
-
-  if (cartItems.length === 0) {
-    return {
-      error: "none of the cart codes were found in the MLCC catalog",
-      unknown_codes: unknownCodes,
-    };
-  }
-
-  const result = validateCartRules(cartItems);
   return {
     valid: result.valid,
     errors: result.errors,
     ada_breakdown: result.adaBreakdown,
-    items_validated: cartItems.map((i) => ({
-      code: i.code,
-      name: i.name,
-      quantity: i.quantity,
-      size_ml: i.bottle_size_ml,
-      ada_number: i.ada_number,
-    })),
-    unknown_codes: unknownCodes.length ? unknownCodes : undefined,
+    items_validated: result.itemsValidated,
+    unknown_codes: result.unknownCodes,
   };
 }
 
