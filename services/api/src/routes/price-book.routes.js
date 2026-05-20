@@ -34,6 +34,7 @@ import {
 } from "../mlcc/mlcc-product-family.js";
 import { getLatestPriceBookRun, ingestMlccPriceBook } from "../mlcc/mlcc-price-book-ingestor.js";
 import { runUpcEnrichment } from "../mlcc/mlcc-price-book-upc-enrichment.js";
+import { checkAndIngestIfPriceBookChanged } from "../mlcc/mlcc-price-book-scheduler.js";
 import { normalizeUpc } from "../lib/upc-normalize.js";
 
 /** When true, picker confirmations persist UPC onto `mlcc_items` (local cache for future scans). */
@@ -61,6 +62,32 @@ function requireServiceRole(req, res) {
   const auth = req.headers.authorization?.trim();
   const expected = `Bearer ${key}`;
   if (auth !== expected) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Auth for the cron-triggered auto-update endpoint. Uses a DEDICATED
+ * secret (LK_CRON_SECRET) — never the Supabase service-role key — because
+ * this token lives in a third-party cron service's config. Accepts the
+ * token via `X-Cron-Token` header (preferred) or `?token=` query param.
+ */
+function requireCronSecret(req, res) {
+  const secret = process.env.LK_CRON_SECRET;
+  if (!secret) {
+    res.status(500).json({ ok: false, error: "LK_CRON_SECRET not configured" });
+    return false;
+  }
+  const headerToken =
+    typeof req.headers["x-cron-token"] === "string"
+      ? req.headers["x-cron-token"].trim()
+      : "";
+  const queryToken =
+    typeof req.query.token === "string" ? req.query.token.trim() : "";
+  const provided = headerToken || queryToken;
+  if (!provided || provided !== secret) {
     res.status(401).json({ ok: false, error: "Unauthorized" });
     return false;
   }
@@ -166,6 +193,30 @@ router.post("/enrich-upcs", async (req, res) => {
       return res.json({ ok: false, ...result });
     }
     res.json(result);
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+});
+
+/**
+ * Auto-update check — designed to be hit by an external cron service
+ * (e.g. cron-job.org) once a day. Discovers the currently-published MLCC
+ * price book and ingests it ONLY if it differs from our last ingest.
+ * Idempotent and cheap when nothing changed (a single page fetch).
+ *
+ * Auth: X-Cron-Token header (or ?token= query) must equal LK_CRON_SECRET.
+ * Body: { force?: boolean } — force=true re-ingests even if URL unchanged.
+ */
+router.post("/check-updates", async (req, res) => {
+  if (!requireCronSecret(req, res)) return;
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const force = Boolean(body.force);
+    const result = await checkAndIngestIfPriceBookChanged(supabase, { force });
+    res.json({ ok: true, ...result });
   } catch (e) {
     res.status(500).json({
       ok: false,
