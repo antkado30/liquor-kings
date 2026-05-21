@@ -47,6 +47,7 @@ export function ScannerPage() {
   const [upcScanContext, setUpcScanContext] = useState<{ upc: string } | null>(null);
   /** When set, a search result tap writes `upc_mappings` for this scanned UPC. */
   const [upcBeingMapped, setUpcBeingMapped] = useState<string | null>(null);
+  const [upcMappingExpectedQuery, setUpcMappingExpectedQuery] = useState<string | null>(null);
   const [priceBookAge, setPriceBookAge] = useState<{
     status: "aging" | "stale";
     daysSinceUpdate: number;
@@ -75,6 +76,16 @@ export function ScannerPage() {
     return () => clearTimeout(t);
   }, [notFoundMsg]);
 
+  useEffect(() => {
+    if (upcBeingMapped == null) return;
+    if (upcMappingExpectedQuery == null) return;
+    // Auto-fill was non-empty AND user has cleared the search -> they abandoned this scan.
+    if (upcMappingExpectedQuery.trim().length > 0 && search.query.trim().length === 0) {
+      setUpcBeingMapped(null);
+      setUpcMappingExpectedQuery(null);
+    }
+  }, [search.query, upcBeingMapped, upcMappingExpectedQuery]);
+
   const openFamily = useCallback(async (p: MlccProduct, opts?: { upcForFlag?: string | null }) => {
     const fam = await getProductFamily(p.code);
     if (fam) {
@@ -93,6 +104,7 @@ export function ScannerPage() {
     async (code: string) => {
       const trimmed = code.trim();
       setUpcBeingMapped(null);
+      setUpcMappingExpectedQuery(null);
       try {
         const found = await getProductByCode(trimmed);
         if (found) {
@@ -141,18 +153,14 @@ export function ScannerPage() {
         if (upcRes.error === "upc_found_but_no_mlcc_match") {
           const name = upcRes.productName ?? "";
           setUpcBeingMapped(trimmed);
-          setToast(
-            "Found the bottle online but no MLCC row yet — search below. Your pick teaches the system.",
-          );
+          setUpcMappingExpectedQuery(name);
           search.setQuery(name);
           return;
         }
 
         if (upcRes.error === "no_upc_data_found" || upcRes.error === "upc_not_found") {
           setUpcBeingMapped(upcRes.upc ?? trimmed);
-          setToast(
-            "Bottle not in our database yet — search for it below. Your selection teaches the system.",
-          );
+          setUpcMappingExpectedQuery("");
           search.setQuery("");
           return;
         }
@@ -214,6 +222,28 @@ export function ScannerPage() {
 
       {scannerActive ? <BarcodeScanner active={scannerActive} onScan={handleScan} /> : null}
 
+      {upcBeingMapped ? (
+        <div className="upc-mapping-banner" role="status" aria-live="polite">
+          <div className="upc-mapping-banner__body">
+            <strong>Mapping UPC {upcBeingMapped}</strong>
+            <span className="upc-mapping-banner__hint">
+              Pick the matching product below — your selection saves the mapping forever.
+            </span>
+          </div>
+          <button
+            type="button"
+            className="upc-mapping-banner__close"
+            aria-label="Cancel mapping"
+            onClick={() => {
+              setUpcBeingMapped(null);
+              setUpcMappingExpectedQuery(null);
+            }}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
+
       <SearchBar
         value={search.query}
         onChange={search.setQuery}
@@ -258,6 +288,7 @@ export function ScannerPage() {
                         }
                       })();
                       setUpcBeingMapped(null);
+                      setUpcMappingExpectedQuery(null);
                     }
                     void openFamily(p, { upcForFlag: mapUpc ?? undefined });
                   }}

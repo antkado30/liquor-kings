@@ -363,6 +363,46 @@ select {
   cursor: pointer;
 }
 
+.upc-mapping-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 12px 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  background: rgba(56, 189, 248, 0.14);
+  color: #bae6fd;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.upc-mapping-banner__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.upc-mapping-banner__hint {
+  opacity: 0.85;
+  font-size: 0.85rem;
+}
+
+.upc-mapping-banner__close {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  margin: -6px -8px -6px 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .product-card-backdrop {
   position: fixed;
   inset: 0;
@@ -672,6 +712,76 @@ select {
   padding: 0;
 }
 
+.drawer-ada-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.drawer-ada-section {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px 10px 4px;
+}
+
+.drawer-ada-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.drawer-ada-title {
+  font-weight: 700;
+}
+
+.drawer-ada-progress-text {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.drawer-ada-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+  margin-top: 8px;
+}
+
+.drawer-ada-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.drawer-ada-progress-fill.is-met {
+  background: var(--success);
+}
+
+.drawer-ada-progress-fill.is-short {
+  background: #f59e0b;
+}
+
+.drawer-ada-needed {
+  margin: 8px 0 0;
+  color: #fdba74;
+  font-size: 0.85rem;
+}
+
+.drawer-ada-subtotal {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: -2px 0 8px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.drawer-ada-subtotal strong {
+  color: #c4b5fd;
+}
+
 .drawer-line {
   display: flex;
   justify-content: space-between;
@@ -751,6 +861,17 @@ select {
 
 .drawer-total strong {
   color: var(--accent);
+}
+
+.drawer-validation-notice {
+  margin: 0 0 10px;
+}
+
+.drawer-validation-errors {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  color: #fecaca;
+  font-size: 0.9rem;
 }
 
 .cart-page .top-bar {

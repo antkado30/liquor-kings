@@ -20,6 +20,15 @@ type PersistedCartV1 = {
   updatedAt: string;
 };
 
+export type AdaGroup = {
+  adaNumber: string;
+  adaName: string;
+  lines: CartItem[];
+  liters: number;
+  subtotalCost: number;
+  meetsMinimum: boolean;
+};
+
 function captureStorageError(error: unknown): void {
   if (typeof Sentry?.captureException === "function") {
     Sentry.captureException(error);
@@ -81,6 +90,7 @@ function saveCart(lines: CartItem[]): void {
 
 export type CartContextValue = {
   items: CartItem[];
+  groupedByAda: AdaGroup[];
   addItem: (product: MlccProduct, quantity: number) => void;
   removeItem: (mlccCode: string) => void;
   updateQuantity: (mlccCode: string, quantity: number) => void;
@@ -155,10 +165,36 @@ export function CartProvider({ children }: { children: ReactNode }) {
     () => items.reduce((s, c) => s + (c.product.licensee_price ?? 0) * c.quantity, 0),
     [items],
   );
+  const groupedByAda = useMemo<AdaGroup[]>(() => {
+    const byAda = new Map<string, AdaGroup>();
+    for (const line of items) {
+      const adaNumber = line.product.ada_number;
+      const existing = byAda.get(adaNumber);
+      const liters = ((line.product.bottle_size_ml ?? 0) * line.quantity) / 1000;
+      const lineSubtotal = (line.product.licensee_price ?? 0) * line.quantity;
+      if (existing) {
+        existing.lines.push(line);
+        existing.liters += liters;
+        existing.subtotalCost += lineSubtotal;
+        existing.meetsMinimum = existing.liters >= 9;
+      } else {
+        byAda.set(adaNumber, {
+          adaNumber,
+          adaName: line.product.ada_name || `ADA ${adaNumber}`,
+          lines: [line],
+          liters,
+          subtotalCost: lineSubtotal,
+          meetsMinimum: liters >= 9,
+        });
+      }
+    }
+    return [...byAda.values()].sort((a, b) => a.adaName.localeCompare(b.adaName));
+  }, [items]);
 
   const value = useMemo<CartContextValue>(
     () => ({
       items,
+      groupedByAda,
       addItem,
       removeItem,
       updateQuantity,
@@ -171,6 +207,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     }),
     [
       items,
+      groupedByAda,
       addItem,
       removeItem,
       updateQuantity,

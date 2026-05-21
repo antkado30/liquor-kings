@@ -136,3 +136,69 @@ export async function getActiveCart(): Promise<GetActiveCartResult> {
     items: Array.isArray(raw.items) ? (raw.items as ServerCartItem[]) : [],
   };
 }
+
+export type CartValidationResult =
+  | {
+      ok: true;
+      valid: boolean;
+      errors: Array<{
+        code: string | number;
+        reason: string;
+        suggestedAlternatives?: number[];
+      }>;
+      adaBreakdown: Record<string, { liters: number; meetsMinimum: boolean }>;
+      unknownCodes?: string[];
+    }
+  | { ok: false; error: string };
+
+export async function validateCart(
+  items: Array<{ code: string; quantity: number }>,
+): Promise<CartValidationResult> {
+  const url = `${CART_API_BASE}/${encodeURIComponent(getStoreId())}/validate`;
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      url,
+      {
+        method: "POST",
+        headers: {
+          ...getAuthHeaders(),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ items }),
+      },
+      { maxRetries: 2, baseDelayMs: 500, timeoutMs: 10_000 },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
+
+  if (!res.ok || raw.ok !== true) {
+    const err = typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`;
+    return { ok: false, error: err };
+  }
+
+  return {
+    ok: true,
+    valid: raw.valid === true,
+    errors: Array.isArray(raw.errors)
+      ? (raw.errors as Array<{
+          code: string | number;
+          reason: string;
+          suggestedAlternatives?: number[];
+        }>)
+      : [],
+    adaBreakdown:
+      raw.adaBreakdown && typeof raw.adaBreakdown === "object"
+        ? (raw.adaBreakdown as Record<string, { liters: number; meetsMinimum: boolean }>)
+        : {},
+    unknownCodes: Array.isArray(raw.unknownCodes) ? (raw.unknownCodes as string[]) : undefined,
+  };
+}

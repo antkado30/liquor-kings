@@ -1,3 +1,5 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { validateCart, type CartValidationResult } from "../api/cart";
 import { cartLineId, type CartContextValue } from "../hooks/useCart";
 import { useSubmission } from "../hooks/useSubmission";
 
@@ -12,10 +14,62 @@ type CartDrawerProps = {
 };
 
 export function CartDrawer({ cart, onClose }: CartDrawerProps) {
-  const { items, totalCost, clearCart, incrementQuantity, decrementQuantity, removeItem } = cart;
+  const { items, groupedByAda, totalCost, clearCart, incrementQuantity, decrementQuantity, removeItem } = cart;
   const submission = useSubmission();
   const { state, start, reset } = submission;
   const isBusy = state.kind === "syncing" || state.kind === "submitting" || state.kind === "polling";
+  const [isCheckingValidation, setIsCheckingValidation] = useState(false);
+  const [validationResult, setValidationResult] = useState<CartValidationResult | null>(null);
+  const validationRequestRef = useRef(0);
+
+  useEffect(() => {
+    if (items.length === 0) {
+      setIsCheckingValidation(false);
+      setValidationResult(null);
+      return;
+    }
+    const requestId = validationRequestRef.current + 1;
+    validationRequestRef.current = requestId;
+    const timer = window.setTimeout(() => {
+      setIsCheckingValidation(true);
+      void validateCart(items.map((line) => ({ code: line.product.code, quantity: line.quantity })))
+        .then((result) => {
+          if (validationRequestRef.current !== requestId) return;
+          setValidationResult(result);
+          setIsCheckingValidation(false);
+        })
+        .catch((error: unknown) => {
+          if (validationRequestRef.current !== requestId) return;
+          setValidationResult({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          setIsCheckingValidation(false);
+        });
+    }, 400);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [items]);
+
+  const hasDefinitiveValidationFailure =
+    validationResult?.ok === true && validationResult.valid === false;
+  const submitDisabled = isBusy || hasDefinitiveValidationFailure;
+
+  const validationBlockers = useMemo(() => {
+    if (validationResult?.ok !== true || validationResult.valid !== false) return [];
+    const blockers: string[] = validationResult.errors
+      .map((err) => err.reason)
+      .filter((reason) => reason.trim().length > 0);
+    for (const [adaNumber, info] of Object.entries(validationResult.adaBreakdown)) {
+      if (info.meetsMinimum) continue;
+      const matchedGroup = groupedByAda.find((group) => group.adaNumber === adaNumber);
+      const adaName = matchedGroup?.adaName || `ADA ${adaNumber}`;
+      const litersShort = Math.max(0, 9 - info.liters);
+      blockers.push(`${adaName} is ${litersShort.toFixed(2)} L under the 9 L minimum.`);
+    }
+    return [...new Set(blockers)];
+  }, [groupedByAda, validationResult]);
 
   const handleClose = () => {
     if (isBusy) return;
@@ -42,59 +96,101 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
             {items.length === 0 ? (
               <p className="drawer-empty muted">Your cart is empty — scan items to add them</p>
             ) : (
-              <ul className="drawer-list">
-                {items.map((line) => {
-                  const unit = line.product.licensee_price ?? 0;
-                  const lineTotal = unit * line.quantity;
-                  const size = line.product.bottle_size_label ?? `${line.product.bottle_size_ml ?? ""} ML`;
-                  const lineId = cartLineId(line.product);
-                  const atMin = line.quantity <= 1;
+              <div className="drawer-ada-groups">
+                {groupedByAda.map((group) => {
+                  const progressRatio = Math.min(group.liters / 9, 1);
+                  const litersShort = Math.max(0, 9 - group.liters);
                   return (
-                    <li key={lineId} className="drawer-line">
-                      <div className="drawer-line-main">
-                        <div className="drawer-line-title">{line.product.name}</div>
-                        <div className="muted small">{size}</div>
-                        <div className="drawer-line-controls">
-                          <div className="qty-stepper" role="group" aria-label="Quantity">
-                            <button
-                              type="button"
-                              className="qty-stepper__btn"
-                              aria-label="Decrease quantity"
-                              disabled={atMin}
-                              onClick={() => decrementQuantity(lineId)}
-                            >
-                              −
-                            </button>
-                            <span className="qty-stepper__value" aria-live="polite">
-                              {line.quantity}
-                            </span>
-                            <button
-                              type="button"
-                              className="qty-stepper__btn"
-                              aria-label="Increase quantity"
-                              onClick={() => incrementQuantity(lineId)}
-                            >
-                              +
-                            </button>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn text danger"
-                            onClick={() => removeItem(line.product.code)}
-                          >
-                            Remove
-                          </button>
+                    <section key={group.adaNumber} className="drawer-ada-section">
+                      <div className="drawer-ada-header">
+                        <div className="drawer-ada-title">{group.adaName}</div>
+                        <div className="drawer-ada-progress-text">
+                          {group.liters.toFixed(2)} L / 9.00 L
                         </div>
                       </div>
-                      <div className="drawer-line-total">{money(lineTotal)}</div>
-                    </li>
+                      <div className="drawer-ada-progress-track" aria-hidden="true">
+                        <div
+                          className={`drawer-ada-progress-fill ${group.meetsMinimum ? "is-met" : "is-short"}`}
+                          style={{ width: `${progressRatio * 100}%` }}
+                        />
+                      </div>
+                      {!group.meetsMinimum ? (
+                        <p className="drawer-ada-needed">Need {litersShort.toFixed(2)} L more from this distributor</p>
+                      ) : null}
+                      <ul className="drawer-list">
+                        {group.lines.map((line) => {
+                          const unit = line.product.licensee_price ?? 0;
+                          const lineTotal = unit * line.quantity;
+                          const size =
+                            line.product.bottle_size_label ?? `${line.product.bottle_size_ml ?? ""} ML`;
+                          const lineId = cartLineId(line.product);
+                          const atMin = line.quantity <= 1;
+                          return (
+                            <li key={lineId} className="drawer-line">
+                              <div className="drawer-line-main">
+                                <div className="drawer-line-title">{line.product.name}</div>
+                                <div className="muted small">{size}</div>
+                                <div className="drawer-line-controls">
+                                  <div className="qty-stepper" role="group" aria-label="Quantity">
+                                    <button
+                                      type="button"
+                                      className="qty-stepper__btn"
+                                      aria-label="Decrease quantity"
+                                      disabled={atMin}
+                                      onClick={() => decrementQuantity(lineId)}
+                                    >
+                                      −
+                                    </button>
+                                    <span className="qty-stepper__value" aria-live="polite">
+                                      {line.quantity}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="qty-stepper__btn"
+                                      aria-label="Increase quantity"
+                                      onClick={() => incrementQuantity(lineId)}
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="btn text danger"
+                                    onClick={() => removeItem(line.product.code)}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="drawer-line-total">{money(lineTotal)}</div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      <div className="drawer-ada-subtotal">
+                        <span>ADA subtotal</span>
+                        <strong>{money(group.subtotalCost)}</strong>
+                      </div>
+                    </section>
                   );
                 })}
-              </ul>
+              </div>
             )}
 
             {items.length > 0 ? (
               <>
+                {validationResult?.ok === false ? (
+                  <p className="drawer-validation-notice muted">
+                    Couldn&apos;t verify this cart right now ({validationResult.error}). You can still submit.
+                  </p>
+                ) : null}
+                {hasDefinitiveValidationFailure ? (
+                  <ul className="drawer-validation-errors">
+                    {validationBlockers.map((blocker) => (
+                      <li key={blocker}>{blocker}</li>
+                    ))}
+                  </ul>
+                ) : null}
                 <div className="drawer-total">
                   <span>Total</span>
                   <strong>{money(totalCost)}</strong>
@@ -105,11 +201,12 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                 <button
                   type="button"
                   className="btn primary btn-block"
+                  disabled={submitDisabled}
                   onClick={() => {
                     void start(items);
                   }}
                 >
-                  Validate & Submit
+                  {isCheckingValidation ? "Checking..." : "Validate & Submit"}
                 </button>
               </>
             ) : null}
