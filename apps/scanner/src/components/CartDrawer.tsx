@@ -14,7 +14,16 @@ type CartDrawerProps = {
 };
 
 export function CartDrawer({ cart, onClose }: CartDrawerProps) {
-  const { items, groupedByAda, totalCost, clearCart, incrementQuantity, decrementQuantity, removeItem } = cart;
+  const {
+    items,
+    groupedByAda,
+    totalCost,
+    clearCart,
+    incrementQuantity,
+    decrementQuantity,
+    removeItem,
+    updateQuantity,
+  } = cart;
   const submission = useSubmission();
   const { state, start, reset } = submission;
   const isBusy = state.kind === "syncing" || state.kind === "submitting" || state.kind === "polling";
@@ -56,9 +65,20 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
     validationResult?.ok === true && validationResult.valid === false;
   const submitDisabled = isBusy || hasDefinitiveValidationFailure;
 
+  // Cart-wide blockers shown above the submit button. Per-line split-case
+  // errors are NOT listed here — they render inline on their cart line
+  // (with tap-to-fix chips) below. ADA_-prefixed errors are skipped here
+  // too; the adaBreakdown loop produces a cleaner message for those.
   const validationBlockers = useMemo(() => {
     if (validationResult?.ok !== true || validationResult.valid !== false) return [];
+    const cartCodes = new Set(items.map((line) => line.product.code));
     const blockers: string[] = validationResult.errors
+      .filter((err) => {
+        const codeStr = String(err.code);
+        if (cartCodes.has(codeStr)) return false; // shown inline on the line
+        if (codeStr.startsWith("ADA_")) return false; // adaBreakdown loop covers it
+        return true;
+      })
       .map((err) => err.reason)
       .filter((reason) => reason.trim().length > 0);
     for (const [adaNumber, info] of Object.entries(validationResult.adaBreakdown)) {
@@ -69,7 +89,13 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
       blockers.push(`${adaName} is ${litersShort.toFixed(2)} L under the 9 L minimum.`);
     }
     return [...new Set(blockers)];
-  }, [groupedByAda, validationResult]);
+  }, [groupedByAda, validationResult, items]);
+
+  /** Split-case / quantity error for a specific cart line, if any. */
+  const lineErrorFor = (code: string) =>
+    validationResult?.ok === true
+      ? validationResult.errors.find((err) => String(err.code) === code)
+      : undefined;
 
   const handleClose = () => {
     if (isBusy) return;
@@ -125,6 +151,8 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                             line.product.bottle_size_label ?? `${line.product.bottle_size_ml ?? ""} ML`;
                           const lineId = cartLineId(line.product);
                           const atMin = line.quantity <= 1;
+                          const lineError = lineErrorFor(line.product.code);
+                          const suggestions = lineError?.suggestedAlternatives ?? [];
                           return (
                             <li key={lineId} className="drawer-line">
                               <div className="drawer-line-main">
@@ -161,6 +189,26 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                                     Remove
                                   </button>
                                 </div>
+                                {lineError ? (
+                                  <div className="drawer-line-error" role="alert">
+                                    <span className="drawer-line-error-text">{lineError.reason}</span>
+                                    {suggestions.length > 0 ? (
+                                      <div className="drawer-line-suggestions">
+                                        <span className="muted small">Fix:</span>
+                                        {suggestions.map((alt) => (
+                                          <button
+                                            key={alt}
+                                            type="button"
+                                            className="drawer-line-suggestion"
+                                            onClick={() => updateQuantity(line.product.code, alt)}
+                                          >
+                                            Set to {alt}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
                               </div>
                               <div className="drawer-line-total">{money(lineTotal)}</div>
                             </li>

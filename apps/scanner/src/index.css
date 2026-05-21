@@ -769,6 +769,42 @@ select {
   font-size: 0.85rem;
 }
 
+.drawer-line-error {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.drawer-line-error-text {
+  display: block;
+  color: #fdba74;
+  font-size: 0.82rem;
+}
+
+.drawer-line-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.drawer-line-suggestion {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.drawer-line-suggestion:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
 .drawer-ada-subtotal {
   display: flex;
   justify-content: space-between;
