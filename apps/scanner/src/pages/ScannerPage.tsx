@@ -11,6 +11,7 @@ import {
 import { Sentry } from "../lib/sentry";
 import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
+import { AssistantPanel } from "../components/AssistantPanel";
 import { ProductCard } from "../components/ProductCard";
 import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
 import { SearchBar } from "../components/SearchBar";
@@ -34,6 +35,7 @@ export function ScannerPage() {
   /** MLCC code of the row that opened the card — drives initial size tab in ProductCard. */
   const [productCardInitialCode, setProductCardInitialCode] = useState<string | undefined>(undefined);
   const [showCart, setShowCart] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [notFoundMsg, setNotFoundMsg] = useState(false);
   const [upcCandidates, setUpcCandidates] = useState<{
@@ -182,6 +184,16 @@ export function ScannerPage() {
       <header className="top-bar">
         <h1 className="top-bar-title">Liquor Kings</h1>
         <div className="top-bar-actions">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setShowAssistant(true)}
+            aria-label="Open assistant"
+          >
+            <span className="assistant-glyph" aria-hidden>
+              💬
+            </span>
+          </button>
           <button type="button" className="icon-btn cart-btn" onClick={() => setShowCart(true)} aria-label="Open cart">
             <span className="cart-glyph" aria-hidden>
               🛒
@@ -337,6 +349,8 @@ export function ScannerPage() {
           }}
         />
       ) : null}
+
+      {showAssistant ? <AssistantPanel onClose={() => setShowAssistant(false)} /> : null}
 
       {upcCandidates ? (
         <>

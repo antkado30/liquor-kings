@@ -805,6 +805,94 @@ select {
   background: rgba(255, 255, 255, 0.14);
 }
 
+/* ── AI assistant chat panel ─────────────────────────────────────── */
+
+.assistant-glyph {
+  font-size: 1.25rem;
+}
+
+.assistant-messages {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+  min-height: 220px;
+}
+
+.assistant-empty {
+  margin: auto 0;
+  text-align: center;
+}
+
+.assistant-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.assistant-suggestion {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.assistant-suggestion:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.assistant-msg {
+  max-width: 85%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant-msg--user {
+  align-self: flex-end;
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.assistant-msg--assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.08);
+  border-bottom-left-radius: 4px;
+}
+
+.assistant-msg--loading {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.assistant-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.assistant-input {
+  flex: 1 1 auto;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
 .drawer-ada-subtotal {
   display: flex;
   justify-content: space-between;
