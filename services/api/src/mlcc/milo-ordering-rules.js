@@ -61,9 +61,14 @@ export const KNOWN_ADAS = Object.freeze({
  * @param {number} quantity - Quantity requested
  * @param {number} sizeML - Bottle size in ml
  * @param {string|number} code - MLCC product code (for 70000-series check)
+ * @param {number} [caseSize] - Bottles per full case. Required to validate
+ *   full-case-only sizes (50ml / 100ml): a valid order is any whole multiple
+ *   of the case size (e.g. 50ml minis in cases of 60 → 60, 120, ... valid).
+ *   The case size is product-specific, so when it is omitted for one of
+ *   those sizes the quantity cannot be verified and is rejected.
  * @returns {{valid: boolean, reason?: string, suggestedAlternatives?: number[]}}
  */
-export function validateQuantityForSize(quantity, sizeML, code) {
+export function validateQuantityForSize(quantity, sizeML, code, caseSize) {
   const q = Number(quantity);
   if (!Number.isFinite(q) || q <= 0 || !Number.isInteger(q)) {
     return { valid: false, reason: "Quantity must be a positive integer" };
@@ -86,11 +91,28 @@ export function validateQuantityForSize(quantity, sizeML, code) {
     };
   }
 
-  // Empty array means no splits — full case only (quantity must equal case size)
+  // Empty array means no splits — full case only. A valid quantity is any
+  // whole multiple of the case size (one or more complete cases). The case
+  // size is product-specific (50ml minis ship 60 or 144 to a case depending
+  // on the product), so it must be supplied to verify the quantity.
   if (allowedMultiples.length === 0) {
+    const cs = Number(caseSize);
+    if (!Number.isInteger(cs) || cs <= 0) {
+      return {
+        valid: false,
+        reason: `Size ${sizeML}ml is full-case-only; cannot verify quantity ${q} without a known case size`,
+      };
+    }
+    if (q % cs === 0) return { valid: true };
+    const suggestions = [];
+    const fullCaseBelow = Math.floor(q / cs) * cs;
+    if (fullCaseBelow >= cs) suggestions.push(fullCaseBelow);
+    const fullCaseAbove = Math.ceil(q / cs) * cs;
+    if (!suggestions.includes(fullCaseAbove)) suggestions.push(fullCaseAbove);
     return {
       valid: false,
-      reason: `Size ${sizeML}ml does not allow split cases; must order full case`,
+      reason: `Size ${sizeML}ml is full-case-only; quantity ${q} is not a whole multiple of the ${cs}-bottle case`,
+      suggestedAlternatives: suggestions.sort((a, b) => a - b),
     };
   }
 
@@ -146,13 +168,18 @@ export function validateAdaMinimums(cartItems) {
 
 /**
  * Validate a full cart (array of items) against all MILO rules.
- * @param {Array<{code: string|number, bottle_size_ml: number, quantity: number, ada_number?: string}>} cartItems
+ * @param {Array<{code: string|number, bottle_size_ml: number, quantity: number, ada_number?: string, case_size?: number}>} cartItems
  * @returns {{ valid: boolean, errors: Array<{code: string|number, reason: string, suggestedAlternatives?: number[]}>, adaBreakdown: Record<string, {liters: number, meetsMinimum: boolean}> }}
  */
 export function validateCart(cartItems) {
   const errors = [];
   for (const item of cartItems) {
-    const result = validateQuantityForSize(item.quantity, item.bottle_size_ml, item.code);
+    const result = validateQuantityForSize(
+      item.quantity,
+      item.bottle_size_ml,
+      item.code,
+      item.case_size,
+    );
     if (!result.valid) {
       errors.push({
         code: item.code,

@@ -23,13 +23,19 @@
  *   STAGES=1,2     — login + navigate to products (default)
  *   STAGES=1,2,3   — login + navigate + add items (requires MLCC_CODES)
  *   STAGES=1,2,3,4 — login + navigate + add + validate (requires MLCC_CODES)
+ *   STAGES=1,2,3,4,5 — full run incl. checkout (Stage 5 submits ONLY when armed)
  *
+ * MLCC_CART — comma-separated code:qty pairs for a REAL order with per-line
+ *   quantities, e.g. "2086:6,7746:3,9603:1". Takes precedence over MLCC_CODES.
  * MLCC_CODES — comma-separated MLCC codes to add in Stage 3, e.g. "5246,12184"
- * MLCC_QUANTITY — quantity to apply to every code (default 1). Use to build
- *   a cart that meets MLCC's per-ADA 9L minimum, e.g. MLCC_QUANTITY=6 with
- *   two 750mL codes on the same ADA = 9L exactly.
+ * MLCC_QUANTITY — quantity to apply to every code (default 1; only used with
+ *   MLCC_CODES). Use to build a cart that meets MLCC's per-ADA 9L minimum,
+ *   e.g. MLCC_QUANTITY=6 with two 750mL codes on the same ADA = 9L exactly.
  *
- * Stage 5 (checkout/submit) is intentionally never run by this script.
+ * MLCC_SUBMIT — set to "yes" to ARM Stage 5 to actually submit the order.
+ *   Stage 5 submits ONLY when STAGES includes 5 AND MLCC_SUBMIT=yes AND the
+ *   container env LK_ALLOW_ORDER_SUBMISSION=yes. Any lock missing → Stage 5
+ *   runs in dry_run mode (walks to checkout, never clicks submit).
  *
  * Output dir: /tmp/rpa-test/<timestamp>/ — screenshots, HTML snapshots,
  *   video. Download with `flyctl ssh sftp shell` if needed.
@@ -39,6 +45,7 @@ import { loginToMilo } from "../src/rpa/stages/login.js";
 import { navigateToProducts } from "../src/rpa/stages/navigate-to-products.js";
 import { addItemsToCart } from "../src/rpa/stages/add-items-to-cart.js";
 import { validateCartOnMilo } from "../src/rpa/stages/validate-cart.js";
+import { checkoutOnMilo } from "../src/rpa/stages/checkout.js";
 
 function ts() {
   const d = new Date();
@@ -51,14 +58,44 @@ const password = process.env.MLCC_PASSWORD?.trim();
 const licenseNumber = process.env.MLCC_LICENSE?.trim();
 const stagesEnv = (process.env.STAGES ?? "1,2").trim();
 const stages = new Set(stagesEnv.split(",").map((s) => s.trim()).filter(Boolean));
+const cartEnv = (process.env.MLCC_CART ?? "").trim();
 const codesEnv = (process.env.MLCC_CODES ?? "").trim();
-const codes = codesEnv ? codesEnv.split(",").map((s) => s.trim()).filter(Boolean) : [];
-// MLCC_QUANTITY applies the same quantity to every code (default 1). Used to
-// build a cart that clears MLCC's per-ADA 9L minimum without listing each
-// bottle individually. Example: MLCC_CODES="100001,100009" MLCC_QUANTITY=6
-// → 6 bottles of each code = 12 bottles total. If both codes are ADA 221,
-// total ADA 221 volume = 12 × 750mL = 9L exactly.
+// MLCC_QUANTITY applies the same quantity to every code (default 1). Used
+// ONLY with MLCC_CODES to build a cart that clears MLCC's per-ADA 9L minimum
+// without listing each bottle. Example: MLCC_CODES="100001,100009"
+// MLCC_QUANTITY=6 → 6 of each code. Ignored when MLCC_CART is set.
 const quantityPerCode = Math.max(1, parseInt(process.env.MLCC_QUANTITY ?? "1", 10) || 1);
+
+// MLCC_CART takes precedence: comma-separated code:qty pairs for a real order
+// with per-line quantities (e.g. "2086:6,7746:3"). Falls back to MLCC_CODES.
+/** @type {{code: string, quantity: number}[]} */
+let cartLines = [];
+if (cartEnv) {
+  const parseErrors = [];
+  cartLines = cartEnv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const [rawCode, rawQty] = pair.split(":").map((x) => (x ?? "").trim());
+      const quantity = parseInt(rawQty, 10);
+      if (!rawCode || !Number.isInteger(quantity) || quantity <= 0) {
+        parseErrors.push(pair);
+      }
+      return { code: rawCode, quantity };
+    });
+  if (parseErrors.length) {
+    console.error(`MLCC_CART has invalid entries (expected code:qty): ${parseErrors.join(", ")}`);
+    process.exit(1);
+  }
+} else if (codesEnv) {
+  cartLines = codesEnv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((code) => ({ code, quantity: quantityPerCode }));
+}
+const codes = cartLines.map((l) => l.code);
 
 if (!username || !password) {
   console.error("Missing MLCC_USERNAME or MLCC_PASSWORD");
@@ -80,6 +117,7 @@ console.log(`[test] running stages: ${[...stages].sort().join(",")}`);
 let session = null;
 let stage2Result = null;
 let stage3Result = null;
+let stage4Result = null;
 
 // ---- Stage 1: login ----
 if (stages.has("1")) {
@@ -165,9 +203,9 @@ if (stages.has("3")) {
       console.error("  (the test script requires bottle_size_ml; ensure the catalog has size data for these codes)");
       process.exit(1);
     }
-    items = codes.map((code) => ({
+    items = cartLines.map(({ code, quantity }) => ({
       code,
-      quantity: quantityPerCode,
+      quantity,
       bottle_size_ml: Number(sizeByCode.get(code)),
     }));
     const totalBottles = items.reduce((sum, i) => sum + i.quantity, 0);
@@ -251,7 +289,7 @@ if (stages.has("4")) {
   }
   console.log(`\n[stage 4] validating cart...`);
   try {
-    const stage4Result = await validateCartOnMilo(stage3Result, {
+    stage4Result = await validateCartOnMilo(stage3Result, {
       captureArtifacts: true,
       outputDir: `${outputDir}/stage4`,
     });
@@ -274,8 +312,57 @@ if (stages.has("4")) {
   }
 }
 
-// ---- never run stage 5 from this test script ----
-console.log(`\n[test] stopping before Stage 5 (checkout) — dry-run by design`);
+// ---- Stage 5: checkout ----
+// Triple-locked. Submits ONLY when: STAGES includes 5, MLCC_SUBMIT=yes (this
+// script), and LK_ALLOW_ORDER_SUBMISSION=yes (container env, checked inside
+// checkoutOnMilo). Any lock missing → checkoutOnMilo runs in dry_run mode:
+// it walks to the checkout button but never clicks submit.
+if (stages.has("5")) {
+  if (!stage4Result) {
+    console.error("[stage 5] needs a Stage 4 session — run STAGES with 4 included");
+    process.exit(1);
+  }
+  const submitArmed = (process.env.MLCC_SUBMIT ?? "").trim().toLowerCase() === "yes";
+  console.log(
+    `\n[stage 5] checkout — ${submitArmed ? "ARMED: will SUBMIT this order" : "dry_run: will NOT submit"}...`,
+  );
+  try {
+    const stage5Result = await checkoutOnMilo(stage4Result, {
+      mode: submitArmed ? "submit" : "dry_run",
+      allowOrderSubmission: submitArmed,
+      captureArtifacts: true,
+      outputDir: `${outputDir}/stage5`,
+    });
+    console.log(`[stage 5] OK in ${stage5Result.stage5DurationMs ?? "?"}ms`);
+    console.log(`  mode: ${stage5Result.mode}`);
+    console.log(`  submitted: ${stage5Result.submitted}`);
+    if (stage5Result.dryRunReason) {
+      console.log(`  dry-run reason: ${stage5Result.dryRunReason}`);
+    }
+    if (stage5Result.confirmationNumbers) {
+      console.log(`  CONFIRMATION NUMBERS: ${JSON.stringify(stage5Result.confirmationNumbers)}`);
+    }
+    if (stage5Result.submittedTimestamp) {
+      console.log(`  submitted at: ${stage5Result.submittedTimestamp}`);
+    }
+    if (stage5Result.confirmationEmail) {
+      console.log(`  confirmation email: ${stage5Result.confirmationEmail}`);
+    }
+    if (stage5Result.successToastMessages?.length) {
+      console.log(`  success toasts: ${JSON.stringify(stage5Result.successToastMessages)}`);
+    }
+    if (stage5Result.errorToastMessages?.length) {
+      console.log(`  error toasts: ${JSON.stringify(stage5Result.errorToastMessages)}`);
+    }
+  } catch (e) {
+    console.error(`[stage 5] FAILED — ${e.code ?? "(no code)"}: ${e.message}`);
+    if (e.details) console.error("  details:", JSON.stringify(e.details));
+    if (e.screenshotPath) console.error("  screenshot:", e.screenshotPath);
+  }
+} else {
+  console.log(`\n[test] Stage 5 not requested — stopped after Stage 4 (dry run by design)`);
+}
+
 console.log(`[test] artifacts: ${outputDir}`);
 
 if (session?.browser) {

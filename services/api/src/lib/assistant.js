@@ -423,23 +423,30 @@ async function toolCheckOrderQuantity(input, { supabase }) {
   }
   let sizeMl = Number(input.size_ml);
   const code = input.code ? String(input.code).trim() : null;
+  let caseSize = Number(input.case_size);
+  if (!Number.isInteger(caseSize) || caseSize <= 0) caseSize = undefined;
 
-  // If no size given, look it up from the code.
-  if (!Number.isFinite(sizeMl) || sizeMl <= 0) {
-    if (!code) {
-      return { error: "provide either size_ml or code" };
-    }
+  // Look up size_ml / case_size from the code when either is needed. case_size
+  // is required to verify full-case-only sizes (50ml / 100ml).
+  if (code && (!Number.isFinite(sizeMl) || sizeMl <= 0 || caseSize === undefined)) {
     const { data, error } = await supabase
       .from("mlcc_items")
-      .select("code,name,size_ml")
+      .select("code,name,size_ml,case_size")
       .eq("code", code)
       .maybeSingle();
     if (error) return { error: `catalog lookup failed: ${error.message}` };
     if (!data) return { error: `no catalog item found for code ${code}` };
-    sizeMl = Number(data.size_ml);
+    if (!Number.isFinite(sizeMl) || sizeMl <= 0) sizeMl = Number(data.size_ml);
+    if (caseSize === undefined && data.case_size != null) {
+      const cs = Number(data.case_size);
+      if (Number.isInteger(cs) && cs > 0) caseSize = cs;
+    }
+  }
+  if (!Number.isFinite(sizeMl) || sizeMl <= 0) {
+    return { error: "provide either size_ml or code" };
   }
 
-  const result = validateQuantityForSize(quantity, sizeMl, code);
+  const result = validateQuantityForSize(quantity, sizeMl, code, caseSize);
   const allowed = SPLIT_CASE_RULES_BY_SIZE_ML[sizeMl];
   return {
     quantity,

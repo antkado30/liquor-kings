@@ -963,7 +963,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     if (!Array.isArray(codes) || codes.length === 0) return {};
     const { data, error } = await workerSupabase
       .from("mlcc_items")
-      .select("code, ada_number")
+      .select("code, ada_number, case_size")
       .in("code", codes);
     if (error) {
       throw new Error(`mlccLookup failed: ${error.message}`);
@@ -971,7 +971,10 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     const result = {};
     for (const row of data ?? []) {
       if (row.code) {
-        result[row.code] = { ada_number: row.ada_number ?? null };
+        result[row.code] = {
+          ada_number: row.ada_number ?? null,
+          case_size: row.case_size ?? null,
+        };
       }
     }
     return result;

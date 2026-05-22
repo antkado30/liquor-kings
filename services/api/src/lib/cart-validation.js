@@ -42,7 +42,7 @@ export async function validateCartByCodes(supabase, items) {
 
   const { data, error } = await supabase
     .from("mlcc_items")
-    .select("code,name,size_ml,ada_number")
+    .select("code,name,size_ml,ada_number,case_size")
     .in("code", codes);
   if (error) {
     return { ok: false, error: `catalog lookup failed: ${error.message}` };
@@ -64,6 +64,12 @@ export async function validateCartByCodes(supabase, items) {
       bottle_size_ml: Number(meta.size_ml),
       quantity: Number(item?.quantity),
       ada_number: meta.ada_number,
+      // case_size lets the rule engine validate full-case-only sizes
+      // (50/100ml): a valid order is a whole multiple of the case.
+      case_size:
+        meta.case_size != null && Number(meta.case_size) > 0
+          ? Number(meta.case_size)
+          : undefined,
     });
   }
 

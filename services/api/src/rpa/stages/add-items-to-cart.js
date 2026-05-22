@@ -1,7 +1,17 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { BLOCKLIST_RE, clickSafely, waitForAngularStable, waitForSpaNavigation } from "../milo-discovery.js";
-import { validateCart } from "../../mlcc/milo-ordering-rules.js";
+import { validateCart, SPLIT_CASE_RULES_BY_SIZE_ML } from "../../mlcc/milo-ordering-rules.js";
+
+/**
+ * A size is "full-case-only" when its split-case rule is an empty array
+ * (50ml / 100ml). Pre-validation needs the per-product case size to verify
+ * quantities for those sizes — see validateQuantityForSize.
+ */
+function isFullCaseOnlySize(sizeMl) {
+  const rule = SPLIT_CASE_RULES_BY_SIZE_ML[sizeMl];
+  return Array.isArray(rule) && rule.length === 0;
+}
 
 // 240s overall budget for Stage 3 — same reasoning as the Stage 2 bump
 // from 45s → 90s on 2026-05-14. Internal waits on a slow-MILO day can
@@ -117,23 +127,37 @@ async function validateItemsInput(items, { skipPreValidation = false, mlccLookup
     throw createStage3Error("MILO_STAGE3_INVALID_ITEMS", "One or more items are invalid", { issues });
   }
 
-  const normalized = items.map((item) => ({
-    code: String(item.code).trim(),
-    quantity: Number(item.quantity),
-    bottle_size_ml: Number(item.bottle_size_ml),
-    ada_number:
-      typeof item.ada_number === "string" && item.ada_number.trim() !== "" ? item.ada_number.trim() : undefined,
-    expected_name: item.expected_name ? String(item.expected_name).trim() : "",
-  }));
+  const normalized = items.map((item) => {
+    const cs = Number(item.case_size);
+    return {
+      code: String(item.code).trim(),
+      quantity: Number(item.quantity),
+      bottle_size_ml: Number(item.bottle_size_ml),
+      // case_size is only needed to validate full-case-only sizes (50/100ml);
+      // carried through when a caller supplies it, otherwise filled by lookup.
+      case_size: Number.isInteger(cs) && cs > 0 ? cs : undefined,
+      ada_number:
+        typeof item.ada_number === "string" && item.ada_number.trim() !== "" ? item.ada_number.trim() : undefined,
+      expected_name: item.expected_name ? String(item.expected_name).trim() : "",
+    };
+  });
 
   if (!skipPreValidation) {
-    const missingAdaItems = normalized.filter((item) => !item.ada_number);
-    if (missingAdaItems.length > 0) {
+    // Pre-validation needs ada_number (per-ADA 9L check) for every item, and
+    // case_size for full-case-only sizes (50/100ml). Hit the MLCC lookup when
+    // a caller has not already supplied what we need — a 750ml-only cart with
+    // ada_numbers given still needs no lookup (no behavior change there).
+    const needsLookup = normalized.some(
+      (item) =>
+        !item.ada_number ||
+        (isFullCaseOnlySize(item.bottle_size_ml) && item.case_size == null),
+    );
+    if (needsLookup) {
       if (typeof mlccLookup !== "function") {
         throw createStage3Error(
           "MILO_STAGE3_MLCC_LOOKUP_MISSING",
           "mlccLookup function required for pre-validation. Pass options.mlccLookup or set skipPreValidation=true.",
-          { missingAdaCodes: missingAdaItems.map((x) => x.code) },
+          { missingAdaCodes: normalized.filter((x) => !x.ada_number).map((x) => x.code) },
         );
       }
       const uniqueCodes = [...new Set(normalized.map((x) => x.code))];
@@ -147,6 +171,10 @@ async function validateItemsInput(items, { skipPreValidation = false, mlccLookup
       for (const item of normalized) {
         if (!item.ada_number) {
           item.ada_number = String(lookup[item.code].ada_number);
+        }
+        if (item.case_size == null) {
+          const cs = Number(lookup[item.code].case_size);
+          if (Number.isInteger(cs) && cs > 0) item.case_size = cs;
         }
       }
     }

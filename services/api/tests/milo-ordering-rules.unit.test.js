@@ -126,6 +126,47 @@ describe("validateQuantityForSize", () => {
   });
 });
 
+describe("validateQuantityForSize — full-case-only sizes (50ml / 100ml)", () => {
+  /**
+   * 50ml/100ml allow NO splits, but a whole case IS orderable (the store
+   * orders Crown Royal 50ml minis a full case of 60 every week). The case
+   * size is product-specific, so it must be supplied. Regression guard:
+   * before this, EVERY 50/100ml line was hard-rejected, even a full case.
+   */
+  it("accepts a single full case when case size is supplied", () => {
+    expect(validateQuantityForSize(60, 50, "3378", 60).valid).toBe(true);
+    expect(validateQuantityForSize(48, 100, "9124", 48).valid).toBe(true);
+  });
+
+  it("accepts multiple whole cases", () => {
+    expect(validateQuantityForSize(120, 50, "3378", 60).valid).toBe(true);
+    expect(validateQuantityForSize(180, 50, "3378", 60).valid).toBe(true);
+  });
+
+  it("rejects a partial case and suggests whole-case quantities", () => {
+    const r = validateQuantityForSize(30, 50, "3378", 60);
+    expect(r.valid).toBe(false);
+    expect(r.suggestedAlternatives).toContain(60);
+  });
+
+  it("rejects a quantity between two cases (90 of a 60-case = 1.5 cases)", () => {
+    const r = validateQuantityForSize(90, 50, "3378", 60);
+    expect(r.valid).toBe(false);
+    expect(r.suggestedAlternatives).toEqual([60, 120]);
+  });
+
+  it("rejects when case size is missing — cannot verify a full-case-only size", () => {
+    const r = validateQuantityForSize(60, 50, "3378");
+    expect(r.valid).toBe(false);
+    expect(r.reason).toMatch(/case size/i);
+  });
+
+  it("rejects when case size is zero or not an integer", () => {
+    expect(validateQuantityForSize(60, 50, "3378", 0).valid).toBe(false);
+    expect(validateQuantityForSize(60, 50, "3378", 12.5).valid).toBe(false);
+  });
+});
+
 describe("validateAdaMinimums", () => {
   it("a single ADA at exactly 9L meets the minimum", () => {
     // 12 bottles x 750ml = 9000ml = 9L
@@ -204,5 +245,33 @@ describe("validateCart", () => {
     const hasAdaError = r.errors.some((e) => String(e.code).startsWith("ADA_"));
     expect(hasQtyError).toBe(true);
     expect(hasAdaError).toBe(true);
+  });
+
+  it("passes a 50ml full-case line when case_size is supplied and the ADA clears 9L", () => {
+    // 60 x 50ml = 3L + 12 x 750ml = 9L → 12L on ADA 321, both rules satisfied.
+    const r = validateCart([
+      { code: "3378", bottle_size_ml: 50, quantity: 60, ada_number: "321", case_size: 60 },
+      { code: "100009", bottle_size_ml: 750, quantity: 12, ada_number: "321" },
+    ]);
+    expect(r.valid).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+
+  it("flags a 50ml line at a non-case quantity even when the ADA clears 9L", () => {
+    const r = validateCart([
+      { code: "3378", bottle_size_ml: 50, quantity: 30, ada_number: "321", case_size: 60 },
+      { code: "100009", bottle_size_ml: 750, quantity: 12, ada_number: "321" },
+    ]);
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => String(e.code) === "3378")).toBe(true);
+  });
+
+  it("flags a 50ml line when case_size is absent — quantity cannot be verified", () => {
+    const r = validateCart([
+      { code: "3378", bottle_size_ml: 50, quantity: 60, ada_number: "321" },
+      { code: "100009", bottle_size_ml: 750, quantity: 12, ada_number: "321" },
+    ]);
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => String(e.code) === "3378")).toBe(true);
   });
 });
