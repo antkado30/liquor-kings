@@ -13,6 +13,14 @@ const DEFAULT_LOGIN_URL = "https://www.lara.michigan.gov/milo/auth/sign-in";
 const DEFAULT_TIMEOUT_MS = 90_000;
 const LOGIN_CLICK_TIMEOUT_MS = 15_000;
 const GOTO_TIMEOUT_MS = 15_000;
+// Retry policy. A transient cold-start failure — Playwright "Target page,
+// context or browser has been closed" on first launch, or an unreachable
+// login page — should not kill a run the next attempt would complete fine.
+// ONLY MILO_LOGIN_NETWORK_ERROR is retried. Invalid credentials are NEVER
+// retried (repeated bad-password attempts can lock the MLCC account); CAPTCHA
+// and security violations are deterministic and equally pointless to retry.
+const DEFAULT_LOGIN_ATTEMPTS = 3;
+const RETRYABLE_LOGIN_CODES = new Set(["MILO_LOGIN_NETWORK_ERROR"]);
 const INVALID_CREDENTIALS_RE = /invalid|incorrect|wrong|not\s*found|does\s*not\s*match/i;
 const CAPTCHA_RE = /captcha|recaptcha|hcaptcha/i;
 
@@ -103,22 +111,30 @@ async function detectCaptcha(page) {
   return { detected: false, selector: null };
 }
 
+// Best-effort: capturing artifacts must NEVER fail a stage. Any error here
+// (page closed mid-screenshot, disk issue) is swallowed so a successful
+// login is never reported as a failure over a screenshot.
 async function captureArtifact(page, outputDir, artifacts, baseName) {
-  const bodyHtml = await page.evaluate(() => {
-    const clone = document.documentElement.cloneNode(true);
-    clone.querySelectorAll('input[type="password"]').forEach((input) => {
-      input.value = "";
-      input.setAttribute("value", "");
+  if (!outputDir) return;
+  try {
+    const bodyHtml = await page.evaluate(() => {
+      const clone = document.documentElement.cloneNode(true);
+      clone.querySelectorAll('input[type="password"]').forEach((input) => {
+        input.value = "";
+        input.setAttribute("value", "");
+      });
+      return `<!DOCTYPE html>\n${clone.outerHTML}`;
     });
-    return `<!DOCTYPE html>\n${clone.outerHTML}`;
-  });
-  const htmlPath = path.join(outputDir, `${baseName}.html`);
-  const pngPath = path.join(outputDir, `${baseName}.png`);
-  const urlPath = path.join(outputDir, `${baseName}.url.txt`);
-  await writeFile(htmlPath, bodyHtml, "utf8");
-  await page.screenshot({ path: pngPath, fullPage: true });
-  await writeFile(urlPath, `${page.url()}\n`, "utf8");
-  artifacts.push(htmlPath, pngPath, urlPath);
+    const htmlPath = path.join(outputDir, `${baseName}.html`);
+    const pngPath = path.join(outputDir, `${baseName}.png`);
+    const urlPath = path.join(outputDir, `${baseName}.url.txt`);
+    await writeFile(htmlPath, bodyHtml, "utf8");
+    await page.screenshot({ path: pngPath, fullPage: true });
+    await writeFile(urlPath, `${page.url()}\n`, "utf8");
+    artifacts.push(htmlPath, pngPath, urlPath);
+  } catch {
+    /* best-effort — never fail a stage over artifact capture */
+  }
 }
 
 async function captureFailureScreenshot(page, outputDir, artifacts, baseName) {
@@ -221,6 +237,10 @@ export async function loginToMilo(credentials, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
   const headless = options.headless ?? true;
   const slowMo = Number.isFinite(options.slowMo) ? Number(options.slowMo) : 250;
+  const maxAttempts =
+    Number.isInteger(options.maxAttempts) && options.maxAttempts > 0
+      ? options.maxAttempts
+      : DEFAULT_LOGIN_ATTEMPTS;
   const captureArtifacts = options.captureArtifacts ?? true;
   const executionRunId = options.executionRunId ? String(options.executionRunId) : null;
   const artifacts = [];
@@ -454,19 +474,36 @@ export async function loginToMilo(credentials, options = {}) {
     }
   };
 
-  try {
-    return await withOverallTimeout(runFlow(), timeoutMs);
-  } catch (error) {
-    const isTimeout = error?.code === "MILO_LOGIN_TIMEOUT";
-    if (isTimeout && page) {
-      const screenshotPath = await captureFailureScreenshot(page, outputDir, artifacts, "error-overall-timeout");
-      error.screenshotPath = error.screenshotPath || screenshotPath;
+  // Retry loop. Each attempt runs the full flow with a fresh browser; only
+  // transient network/cold-start failures are retried (see RETRYABLE_LOGIN_CODES).
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // runFlow reassigns these; reset so a prior attempt's handles never leak.
+    browser = undefined;
+    context = undefined;
+    page = undefined;
+    try {
+      return await withOverallTimeout(runFlow(), timeoutMs);
+    } catch (error) {
+      lastError = error;
+      if (error?.code === "MILO_LOGIN_TIMEOUT" && page) {
+        const screenshotPath = await captureFailureScreenshot(page, outputDir, artifacts, "error-overall-timeout");
+        error.screenshotPath = error.screenshotPath || screenshotPath;
+      }
+      if (browser) {
+        await browser.close().catch(() => {});
+      }
+      const canRetry = attempt < maxAttempts && RETRYABLE_LOGIN_CODES.has(error?.code);
+      if (!canRetry) throw error;
+      console.warn(
+        `[login] attempt ${attempt}/${maxAttempts} failed transiently (${error.code}) — retrying`,
+      );
+      // brief escalating backoff before the next attempt
+      await new Promise((resolve) => setTimeout(resolve, 1_000 * attempt));
     }
-    if (browser) {
-      await browser.close().catch(() => {});
-    }
-    throw error;
   }
+  // Unreachable — the loop always returns or throws — but satisfies analysis.
+  throw lastError;
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";

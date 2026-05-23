@@ -32,16 +32,23 @@ function withTimeout(promise, timeoutMs) {
   });
 }
 
+// Best-effort: artifact capture must NEVER fail a stage. A thrown screenshot
+// or disk error here would otherwise turn a successful validation into a
+// reported failure — so every error is swallowed.
 async function captureArtifact(page, outputDir, artifacts, baseName) {
   if (!outputDir) return;
-  const htmlPath = path.join(outputDir, `${baseName}.html`);
-  const pngPath = path.join(outputDir, `${baseName}.png`);
-  const urlPath = path.join(outputDir, `${baseName}.url.txt`);
-  const html = await page.evaluate(() => `<!DOCTYPE html>\n${document.documentElement.outerHTML}`);
-  await writeFile(htmlPath, html, "utf8");
-  await page.screenshot({ path: pngPath, fullPage: true });
-  await writeFile(urlPath, `${page.url()}\n`, "utf8");
-  artifacts.push(htmlPath, pngPath, urlPath);
+  try {
+    const htmlPath = path.join(outputDir, `${baseName}.html`);
+    const pngPath = path.join(outputDir, `${baseName}.png`);
+    const urlPath = path.join(outputDir, `${baseName}.url.txt`);
+    const html = await page.evaluate(() => `<!DOCTYPE html>\n${document.documentElement.outerHTML}`);
+    await writeFile(htmlPath, html, "utf8");
+    await page.screenshot({ path: pngPath, fullPage: true });
+    await writeFile(urlPath, `${page.url()}\n`, "utf8");
+    artifacts.push(htmlPath, pngPath, urlPath);
+  } catch {
+    /* best-effort — never fail a stage over artifact capture */
+  }
 }
 
 async function captureFailure(page, outputDir, artifacts, baseName) {
@@ -193,24 +200,37 @@ async function waitForCartFinalized(page, timeoutMs = 30_000) {
   );
 }
 
+/**
+ * Wait for the cart to settle after the Validate click. Returns
+ * { stabilized, sawValidated } — `sawValidated` is true if MILO's
+ * "Cart validated" signal was seen at any point during the wait, so the
+ * caller can record it even though the toast itself is ephemeral.
+ */
 async function waitForPostValidateStabilized(page, timeoutMs = 30_000) {
   const startedAt = Date.now();
+  let sawValidated = false;
   while (Date.now() - startedAt < timeoutMs) {
-    const toastOrMessage = await page
+    const observed = await page
       .evaluate(() => {
         const text = (document.body?.innerText || "").replace(/\s+/g, " ");
-        return /cart validated|validated|added to cart|out of stock|must order at least nine liters/i.test(text);
+        return {
+          validated: /cart validated|validated/i.test(text),
+          otherResponse: /added to cart|out of stock|must order at least nine liters/i.test(text),
+        };
       })
-      .catch(() => false);
+      .catch(() => ({ validated: false, otherResponse: false }));
+    if (observed.validated) sawValidated = true;
     const validateEnabledAgain = await page
       .getByRole("button", { name: /^Validate$/ })
       .first()
       .evaluate((el) => !el.hasAttribute("disabled") && el.getAttribute("aria-disabled") !== "true" && el.disabled !== true)
       .catch(() => false);
-    if (toastOrMessage || validateEnabledAgain) return true;
+    if (observed.validated || observed.otherResponse || validateEnabledAgain) {
+      return { stabilized: true, sawValidated };
+    }
     await page.waitForTimeout(500);
   }
-  return false;
+  return { stabilized: false, sawValidated };
 }
 
 async function clickValidateButtonSafely(page, button, outputDir) {
@@ -568,6 +588,10 @@ export async function validateCartOnMilo(session, options = {}) {
 
     await captureArtifact(page, outputDir, stage4Artifacts, "01-cart-before-validate");
 
+    // Tracks whether MILO's "Cart validated" signal was observed at ANY point.
+    // The toast is ephemeral — it can auto-dismiss before parseCartState runs —
+    // so we must record it the moment it appears, not rely on parse-time DOM.
+    let sawValidatedSignal = false;
     if (!skipValidateClick) {
       const validateButton = page.getByRole("button", { name: /^Validate$/ }).first();
       if ((await validateButton.count()) === 0 || !(await validateButton.isVisible().catch(() => false))) {
@@ -602,6 +626,7 @@ export async function validateCartOnMilo(session, options = {}) {
       let responded = false;
       while (Date.now() - startWait < validateClickTimeoutMs) {
         const afterSignals = await snapshotSignals(page);
+        if (afterSignals.hasValidatedToast) sawValidatedSignal = true;
         const summaryChanged = afterSignals.summaryText !== beforeSignals.summaryText;
         const outOfStockChanged = afterSignals.outOfStockRows > beforeSignals.outOfStockRows;
         if (afterSignals.hasValidatedToast || summaryChanged || outOfStockChanged || afterSignals.hasRedError) {
@@ -620,8 +645,9 @@ export async function validateCartOnMilo(session, options = {}) {
         );
       }
 
-      const stabilizedAfterValidate = await waitForPostValidateStabilized(page, 30_000);
-      if (!stabilizedAfterValidate) {
+      const postValidate = await waitForPostValidateStabilized(page, 30_000);
+      if (postValidate.sawValidated) sawValidatedSignal = true;
+      if (!postValidate.stabilized) {
         const screenshotPath = await captureFailure(page, outputDir, stage4Artifacts, "error-post-validate-finalization-timeout");
         throw createStage4Error(
           "MILO_STAGE4_VALIDATE_TIMEOUT",
@@ -722,7 +748,8 @@ export async function validateCartOnMilo(session, options = {}) {
       ...session,
       currentPage: "cart-validated",
       currentUrl: page.url(),
-      validated: parsed.validationMessages.some((m) => /validated/i.test(m)),
+      validated:
+        sawValidatedSignal || parsed.validationMessages.some((m) => /validated/i.test(m)),
       validationMessages: parsed.validationMessages,
       adaOrders,
       outOfStockItems,

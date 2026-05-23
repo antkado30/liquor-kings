@@ -79,23 +79,29 @@ function toIsoDate(mdyyyy) {
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+// Best-effort: artifact capture must NEVER fail a stage. Any error here is
+// swallowed so a screenshot failure can't sink an otherwise-good navigation.
 async function captureArtifact(page, outputDir, artifacts, baseName) {
   if (!outputDir) return;
-  const html = await page.evaluate(() => {
-    const clone = document.documentElement.cloneNode(true);
-    clone.querySelectorAll('input[type="password"]').forEach((el) => {
-      el.value = "";
-      el.setAttribute("value", "");
+  try {
+    const html = await page.evaluate(() => {
+      const clone = document.documentElement.cloneNode(true);
+      clone.querySelectorAll('input[type="password"]').forEach((el) => {
+        el.value = "";
+        el.setAttribute("value", "");
+      });
+      return `<!DOCTYPE html>\n${clone.outerHTML}`;
     });
-    return `<!DOCTYPE html>\n${clone.outerHTML}`;
-  });
-  const htmlPath = path.join(outputDir, `${baseName}.html`);
-  const pngPath = path.join(outputDir, `${baseName}.png`);
-  const urlPath = path.join(outputDir, `${baseName}.url.txt`);
-  await writeFile(htmlPath, html, "utf8");
-  await page.screenshot({ path: pngPath, fullPage: true });
-  await writeFile(urlPath, `${page.url()}\n`, "utf8");
-  artifacts.push(htmlPath, pngPath, urlPath);
+    const htmlPath = path.join(outputDir, `${baseName}.html`);
+    const pngPath = path.join(outputDir, `${baseName}.png`);
+    const urlPath = path.join(outputDir, `${baseName}.url.txt`);
+    await writeFile(htmlPath, html, "utf8");
+    await page.screenshot({ path: pngPath, fullPage: true });
+    await writeFile(urlPath, `${page.url()}\n`, "utf8");
+    artifacts.push(htmlPath, pngPath, urlPath);
+  } catch {
+    /* best-effort — never fail a stage over artifact capture */
+  }
 }
 
 async function captureFailure(page, outputDir, artifacts, baseName) {

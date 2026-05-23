@@ -29,16 +29,22 @@ function withTimeout(promise, timeoutMs) {
   });
 }
 
+// Best-effort: artifact capture must NEVER fail a stage. Any error here is
+// swallowed so a screenshot failure can't sink an otherwise-good checkout.
 async function captureArtifact(page, outputDir, artifacts, baseName) {
   if (!outputDir) return;
-  const htmlPath = path.join(outputDir, `${baseName}.html`);
-  const pngPath = path.join(outputDir, `${baseName}.png`);
-  const urlPath = path.join(outputDir, `${baseName}.url.txt`);
-  const html = await page.evaluate(() => `<!DOCTYPE html>\n${document.documentElement.outerHTML}`);
-  await writeFile(htmlPath, html, "utf8");
-  await page.screenshot({ path: pngPath, fullPage: true });
-  await writeFile(urlPath, `${page.url()}\n`, "utf8");
-  artifacts.push(htmlPath, pngPath, urlPath);
+  try {
+    const htmlPath = path.join(outputDir, `${baseName}.html`);
+    const pngPath = path.join(outputDir, `${baseName}.png`);
+    const urlPath = path.join(outputDir, `${baseName}.url.txt`);
+    const html = await page.evaluate(() => `<!DOCTYPE html>\n${document.documentElement.outerHTML}`);
+    await writeFile(htmlPath, html, "utf8");
+    await page.screenshot({ path: pngPath, fullPage: true });
+    await writeFile(urlPath, `${page.url()}\n`, "utf8");
+    artifacts.push(htmlPath, pngPath, urlPath);
+  } catch {
+    /* best-effort — never fail a stage over artifact capture */
+  }
 }
 
 async function captureFailure(page, outputDir, artifacts, baseName) {
