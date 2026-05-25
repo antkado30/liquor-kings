@@ -27,6 +27,10 @@ const DEFAULT_TIMEOUT_MS = 240_000;
 const DEFAULT_PER_ITEM_TIMEOUT_MS = 8_000;
 const CART_NAV_TIMEOUT_MS = 15_000;
 const ADD_BY_CODE_NAV_TIMEOUT_MS = 20_000;
+// Bound for the post-add /milo/cart content read. page.evaluate has NO
+// timeout of its own — a stuck cart-page JS context once hung the read for
+// the entire 240s Stage 3 budget (observed 2026-05-24).
+const CART_READ_TIMEOUT_MS = 25_000;
 
 /**
  * Max items per "Add all to Cart" click. Empirically, MILO silently drops 1-4
@@ -54,6 +58,7 @@ const INTER_BATCH_SETTLE_MS = 800;
  * - MILO_STAGE3_ADD_ALL_FAILED
  * - MILO_STAGE3_CART_NAV_TIMEOUT
  * - MILO_STAGE3_CART_VERIFICATION_EMPTY
+ * - MILO_STAGE3_CART_VERIFICATION_TIMEOUT
  * - MILO_STAGE3_ITEMS_OUT_OF_STOCK
  * - MILO_STAGE3_QUANTITY_CLAMPED
  * - MILO_STAGE3_CART_CLEAR_FAILED
@@ -65,6 +70,19 @@ function createStage3Error(code, message, details = {}, screenshotPath = null) {
   err.details = details;
   err.screenshotPath = screenshotPath;
   return err;
+}
+
+/**
+ * Race a promise against a timeout, rejecting with a typed Stage 3 error.
+ * Used to bound page.evaluate (which has no timeout of its own) so a stuck
+ * cart-page JS context cannot silently consume the whole Stage 3 budget.
+ */
+function raceStage3Timeout(promise, timeoutMs, code, message) {
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(createStage3Error(code, message, { timeoutMs })), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function assertMichiganGov(urlValue) {
@@ -1071,7 +1089,9 @@ export async function addItemsToCart(session, items, options = {}) {
       // We then cross-reference each itemsAdded entry against three buckets
       // (active-with-matching-qty, active-with-clamped-qty, OOS, missing)
       // and surface specific demotion reasons.
-      const cartContents = await page.evaluate(() => {
+      // Cart reader — runs in the page context. page.evaluate has no timeout,
+      // so the call is bounded by raceStage3Timeout below.
+      const readCartContents = () => {
         const parseQtyFromRow = (row) => {
           const qtyCell = row.querySelectorAll("td")[1];
           if (!qtyCell) return null;
@@ -1122,7 +1142,41 @@ export async function addItemsToCart(session, items, options = {}) {
         }
 
         return { active, oos, oosHeadingFound: Boolean(oosAnchor) };
-      });
+      };
+
+      // Bounded cart read. A stuck /milo/cart JS context once hung this for
+      // the full 240s Stage 3 budget (2026-05-24). On a stall, reload the
+      // cart page once and retry before giving up — recovers from a transient
+      // bad page state instead of burning the whole run.
+      console.log("[stage3] reading /milo/cart contents...");
+      let cartContents;
+      try {
+        cartContents = await raceStage3Timeout(
+          page.evaluate(readCartContents),
+          CART_READ_TIMEOUT_MS,
+          "MILO_STAGE3_CART_VERIFICATION_TIMEOUT",
+          "Reading /milo/cart contents stalled — the cart page did not respond",
+        );
+      } catch (readErr) {
+        if (readErr?.code !== "MILO_STAGE3_CART_VERIFICATION_TIMEOUT") throw readErr;
+        console.warn("[stage3] cart read stalled — reloading /milo/cart and retrying once");
+        await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
+        await waitForAngularStable(page, 10_000).catch(async () => {
+          await page.waitForTimeout(1_000);
+        });
+        try {
+          cartContents = await raceStage3Timeout(
+            page.evaluate(readCartContents),
+            CART_READ_TIMEOUT_MS,
+            "MILO_STAGE3_CART_VERIFICATION_TIMEOUT",
+            "Reading /milo/cart contents stalled even after a reload — cart page unresponsive",
+          );
+        } catch (retryErr) {
+          const screenshotPath = await captureFailure(page, outputDir, stage3Artifacts, "error-cart-verification-timeout");
+          retryErr.screenshotPath = retryErr.screenshotPath || screenshotPath;
+          throw retryErr;
+        }
+      }
 
       const activeMap = new Map(
         cartContents.active.map((r) => [r.code, r.quantity]),

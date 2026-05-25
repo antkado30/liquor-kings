@@ -27,6 +27,7 @@ const INACTIVE_RE = /inactive|suspended|expired|pending activation|provisioning/
  * - MILO_STAGE2_LICENSE_NOT_ACTIVE
  * - MILO_STAGE2_PRODUCTS_LOAD_TIMEOUT
  * - MILO_STAGE2_UNEXPECTED_URL
+ * - MILO_STAGE2_UNEXPECTED_ERROR
  * - MILO_STAGE2_TIMEOUT
  */
 function createStage2Error(code, message, details = {}, screenshotPath = null) {
@@ -255,6 +256,11 @@ export async function navigateToProducts(session, options = {}) {
     const page = session.page;
     if (outputDir) await mkdir(outputDir, { recursive: true });
 
+    // Per-step timing. When Stage 2 hits its overall timeout, the LAST
+    // "[stage2] +Nms — ..." line printed shows exactly which step ran long.
+    const logStep = (label) =>
+      console.log(`[stage2] +${Date.now() - stage2StartedAtDate.getTime()}ms — ${label}`);
+
     try {
       const initialUrl = page.url();
       assertMichiganGov(initialUrl);
@@ -344,6 +350,7 @@ export async function navigateToProducts(session, options = {}) {
       assertMichiganGov(page.url());
       await captureArtifact(page, outputDir, stage2Artifacts, "01-license-page");
 
+      logStep("finding license card");
       const cardMeta = await findLicenseCard(page, licenseNumber);
       if (!cardMeta.found) {
         const screenshotPath = await captureFailure(page, outputDir, stage2Artifacts, "error-license-not-found");
@@ -377,6 +384,7 @@ export async function navigateToProducts(session, options = {}) {
         );
       }
 
+      logStep("waiting for Place Order button to become ready");
       let readyInfo;
       try {
         readyInfo = await waitForElementEnabled(page, placeOrderButton, placeOrderReadyTimeoutMs);
@@ -428,6 +436,7 @@ export async function navigateToProducts(session, options = {}) {
         );
       }
 
+      logStep("clicking Place Order");
       await clickSafely(page, placeOrderButton, {
         step: "2b-location-place-order",
         selectorNote: `license ${licenseNumber} place order`,
@@ -437,6 +446,7 @@ export async function navigateToProducts(session, options = {}) {
 
       await captureArtifact(page, outputDir, stage2Artifacts, "02-place-order-clicked");
 
+      logStep("waiting for /milo/products to load");
       try {
         await waitForSpaNavigation(
           page,
@@ -455,6 +465,7 @@ export async function navigateToProducts(session, options = {}) {
         );
       }
 
+      logStep("settling products page (license-validated banner + angular)");
       await page
         .locator("text=/license validated/i")
         .first()
@@ -488,6 +499,7 @@ export async function navigateToProducts(session, options = {}) {
         );
       }
 
+      logStep("waiting for delivery dates");
       const deliveryLoaded = await waitForDeliveryDatesLoaded(page, 10_000);
       const delivery = await parseDeliveryDates(page);
       const parsedAllDeliveryDates = Boolean(delivery.iso["141"] && delivery.iso["221"] && delivery.iso["321"]);
@@ -509,6 +521,7 @@ export async function navigateToProducts(session, options = {}) {
             "321": delivery.iso["321"],
           };
 
+      logStep("capturing products-ready screenshot");
       await captureArtifact(page, outputDir, stage2Artifacts, "03-products-ready");
 
       const stage2CompletedAtDate = new Date();
@@ -531,8 +544,8 @@ export async function navigateToProducts(session, options = {}) {
       if (error?.code) throw error;
       const screenshotPath = await captureFailure(session.page, outputDir, stage2Artifacts, "error-unhandled-stage2");
       throw createStage2Error(
-        "MILO_STAGE2_UNEXPECTED_URL",
-        "Unexpected Stage 2 navigation error",
+        "MILO_STAGE2_UNEXPECTED_ERROR",
+        "Unexpected error during Stage 2 navigation",
         { currentUrl: session.page?.url?.() || null, reason: String(error?.message || error) },
         screenshotPath,
       );
