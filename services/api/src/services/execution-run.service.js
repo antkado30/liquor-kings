@@ -2134,3 +2134,79 @@ export const claimNextQueuedExecutionRun = async (
   };
 };
 
+// Stale-run reaper. A worker that claims a run flips it to "running"; if that
+// worker then crashes mid-run, the run is stuck "running" forever — claim-next
+// only ever picks up "queued" runs, so nothing recovers it. This finds
+// "running" runs whose heartbeat has gone cold and marks them "failed".
+//
+// Orphaned runs are NEVER auto-requeued: a crashed worker may have already
+// (partially) submitted the MLCC order, and blindly re-running it risks a
+// double order. A human re-creates the order if it truly did not go through.
+//
+// 15 min is well beyond any healthy heartbeat gap — the worker heartbeats
+// between stages and the longest single stage budget is ~4 min — so a slow
+// but alive run is never reaped.
+const STALE_RUN_MINUTES = 15;
+
+export const reapStaleExecutionRuns = async (
+  supabase,
+  { staleMinutes = STALE_RUN_MINUTES } = {},
+) => {
+  const cutoffIso = new Date(Date.now() - staleMinutes * 60_000).toISOString();
+
+  const { data: stale, error: listError } = await supabase
+    .from("execution_runs")
+    .select("id, store_id, heartbeat_at")
+    .eq("status", "running")
+    .lt("heartbeat_at", cutoffIso);
+
+  if (listError) {
+    return { ok: false, error: listError.message, reapedCount: 0, reapedRunIds: [] };
+  }
+  if (!stale || stale.length === 0) {
+    return { ok: true, reapedCount: 0, reapedRunIds: [] };
+  }
+
+  const reapedRunIds = [];
+  for (const run of stale) {
+    const nowIso = new Date().toISOString();
+    // Re-assert status + stale heartbeat in the WHERE clause: a run that
+    // finished or got a fresh heartbeat between the SELECT and this UPDATE
+    // must never be clobbered.
+    const { data: updated, error: updateError } = await supabase
+      .from("execution_runs")
+      .update({
+        status: "failed",
+        updated_at: nowIso,
+        finished_at: nowIso,
+        progress_stage: "reaped",
+        progress_message: "Run reaped — worker heartbeat went stale",
+        failure_type: "UNKNOWN",
+        error_message:
+          `Orphaned run: no worker heartbeat for over ${staleMinutes} minutes — ` +
+          `the worker process likely crashed. Marked failed and NOT auto-retried ` +
+          `(a crashed worker may have partially submitted the order). Re-create ` +
+          `the order manually if it did not go through.`,
+        failure_details: {
+          reaped: true,
+          reason: "worker_heartbeat_stale",
+          stale_minutes: staleMinutes,
+          last_heartbeat_at: run.heartbeat_at ?? null,
+          reaped_at: nowIso,
+        },
+      })
+      .eq("id", run.id)
+      .eq("status", "running")
+      .lt("heartbeat_at", cutoffIso)
+      .select("id")
+      .maybeSingle();
+
+    if (updateError) {
+      return { ok: false, error: updateError.message, reapedCount: reapedRunIds.length, reapedRunIds };
+    }
+    if (updated) reapedRunIds.push(updated.id);
+  }
+
+  return { ok: true, reapedCount: reapedRunIds.length, reapedRunIds };
+};
+

@@ -3,6 +3,7 @@ import supabase from "../config/supabase.js";
 import {
   applyExecutionRunOperatorAction,
   claimNextQueuedExecutionRun,
+  reapStaleExecutionRuns,
   getExecutionRunOperatorReviewBundleById,
   getExecutionRunOperatorActionsById,
   createExecutionRunFromCart,
@@ -30,6 +31,22 @@ router.param("storeId", enforceParamStoreMatches);
 
 router.post("/claim-next", requireServiceRole, async (req, res) => {
   const { workerId, workerNotes } = req.body ?? {};
+
+  // Self-healing: before claiming, sweep up runs whose worker died mid-run
+  // (stuck "running" with a cold heartbeat). Best-effort — a reap failure must
+  // never block claiming the next run.
+  try {
+    const reap = await reapStaleExecutionRuns(supabase);
+    if (reap.ok && reap.reapedCount > 0) {
+      console.warn(
+        `[execution-runs] reaped ${reap.reapedCount} orphaned run(s): ${reap.reapedRunIds.join(", ")}`,
+      );
+    } else if (!reap.ok) {
+      console.error(`[execution-runs] stale-run reap failed: ${reap.error}`);
+    }
+  } catch (err) {
+    console.error(`[execution-runs] stale-run reap threw: ${err?.message || err}`);
+  }
 
   const { statusCode, body } = await claimNextQueuedExecutionRun(
     supabase,
