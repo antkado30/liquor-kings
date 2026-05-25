@@ -3,14 +3,12 @@ import path from "node:path";
 import { BLOCKLIST_RE, clickSafely, waitForAngularStable, waitForElementEnabled, waitForSpaNavigation } from "../milo-discovery.js";
 import { KNOWN_ADAS } from "../../mlcc/milo-ordering-rules.js";
 
-// 90s default — matches Stage 1's bump (2026-05-14). Internal waits can
-// stack to ~65s on slower MILO responses (license card 10s + Place Order
-// readiness 15s + products load 20s + angular stable 10s + delivery dates
-// 10s). At 45s the outer timer was killing `run()` mid-wait, swallowing the
-// inner typed error that would tell us WHICH step was slow. 90s lets each
-// inner wait fire its own specific error first. Warm sessions still finish
-// in ~10s; this only changes worst-case behavior.
-const DEFAULT_TIMEOUT_MS = 90_000;
+// Internal waits stack on slow MILO days. A catastrophically slow run on
+// 2026-05-25 blew the prior 90s budget — the per-step "[stage2] +Nms"
+// instrumentation showed the time was REAL (slow nav + a ~30s fullPage
+// screenshot), not a hang. 150s absorbs the worst observed case; warm
+// sessions still finish in ~11s. A slow MILO day should run slow, not fail.
+const DEFAULT_TIMEOUT_MS = 150_000;
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
 const PRODUCTS_LOAD_TIMEOUT_MS = 20_000;
 const HOME_TO_LOCATION_TIMEOUT_MS = 10_000;
@@ -97,7 +95,9 @@ async function captureArtifact(page, outputDir, artifacts, baseName) {
     const pngPath = path.join(outputDir, `${baseName}.png`);
     const urlPath = path.join(outputDir, `${baseName}.url.txt`);
     await writeFile(htmlPath, html, "utf8");
-    await page.screenshot({ path: pngPath, fullPage: true });
+    // 8s cap — a fullPage screenshot of a slow/heavy page can otherwise eat
+    // ~30s (the Playwright default) of pure diagnostic overhead. Best-effort.
+    await page.screenshot({ path: pngPath, fullPage: true, timeout: 8_000 });
     await writeFile(urlPath, `${page.url()}\n`, "utf8");
     artifacts.push(htmlPath, pngPath, urlPath);
   } catch {

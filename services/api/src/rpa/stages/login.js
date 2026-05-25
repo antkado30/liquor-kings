@@ -6,11 +6,11 @@ import { launchChromium } from "../../lib/chromium-launch.js";
 import { BLOCKLIST_RE } from "../milo-discovery.js";
 
 const DEFAULT_LOGIN_URL = "https://www.lara.michigan.gov/milo/auth/sign-in";
-// 90s default — observed 2026-05-14 that cold-start logins from Fly (Chicago)
-// can take >30s on the first attempt against a new IP. Subsequent logins
-// land in ~5-6s. 90s tolerates the worst observed cold start without
-// affecting successful runs (they finish well under the cap).
-const DEFAULT_TIMEOUT_MS = 90_000;
+// Cold-start logins from Fly (Chicago) can take >30s; subsequent logins land
+// in ~5-6s. On a catastrophically slow MILO day (observed 2026-05-25) login
+// alone took 87s. 150s absorbs that worst case without affecting normal runs
+// (which finish well under the cap) — a slow MILO day should run slow, not fail.
+const DEFAULT_TIMEOUT_MS = 150_000;
 const LOGIN_CLICK_TIMEOUT_MS = 15_000;
 const GOTO_TIMEOUT_MS = 15_000;
 // Retry policy. A transient cold-start failure — Playwright "Target page,
@@ -129,7 +129,9 @@ async function captureArtifact(page, outputDir, artifacts, baseName) {
     const pngPath = path.join(outputDir, `${baseName}.png`);
     const urlPath = path.join(outputDir, `${baseName}.url.txt`);
     await writeFile(htmlPath, bodyHtml, "utf8");
-    await page.screenshot({ path: pngPath, fullPage: true });
+    // 8s cap — a fullPage screenshot of a slow/heavy page can otherwise eat
+    // ~30s (the Playwright default) of pure diagnostic overhead. Best-effort.
+    await page.screenshot({ path: pngPath, fullPage: true, timeout: 8_000 });
     await writeFile(urlPath, `${page.url()}\n`, "utf8");
     artifacts.push(htmlPath, pngPath, urlPath);
   } catch {

@@ -229,7 +229,9 @@ async function captureArtifact(page, outputDir, artifacts, baseName) {
     const pngPath = path.join(outputDir, `${baseName}.png`);
     const urlPath = path.join(outputDir, `${baseName}.url.txt`);
     await writeFile(htmlPath, html, "utf8");
-    await page.screenshot({ path: pngPath, fullPage: true });
+    // 8s cap — a fullPage screenshot of a slow/heavy page can otherwise eat
+    // ~30s (the Playwright default) of pure diagnostic overhead. Best-effort.
+    await page.screenshot({ path: pngPath, fullPage: true, timeout: 8_000 });
     await writeFile(urlPath, `${page.url()}\n`, "utf8");
     artifacts.push(htmlPath, pngPath, urlPath);
   } catch {

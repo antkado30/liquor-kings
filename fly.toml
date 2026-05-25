@@ -30,11 +30,13 @@ kill_timeout = "30s"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  # Auto-stop is OFF. min_machines_running alone did NOT keep a machine up
+  # (Fly only honours it under traffic, not for an idle app), so machines kept
+  # powering down — breaking `fly ssh console` and dropping RPA test runs.
+  # A production order-placing service should stay up anyway (API + price-book
+  # cron must be responsive). The extra always-on machine costs a few $/month.
+  auto_stop_machines = "off"
   auto_start_machines = true
-  # Keep one machine always running. A production order-placing service
-  # should be instantly responsive (API + price-book cron), and it keeps
-  # `fly ssh console` reliable for ops/testing instead of "no started VMs".
   min_machines_running = 1
   processes = ["app"]
 
