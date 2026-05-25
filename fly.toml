@@ -32,7 +32,10 @@ kill_timeout = "30s"
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 0
+  # Keep one machine always running. A production order-placing service
+  # should be instantly responsive (API + price-book cron), and it keeps
+  # `fly ssh console` reliable for ops/testing instead of "no started VMs".
+  min_machines_running = 1
   processes = ["app"]
 
   [[http_service.checks]]
