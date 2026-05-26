@@ -32,6 +32,20 @@ const IDLE_POLL_MS = 10_000;
 // Back off briefly when processOneRpaRun throws unexpectedly, so an upstream
 // outage doesn't turn into a tight error loop that floods logs.
 const ERROR_BACKOFF_MS = 30_000;
+// Longer back-off when the API replies with a transient 5xx — almost always
+// the app machine waking from standby (Fly proxy returns 502/503/504 while it
+// boots). Hammering claim-next during that window just adds noise and gives
+// the proxy nothing useful. 60s lets the machine come up cleanly.
+const TRANSIENT_5XX_BACKOFF_MS = 60_000;
+
+// claimNextRun (and friends) throw Error("HTTP <code>: ...") on non-2xx.
+// 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout are the
+// signatures Fly's proxy emits while waking a stopped/booting machine.
+const TRANSIENT_HTTP_RE = /^HTTP (502|503|504)\b/;
+function isTransientUpstreamError(err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  return TRANSIENT_HTTP_RE.test(msg);
+}
 
 const apiBaseUrl = process.env.API_BASE_URL ?? "http://127.0.0.1:8080";
 const workerId =
@@ -83,9 +97,19 @@ async function main() {
       result = await processOneRpaRun({ apiBaseUrl, workerId });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[rpa-worker] processOneRpaRun threw: ${msg}`);
       inFlight = false;
-      await interruptibleSleep(ERROR_BACKOFF_MS);
+      if (isTransientUpstreamError(err)) {
+        // Almost always the API machine waking from standby. Quiet log,
+        // longer back-off, don't treat it as a fatal failure.
+        console.warn(
+          `[rpa-worker] transient upstream (${msg}) — backing off ` +
+            `${TRANSIENT_5XX_BACKOFF_MS / 1000}s for API to recover`,
+        );
+        await interruptibleSleep(TRANSIENT_5XX_BACKOFF_MS);
+      } else {
+        console.error(`[rpa-worker] processOneRpaRun threw: ${msg}`);
+        await interruptibleSleep(ERROR_BACKOFF_MS);
+      }
       continue;
     }
     inFlight = false;
