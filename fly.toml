@@ -41,9 +41,13 @@ kill_timeout = "5m"
   # Chromium-in-container sandbox flags — read by the launch wrapper.
   LK_CHROMIUM_SANDBOX = "off"
   PORT = "8080"
-  # Worker daemon reaches the API via Fly's internal DNS for the `app` process
-  # group — same Fly app, 6PN private network, no public-internet hop.
-  API_BASE_URL = "http://app.process.liquor-kings.internal:8080"
+  # Worker daemon reaches the API via the public URL. Tried Fly's internal-DNS
+  # pattern (`app.process.liquor-kings.internal:8080`) first — boot logs were
+  # clean but every fetch threw `fetch failed`, so the DNS/routing wasn't
+  # working in this setup. The public URL is the reliable path; the proxy hop
+  # adds negligible latency for pilot scale and we can optimize back to
+  # internal-only later.
+  API_BASE_URL = "https://liquor-kings.fly.dev"
 
 [http_service]
   internal_port = 8080
