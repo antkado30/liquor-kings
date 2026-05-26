@@ -13,11 +13,13 @@
 app = "liquor-kings"
 primary_region = "ord"
 kill_signal = "SIGINT"
-# Generous shutdown — Fly sends SIGINT on deploy and an in-flight RPA run can
-# take ~5 min. We let it finish naturally before Fly force-kills. The orphan
-# reaper picks up anything killed past the deadline (status='running' with
-# stale heartbeat → marked failed, never auto-retried).
-kill_timeout = "600s"
+# 5m is Fly's HARD MAX for kill_timeout (anything higher is rejected). We use
+# the full cap so an in-flight RPA run has the best chance of finishing
+# gracefully on SIGINT (deploy/restart). If a run is still mid-flight at 5m,
+# Fly force-kills the machine — the orphan reaper picks it up within ~15 min
+# and marks it failed (status='running' with stale heartbeat → never
+# auto-retried, no double-order risk).
+kill_timeout = "5m"
 
 [build]
   dockerfile = "Dockerfile"
