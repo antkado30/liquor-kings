@@ -4,21 +4,29 @@
  * Triggers the same RPA pipeline that placed yesterday's first production
  * order. Default mode is dry_run (Stage 5 four-gate safety architecture
  * refuses checkout). Real submit comes later behind explicit env gates.
+ *
+ * AUTH: real Supabase Auth JWT — see apps/scanner/src/lib/supabase.ts.
  */
 import { fetchWithRetry } from "./catalog";
+import { getAuthBearer } from "../lib/supabase";
 
 const EXECUTION_API_BASE = "/execution-runs";
 
-function getAuthHeaders(): Record<string, string> {
-  const bearer = import.meta.env.VITE_SCANNER_DEV_BEARER as string | undefined;
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const bearer = await getAuthBearer();
   const storeId = import.meta.env.VITE_SCANNER_STORE_ID as string | undefined;
-  if (!bearer || !storeId) {
+  if (!bearer) {
     throw new Error(
-      "Scanner is missing dev auth env vars (VITE_SCANNER_DEV_BEARER, VITE_SCANNER_STORE_ID).",
+      "Scanner is not signed in. Sign in via the login screen before triggering RPA runs.",
+    );
+  }
+  if (!storeId) {
+    throw new Error(
+      "Scanner is missing VITE_SCANNER_STORE_ID. Set it in apps/scanner/.env.",
     );
   }
   return {
-    Authorization: bearer.startsWith("Bearer ") ? bearer : `Bearer ${bearer}`,
+    Authorization: `Bearer ${bearer}`,
     "X-Store-Id": storeId,
   };
 }
@@ -66,7 +74,7 @@ export async function triggerRpaRunFromCart(args: {
       {
         method: "POST",
         headers: {
-          ...getAuthHeaders(),
+          ...(await getAuthHeaders()),
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ mode: "rpa_run" }),
@@ -113,7 +121,7 @@ export async function getRunSummary(args: {
       {
         method: "GET",
         headers: {
-          ...getAuthHeaders(),
+          ...(await getAuthHeaders()),
         },
       },
       { maxRetries: 2, baseDelayMs: 500, timeoutMs: 8000 },

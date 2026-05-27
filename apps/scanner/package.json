@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@sentry/react": "^8.0.0",
+    "@supabase/supabase-js": "^2.49.1",
     "@zxing/browser": "^0.1.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

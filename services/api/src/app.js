@@ -32,6 +32,18 @@ const operatorAdminDist = process.env.OPERATOR_REVIEW_ADMIN_DIST
 const operatorAdminIndexHtml = path.join(operatorAdminDist, "index.html");
 const operatorAdminDistReady = fs.existsSync(operatorAdminIndexHtml);
 
+// In-store scanner SPA (apps/scanner). Vite-built React app with a base of
+// "/scanner/" (see apps/scanner/vite.config.ts). Authenticates via real
+// Supabase Auth (no bundled service-role keys) — see auth migration in
+// apps/scanner/src/api/*. Served same-origin so the JWT in localStorage and
+// the API live on the same host (no CORS, no third-party cookies).
+const scannerDistDefault = path.join(repoRoot, "apps", "scanner", "dist");
+const scannerDist = process.env.SCANNER_SPA_DIST
+  ? path.resolve(process.env.SCANNER_SPA_DIST)
+  : scannerDistDefault;
+const scannerIndexHtml = path.join(scannerDist, "index.html");
+const scannerDistReady = fs.existsSync(scannerIndexHtml);
+
 app.use(cors());
 /** Large enough for MLCC browser worker finalize payloads (step screenshots + boundary evidence). */
 app.use(express.json({ limit: "12mb" }));
@@ -99,6 +111,38 @@ if (operatorAdminDistReady) {
 const serveOperatorReviewLegacyHtml = (req, res) => {
   res.sendFile(operatorReviewLegacyHtml);
 };
+
+/**
+ * In-store scanner SPA, served at /scanner/* same-origin with the API.
+ * - Shell + assets: GET /scanner/* (Vite emits everything under /scanner/ base)
+ * - SPA fallback: any unmatched GET /scanner/<anything> returns index.html
+ *   so client-side react-router routes resolve correctly on hard reload.
+ *
+ * Auth: all /cart, /execution-runs, /catalog requests go through
+ * resolveAuthenticatedStore middleware unchanged — the scanner sends a real
+ * Supabase JWT in the Authorization header, no service-role keys in the bundle.
+ *
+ * SCANNER_SPA_DIST — absolute path to dist (default: <repo>/apps/scanner/dist).
+ */
+if (scannerDistReady) {
+  console.log(`[scanner] Serving scanner SPA from ${scannerDist}`);
+  app.use("/scanner", express.static(scannerDist));
+  app.use("/scanner", (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    res.sendFile(scannerIndexHtml);
+  });
+} else {
+  console.warn(
+    `[scanner] Scanner SPA dist missing (${scannerDist}). ` +
+      "GET /scanner/* will 503 until you run: npm run build:scanner",
+  );
+  app.use("/scanner", (req, res) => {
+    res.status(503).type("text/plain").send(
+      "Scanner SPA is not built. From repo root run: npm run build:scanner " +
+        "(or set SCANNER_SPA_DIST to a built dist directory).",
+    );
+  });
+}
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", message: "Liquor Kings API running" });

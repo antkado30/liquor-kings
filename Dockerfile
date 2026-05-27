@@ -12,11 +12,12 @@
 # process by hitting /execution-runs endpoints — no separate worker container
 # is needed today.
 #
-# Scanner SPA is NOT bundled here; it deploys separately (Vercel/Netlify) or
-# is served from a developer machine pointed at this API. The admin SPA IS
-# bundled because it's the operator cockpit.
+# Both SPAs (admin operator cockpit + in-store scanner) are bundled into
+# this image. Admin is served at /operator-review/app/*; scanner is served
+# at /scanner/* (same-origin keeps Supabase Auth JWT handling simple and
+# avoids CORS — see services/api/src/app.js for the static-serve wiring).
 
-# ─── Stage 1: build admin SPA ─────────────────────────────────────────────
+# ─── Stage 1: build admin + scanner SPAs ──────────────────────────────────
 FROM node:22-bookworm AS admin-builder
 
 WORKDIR /build
@@ -37,6 +38,11 @@ COPY apps/scanner ./apps/scanner
 # Builds apps/admin/dist/ — index.html + assets/* — which the API serves
 # at /operator-review/app/*.
 RUN npm run build:admin
+
+# Builds apps/scanner/dist/ — the in-store scanner SPA served at /scanner/*.
+# Same Docker stage so we share the npm install layer. Scanner is a Vite/React
+# app (zxing barcode scanning, cart, AI assistant) — public-facing on iOS Safari.
+RUN npm run build:scanner
 
 
 # ─── Stage 2: production runtime ──────────────────────────────────────────
@@ -75,6 +81,12 @@ COPY --from=admin-builder /build/apps/admin/dist ./apps/admin/dist
 
 # Allow the API to find the admin dist via its default search path.
 ENV OPERATOR_REVIEW_ADMIN_DIST=/app/apps/admin/dist
+
+# Scanner SPA from stage 1 — served at /scanner/* by the API.
+COPY --from=admin-builder /build/apps/scanner/dist ./apps/scanner/dist
+
+# Allow the API to find the scanner dist via its default search path.
+ENV SCANNER_SPA_DIST=/app/apps/scanner/dist
 
 EXPOSE 8080
 

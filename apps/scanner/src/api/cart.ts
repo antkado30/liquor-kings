@@ -1,11 +1,18 @@
 /**
  * Scanner ↔ /cart API client.
  *
- * AUTH (dev-only): VITE_SCANNER_DEV_BEARER (Supabase service role) +
- * VITE_SCANNER_STORE_ID (target store UUID). Phase B #4 replaces these
- * with a real Supabase JWT from a logged-in user. Headers shape stays the same.
+ * AUTH: real Supabase Auth — the user signs in via AuthGate, and the JWT
+ * lives in supabase.auth.getSession(). getAuthHeaders() reads it fresh on
+ * every call (auto-refresh rotates it during long shifts). Store_id still
+ * comes from VITE_SCANNER_STORE_ID for V1 (single-store deployment); the
+ * server's resolveAuthenticatedStore middleware enforces the JWT's user
+ * actually has membership in that store via the store_users table.
+ *
+ * Previous dev-bearer-with-service-role model is GONE — that key never
+ * touches the client bundle anymore.
  */
 import { fetchWithRetry } from "./catalog";
+import { getAuthBearer } from "../lib/supabase";
 
 export const CART_API_BASE = "/cart";
 
@@ -14,16 +21,25 @@ type AuthHeaders = {
   "X-Store-Id": string;
 };
 
-function getAuthHeaders(): AuthHeaders {
-  const bearer = import.meta.env.VITE_SCANNER_DEV_BEARER as string | undefined;
+/**
+ * Async — must be awaited at every call site. Throws if there's no current
+ * session (callers should not reach this if AuthGate is doing its job).
+ */
+export async function getAuthHeaders(): Promise<AuthHeaders> {
+  const bearer = await getAuthBearer();
   const storeId = import.meta.env.VITE_SCANNER_STORE_ID as string | undefined;
-  if (!bearer || !storeId) {
+  if (!bearer) {
     throw new Error(
-      "Scanner is missing dev auth env vars. Set VITE_SCANNER_DEV_BEARER and VITE_SCANNER_STORE_ID in apps/scanner/.env",
+      "Scanner is not signed in. Sign in via the login screen before making API calls.",
+    );
+  }
+  if (!storeId) {
+    throw new Error(
+      "Scanner is missing VITE_SCANNER_STORE_ID. Set it in apps/scanner/.env.",
     );
   }
   return {
-    Authorization: bearer.startsWith("Bearer ") ? bearer : `Bearer ${bearer}`,
+    Authorization: `Bearer ${bearer}`,
     "X-Store-Id": storeId,
   };
 }
@@ -66,7 +82,7 @@ export async function addCartLine(args: {
       {
         method: "POST",
         headers: {
-          ...getAuthHeaders(),
+          ...(await getAuthHeaders()),
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -111,7 +127,7 @@ export async function getActiveCart(): Promise<GetActiveCartResult> {
       {
         method: "GET",
         headers: {
-          ...getAuthHeaders(),
+          ...(await getAuthHeaders()),
         },
       },
       { maxRetries: 2, baseDelayMs: 500, timeoutMs: 8000 },
@@ -162,7 +178,7 @@ export async function validateCart(
       {
         method: "POST",
         headers: {
-          ...getAuthHeaders(),
+          ...(await getAuthHeaders()),
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ items }),

@@ -20,6 +20,11 @@ tmp/
 .env.staging
 .env.production
 .env.*.local
+# Exception: the scanner's .env.production contains ONLY public values
+# (Supabase URL + anon key + store_id — all designed to be safe in client
+# bundles). It must be committed so the Docker build can bake them in.
+# Service-role keys and other secrets NEVER go here — they live in fly secrets.
+!apps/scanner/.env.production
 supabase/.temp/
 supabase/.branches/
 tmp/data/
