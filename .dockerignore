@@ -33,6 +33,11 @@ supabase/seed.sql
 **/.env
 **/.env.*
 !**/.env.example
+# Exception: scanner's .env.production contains ONLY public values
+# (Supabase URL + anon key + store_id) and MUST be baked into the build so
+# Vite picks them up via import.meta.env.* at build time. Service-role keys
+# never go here — see apps/scanner/.env.production for the inventory.
+!apps/scanner/.env.production
 
 # Logs
 **/*.log
