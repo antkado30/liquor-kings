@@ -8,6 +8,7 @@ import {
   getProductFamily,
   reportUpcNoMatch,
 } from "../api/catalog";
+import { signOut } from "../lib/supabase";
 import { Sentry } from "../lib/sentry";
 import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
@@ -17,6 +18,7 @@ import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
 import { SearchBar } from "../components/SearchBar";
 import { useCart } from "../hooks/useCart";
 import { useCatalogSearch } from "../hooks/useCatalogSearch";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import type { MlccProduct, ProductFamily, UpcLookupResponse } from "../types";
 
 function money(n: number | null | undefined): string {
@@ -28,8 +30,20 @@ export function ScannerPage() {
   const cart = useCart();
   const search = useCatalogSearch();
   const navigate = useNavigate();
+  const isOnline = useOnlineStatus();
 
   const [scannerActive, setScannerActive] = useState(true);
+  /**
+   * True from the moment a code is scanned/typed until the lookup resolves
+   * (or fails). Lets us show a loading indicator so a slow network doesn't
+   * look like the scanner froze. Cleared in handleScan's finally block.
+   */
+  const [scanInFlight, setScanInFlight] = useState(false);
+  /**
+   * Confirmation modal state for sign-out — guards against an accidental
+   * tap on the header button mid-shift.
+   */
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [showProductCard, setShowProductCard] = useState(false);
   const [currentFamily, setCurrentFamily] = useState<ProductFamily | null>(null);
   /** MLCC code of the row that opened the card — drives initial size tab in ProductCard. */
@@ -107,6 +121,7 @@ export function ScannerPage() {
       const trimmed = code.trim();
       setUpcBeingMapped(null);
       setUpcMappingExpectedQuery(null);
+      setScanInFlight(true);
       try {
         const found = await getProductByCode(trimmed);
         if (found) {
@@ -174,6 +189,10 @@ export function ScannerPage() {
           setNetworkWarn(false);
           setNotFoundMsg(true);
         }, 2000);
+      } finally {
+        // Always clear the in-flight flag, success or fail — otherwise a
+        // failed lookup leaves the spinner spinning forever.
+        setScanInFlight(false);
       }
     },
     [search.setQuery, openFamily],
@@ -200,8 +219,33 @@ export function ScannerPage() {
             </span>
             {cart.totalItems > 0 ? <span className="cart-badge">{cart.totalItems}</span> : null}
           </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setConfirmSignOut(true)}
+            aria-label="Sign out"
+            title="Sign out"
+          >
+            <span className="signout-glyph" aria-hidden>
+              ⎋
+            </span>
+          </button>
         </div>
       </header>
+
+      {/*
+        Offline banner — fires the moment the browser reports a network drop.
+        Persistent (no dismiss) because scanning a bottle while offline produces
+        a confusing failed-lookup chain; better to make the state obvious.
+      */}
+      {!isOnline ? (
+        <div className="price-book-age-banner price-book-age-banner--stale">
+          <span>
+            You're offline. Scans and cart actions will fail until the
+            connection is back.
+          </span>
+        </div>
+      ) : null}
 
       {priceBookAge && !dismissPriceBookBanner ? (
         <div
@@ -266,6 +310,11 @@ export function ScannerPage() {
         }
       />
 
+      {scanInFlight ? (
+        <p className="banner" role="status" aria-live="polite">
+          Looking up code…
+        </p>
+      ) : null}
       {networkWarn ? <p className="banner toast--warning">Having trouble connecting…</p> : null}
       {notFoundMsg ? <p className="banner banner-warn">Product not found — try searching</p> : null}
       {toast ? <p className="banner banner-ok">{toast}</p> : null}
@@ -351,6 +400,46 @@ export function ScannerPage() {
       ) : null}
 
       {showAssistant ? <AssistantPanel onClose={() => setShowAssistant(false)} /> : null}
+
+      {confirmSignOut ? (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Sign out"
+          onClick={() => setConfirmSignOut(false)}
+        >
+          <div
+            className="confirm-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="confirm-title">Sign out?</h2>
+            <p className="confirm-body">
+              You'll need to sign in again before scanning. Your cart is
+              saved on the server and will still be there.
+            </p>
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => setConfirmSignOut(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn danger"
+                onClick={() => {
+                  setConfirmSignOut(false);
+                  void signOut();
+                }}
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {upcCandidates ? (
         <>

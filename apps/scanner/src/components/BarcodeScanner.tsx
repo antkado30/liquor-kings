@@ -61,6 +61,82 @@ declare global {
 
 type ScannerEngine = "native" | "zxing" | "unsupported";
 
+/**
+ * Categorize getUserMedia failure modes so we can render a helpful
+ * device-specific message instead of "Camera unavailable" for everything.
+ *
+ * Refs:
+ *   https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia#exceptions
+ *
+ * iOS Safari specifically throws NotAllowedError when the user previously
+ * tapped "Don't Allow" — and the only way to re-enable is via Settings
+ * (the in-page prompt won't re-appear). That UX is unintuitive enough
+ * that we surface explicit instructions for it.
+ */
+type CameraFailureKind =
+  | "permission_denied" // NotAllowedError — user actively denied
+  | "no_camera_found" // NotFoundError / DevicesNotFoundError
+  | "in_use" // NotReadableError — another app/tab has the camera
+  | "constraints" // OverconstrainedError / ConstraintNotSatisfiedError
+  | "insecure_context" // SecurityError / non-HTTPS
+  | "unknown";
+
+function categorizeCameraError(err: unknown): CameraFailureKind {
+  const name = (err as { name?: string })?.name ?? "";
+  if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+    return "permission_denied";
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "no_camera_found";
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "in_use";
+  }
+  if (name === "OverconstrainedError" || name === "ConstraintNotSatisfiedError") {
+    return "constraints";
+  }
+  if (name === "SecurityError") return "insecure_context";
+  return "unknown";
+}
+
+function isIos(): boolean {
+  if (typeof navigator === "undefined") return false;
+  // Modern iPads identify as Mac; detect the touch-on-Mac quirk.
+  const ua = navigator.userAgent || "";
+  return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && typeof document !== "undefined" && "ontouchend" in document);
+}
+
+function permissionDeniedMessage(): string {
+  if (isIos()) {
+    return (
+      "Camera access was denied. To re-enable: open iOS Settings → Safari → " +
+      "Camera → Allow, then reload this page. (iOS doesn't show the prompt " +
+      "again once denied.)"
+    );
+  }
+  return (
+    "Camera access was denied. Open the site settings in your browser, " +
+    "allow Camera access, and reload this page."
+  );
+}
+
+function cameraFailureMessage(kind: CameraFailureKind): string {
+  switch (kind) {
+    case "permission_denied":
+      return permissionDeniedMessage();
+    case "no_camera_found":
+      return "No camera found on this device. Enter codes manually below.";
+    case "in_use":
+      return "Camera is in use by another app or tab. Close other camera apps and reload.";
+    case "constraints":
+      return "Camera couldn't start with the requested settings. Reload to retry.";
+    case "insecure_context":
+      return "Camera requires a secure (HTTPS) connection. Reload over HTTPS.";
+    default:
+      return "Camera unavailable. Please enter codes manually below.";
+  }
+}
+
 function hasNativeBarcodeDetector(): boolean {
   return typeof window !== "undefined" && typeof window.BarcodeDetector === "function";
 }
@@ -116,7 +192,7 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
         reportCameraError(error);
         if (!cancelled) {
           setEngine("unsupported");
-          setPermissionError("Camera unavailable. Please enter codes manually.");
+          setPermissionError(cameraFailureMessage(categorizeCameraError(error)));
         }
       }
     }
@@ -200,7 +276,7 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
           }, DETECT_INTERVAL_MS);
         } catch (error) {
           reportCameraError(error);
-          setPermissionError("Camera unavailable. Please enter codes manually.");
+          setPermissionError(cameraFailureMessage(categorizeCameraError(error)));
           stopCamera();
         }
         return;
@@ -211,7 +287,7 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
         if (cancelled) return;
         const v = videoRef.current;
         if (!v) {
-          setPermissionError("Camera unavailable. Please enter codes manually.");
+          setPermissionError(cameraFailureMessage("unknown"));
           return;
         }
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -252,7 +328,7 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
         setScanning(true);
       } catch (error) {
         reportCameraError(error);
-        setPermissionError("Camera unavailable. Please enter codes manually.");
+        setPermissionError(cameraFailureMessage(categorizeCameraError(error)));
         stopCamera();
       }
     }

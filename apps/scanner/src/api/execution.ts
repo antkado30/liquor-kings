@@ -8,7 +8,7 @@
  * AUTH: real Supabase Auth JWT — see apps/scanner/src/lib/supabase.ts.
  */
 import { fetchWithRetry } from "./catalog";
-import { getAuthBearer } from "../lib/supabase";
+import { getAuthBearer, handleAuthFailure } from "../lib/supabase";
 
 const EXECUTION_API_BASE = "/execution-runs";
 
@@ -84,6 +84,9 @@ export async function triggerRpaRunFromCart(args: {
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
+  }
   let raw: Record<string, unknown>;
   try {
     raw = (await res.json()) as Record<string, unknown>;
@@ -128,6 +131,9 @@ export async function getRunSummary(args: {
     );
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
   }
   let raw: Record<string, unknown>;
   try {

@@ -30,6 +30,13 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
   const [isCheckingValidation, setIsCheckingValidation] = useState(false);
   const [validationResult, setValidationResult] = useState<CartValidationResult | null>(null);
   const validationRequestRef = useRef(0);
+  /**
+   * Confirmation gate before the cart actually triggers a real MILO order
+   * via the RPA pipeline. Stage 5 is triple-gated server-side (mode +
+   * LK_ALLOW_ORDER_SUBMISSION + per-store arming), but this prevents the
+   * UX-level mistake of an accidental tap submitting a cart prematurely.
+   */
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
 
   useEffect(() => {
     if (items.length === 0) {
@@ -250,9 +257,7 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                   type="button"
                   className="btn primary btn-block"
                   disabled={submitDisabled}
-                  onClick={() => {
-                    void start(items);
-                  }}
+                  onClick={() => setConfirmSubmit(true)}
                 >
                   {isCheckingValidation ? "Checking..." : "Validate & Submit"}
                 </button>
@@ -331,6 +336,55 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
           </>
         ) : null}
       </div>
+
+      {/*
+        Pre-submission confirmation modal. Tap-outside dismisses. Once the
+        user confirms, useSubmission's start() runs the full pipeline
+        (sync → trigger RPA → poll). The server-side triple-gate on Stage 5
+        is the real safety net — this is the UX-level "are you sure?"
+        that prevents accidental thumb-taps from sending a real order.
+      */}
+      {confirmSubmit ? (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm submit order"
+          onClick={() => setConfirmSubmit(false)}
+        >
+          <div
+            className="confirm-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="confirm-title">Submit this order to MILO?</h2>
+            <p className="confirm-body">
+              {items.length} item{items.length === 1 ? "" : "s"} ·{" "}
+              {money(totalCost)}. This starts the automated MILO ordering
+              pipeline. Make sure the cart is correct before continuing —
+              accidental submissions can place real orders.
+            </p>
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => setConfirmSubmit(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => {
+                  setConfirmSubmit(false);
+                  void start(items);
+                }}
+              >
+                Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -12,7 +12,7 @@
  * touches the client bundle anymore.
  */
 import { fetchWithRetry } from "./catalog";
-import { getAuthBearer } from "../lib/supabase";
+import { getAuthBearer, handleAuthFailure } from "../lib/supabase";
 
 export const CART_API_BASE = "/cart";
 
@@ -95,6 +95,12 @@ export async function addCartLine(args: {
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+  // JWT validity gate — if the API rejected our token, force sign-out so
+  // AuthGate brings the user back to the login screen instead of silently
+  // failing every subsequent call.
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
+  }
   let raw: Record<string, unknown>;
   try {
     raw = (await res.json()) as Record<string, unknown>;
@@ -134,6 +140,9 @@ export async function getActiveCart(): Promise<GetActiveCartResult> {
     );
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
   }
   let raw: Record<string, unknown>;
   try {
@@ -187,6 +196,9 @@ export async function validateCart(
     );
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
   }
 
   let raw: Record<string, unknown>;

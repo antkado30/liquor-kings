@@ -19,7 +19,7 @@ import {
   useState,
 } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { supabase } from "../lib/supabase";
+import { scannerMisconfigured, supabase } from "../lib/supabase";
 
 type AuthGateProps = {
   children: ReactNode;
@@ -34,6 +34,14 @@ export function AuthGate({ children }: AuthGateProps) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
+    // Misconfigured build (missing Supabase env vars) — skip auth entirely
+    // and let the misconfig screen render. Calling getSession here would
+    // throw because supabase client points at a placeholder URL.
+    if (scannerMisconfigured) {
+      setLoading(false);
+      return;
+    }
+
     // Initial session check on mount.
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
@@ -68,6 +76,23 @@ export function AuthGate({ children }: AuthGateProps) {
     return (
       <div style={loadingStyle}>
         <div style={{ opacity: 0.7 }}>Loading…</div>
+      </div>
+    );
+  }
+
+  if (scannerMisconfigured) {
+    return (
+      <div style={shellStyle}>
+        <div style={cardStyle}>
+          <h1 style={titleStyle}>Scanner misconfigured</h1>
+          <p style={subtitleStyle}>
+            This build is missing required configuration. Please contact the
+            person who set up your scanner.
+          </p>
+          <p style={{ ...errorStyle, marginTop: 4 }}>
+            {scannerMisconfigured.reason}
+          </p>
+        </div>
       </div>
     );
   }

@@ -28,18 +28,37 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as
   | string
   | undefined;
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  // Fail loudly at module-eval time so a misconfigured build is obvious
-  // immediately instead of producing confusing 401s deeper in.
-  throw new Error(
-    "Scanner is missing Supabase env vars (VITE_SUPABASE_URL and " +
-      "VITE_SUPABASE_ANON_KEY). Set both in apps/scanner/.env before building.",
-  );
+/**
+ * If env vars are missing at runtime, log a visible diagnostic INSTEAD of
+ * throwing at module load. Throwing here used to blank-screen the whole app
+ * (we hit this exact bug 2026-05-27 when .dockerignore blocked .env.production).
+ * Soft-failing lets AuthGate render a user-facing "scanner misconfigured"
+ * message instead of a black void — engineers can still find the cause via
+ * dev tools, but users see something useful.
+ */
+export const scannerMisconfigured: { reason: string } | null =
+  !supabaseUrl || !supabaseAnonKey
+    ? {
+        reason:
+          "Scanner is missing Supabase env vars — see apps/scanner/.env. " +
+          "If you see this in production, the build skipped baking " +
+          "VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY into the bundle.",
+      }
+    : null;
+
+if (scannerMisconfigured) {
+  console.error("[scanner] CONFIG ERROR:", scannerMisconfigured.reason);
 }
 
+/**
+ * If env vars are missing, we still need a SupabaseClient object so the rest
+ * of the code can compile + import without crashing — but every call will
+ * fail gracefully. We use placeholder values; AuthGate inspects
+ * scannerMisconfigured and shows the misconfig screen before any auth call.
+ */
 export const supabase: SupabaseClient = createClient(
-  supabaseUrl,
-  supabaseAnonKey,
+  supabaseUrl || "https://placeholder.invalid",
+  supabaseAnonKey || "placeholder",
   {
     auth: {
       // Keep the session in localStorage across page reloads (dad's iPhone
@@ -68,4 +87,40 @@ export async function getAuthBearer(): Promise<string | null> {
     return null;
   }
   return data.session?.access_token ?? null;
+}
+
+/**
+ * Signs the current user out. Used by:
+ *   - Sign-out button in the scanner header
+ *   - 401-handler when the API rejects the JWT (token revoked / password
+ *     changed / membership removed) — forces a return to the login screen
+ *     so the user can re-authenticate instead of sitting stuck on a broken
+ *     scanner page
+ *
+ * AuthGate listens to onAuthStateChange and will automatically re-render
+ * the login form when this resolves.
+ */
+export async function signOut(): Promise<void> {
+  const { error } = await supabase.auth.signOut();
+  if (error) {
+    console.warn("[scanner] supabase.auth.signOut failed:", error.message);
+  }
+}
+
+/**
+ * Handle an authenticated API response — if it's a 401, our JWT is no
+ * longer valid (expired beyond refresh, revoked, user removed from
+ * store_users, etc.). Force sign-out so AuthGate shows the login screen
+ * instead of letting the app silently spin with broken auth.
+ *
+ * Returns true if a 401 was handled (caller should treat the request as
+ * failed and bail). Returns false otherwise (caller continues normally).
+ */
+export async function handleAuthFailure(res: Response): Promise<boolean> {
+  if (res.status !== 401) return false;
+  console.warn(
+    "[scanner] API returned 401 — forcing sign-out so the user can re-authenticate",
+  );
+  await signOut();
+  return true;
 }
