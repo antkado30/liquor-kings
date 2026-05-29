@@ -372,13 +372,18 @@ export async function navigateToOrdersAndCapture(page, session, outputDir, artif
   const startedAt = Date.now();
   const deadline = startedAt + budgetMs;
 
+  // Confirmed 2026-05-29 via diagnostic: MILO orders list lives at
+  // /milo/account/orders. Hitting /milo/orders directly redirects to
+  // /milo/home. The /milo/orders short path stays valid as a terminal-URL
+  // pattern (some MILO links route through it), but for direct navigation
+  // we have to use the account-scoped path.
   try {
-    await page.goto("https://www.lara.michigan.gov/milo/orders", {
+    await page.goto("https://www.lara.michigan.gov/milo/account/orders", {
       waitUntil: "domcontentloaded",
       timeout: Math.max(15_000, Math.min(45_000, deadline - Date.now())),
     });
   } catch (error) {
-    throw createStage5Error("MILO_STAGE5_HISTORY_FETCH_FAILED", "Could not navigate to /milo/orders to retrieve confirmation data", {
+    throw createStage5Error("MILO_STAGE5_HISTORY_FETCH_FAILED", "Could not navigate to /milo/account/orders to retrieve confirmation data", {
       currentUrl: page.url(),
       reason: String(error?.message || error),
     });
