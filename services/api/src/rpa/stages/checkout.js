@@ -534,19 +534,33 @@ async function parseOrdersHistoryPage(page, session) {
   // it — we'd rather over-report than miss a recovery.
   const todayOrders = historyOrders.filter((o) => !o.placedDate || todayCandidates.has(o.placedDate));
 
-  // Limit to the most recent N == # ADAs we submitted. The orders page is
-  // typically reverse-chronological, so the first N of today's are ours.
-  const expectedCount = Array.isArray(session.adaOrders) ? session.adaOrders.length : todayOrders.length;
-  const ours = todayOrders.slice(0, expectedCount);
+  // Decide which orders to return:
+  //   - Normal Stage 5 path (session.adaOrders has N entries):
+  //     slice to N from todayOrders. We just submitted, so the most
+  //     recent N today are ours.
+  //   - Diagnostic / no-session path (session.adaOrders is empty or
+  //     missing): return EVERY parsed order, not just today's. The
+  //     diagnostic's job is to verify the parser works against MILO's
+  //     current UI — testing against yesterday's orders is fair game.
+  const adaCount = Array.isArray(session.adaOrders) ? session.adaOrders.length : 0;
+  const ours = adaCount > 0
+    ? todayOrders.slice(0, adaCount)
+    : historyOrders;
 
-  if (ours.length === 0) {
-    throw createStage5Error("MILO_STAGE5_HISTORY_NO_RECENT_MATCH", "No orders on /milo/orders matched today's submission", {
+  // Only throw NO_RECENT_MATCH when there's a real ADA-count expectation
+  // and we couldn't match. The diagnostic path can return [] without
+  // throwing (the caller decides whether empty is OK).
+  if (ours.length === 0 && adaCount > 0) {
+    throw createStage5Error("MILO_STAGE5_HISTORY_NO_RECENT_MATCH", "No orders on /milo/account/orders matched today's submission", {
       currentUrl: parsed.currentUrl,
       historyOrdersScanned: historyOrders.length,
       structuredCount: parsed.structuredOrders.length,
       textBlocksCount: parsed.textBlocks.length,
       bodyLength: parsed.bodyLength,
-      expectedAdaCount: expectedCount,
+      expectedAdaCount: adaCount,
+      // First 1KB of each scanned block — useful for parser debugging
+      // without dumping the entire body.
+      scannedBlockTails: historyOrders.slice(0, 5).map((o) => o.blockTail?.slice(0, 1_000) || null),
     });
   }
 
