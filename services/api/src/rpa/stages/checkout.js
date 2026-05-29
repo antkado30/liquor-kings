@@ -500,13 +500,48 @@ async function parseOrdersHistoryPage(page, session) {
 
   const historyOrders = [];
   for (const block of blocks) {
-    // Extract per-block fields with conservative regexes
+    // Extract per-block fields with regexes tuned to MILO's actual /milo/account/orders
+    // layout (verified 2026-05-29 via test-orders-history-scrape.mjs against
+    // real orders). Each order row reads roughly:
+    //
+    //   ORDER PLACED ... DELIVERY DATE ... DISTRIBUTOR <name>
+    //   CONFIRMATION # <digits>  SUBTOTAL | TOTAL  $X | $Y
+    //   ORDER # | ORDER TYPE <digits> | MILO
+    //
     const confMatch = block.match(/confirmation\s*#?\s*:?\s*(\d{4,})/i);
-    const orderMatch = block.match(/order\s*#?\s*:?\s*(\d{4,})/i);
+    // ORDER # captures the digits AFTER the "Order # | Order Type" pair label.
+    // Also accept a plain "Order # 12345" fallback.
+    const orderMatch =
+      block.match(/order\s*#\s*[\|/]?\s*order\s*type\s*(\d{4,})/i) ||
+      block.match(/order\s*#\s*:?\s*(\d{4,})/i);
     if (!confMatch && !orderMatch) continue;
-    const distributorMatch = block.match(/distributor\s*:?\s*([A-Z][A-Z0-9&,. \-']+(?:Inc\.?|LLC|Corp\.?|Co\.?)?)/i);
-    const subtotalMatch = block.match(/subtotal\s*\|?\s*\$?\s*([0-9,]+\.[0-9]{2})/i);
-    const totalMatch = block.match(/total\s*\|?\s*\$?\s*([0-9,]+\.[0-9]{2})/i) || block.match(/\$\s*([0-9,]+\.[0-9]{2})\s*[\|/]\s*\$\s*([0-9,]+\.[0-9]{2})/);
+
+    // DISTRIBUTOR: stop at common adjacent labels so we don't pick up
+    // "NWS Michigan, Inc. Confirmation" (the next column header bleeding in).
+    const distributorMatch = block.match(
+      /distributor\s*:?\s*([A-Z][A-Z0-9&,. \-']+?)\s*(?=confirmation|order\s*#|subtotal|total|status|delivery)/i,
+    );
+
+    // SUBTOTAL | TOTAL pair pattern — MILO shows them side-by-side as
+    // "$X,XXX.XX | $Y,YYY.YY" right after the SUBTOTAL | TOTAL header.
+    // This is the order header pair, NOT the per-line item amounts.
+    const totalsPair = block.match(
+      /subtotal\s*\|\s*total\s*\$?\s*([0-9,]+\.[0-9]{2})\s*\|\s*\$?\s*([0-9,]+\.[0-9]{2})/i,
+    );
+    let subtotalVal = null;
+    let totalVal = null;
+    if (totalsPair) {
+      subtotalVal = Number(totalsPair[1].replace(/,/g, ""));
+      totalVal = Number(totalsPair[2].replace(/,/g, ""));
+    } else {
+      // Fallback: independent matches (used to be the only path; keep for
+      // robustness if MILO layout differs on some orders).
+      const subAlone = block.match(/subtotal\s*\$?\s*([0-9,]+\.[0-9]{2})/i);
+      const totAlone = block.match(/total\s*\$?\s*([0-9,]+\.[0-9]{2})/i);
+      if (subAlone) subtotalVal = Number(subAlone[1].replace(/,/g, ""));
+      if (totAlone) totalVal = Number(totAlone[1].replace(/,/g, ""));
+    }
+
     const placedMatch = block.match(/(?:order\s+placed[^A-Z]*)?([A-Z][A-Z]{2,8}\s+\d{1,2},?\s+\d{4})/i);
     const statusMatch = block.match(/\b(Finished|In Progress|Confirmed|Cancell?ed|Processing)\b/i);
     const deliveryMatch = block.match(/delivery\s+date\s*:?\s*([A-Z][A-Z]{2,8}\s+\d{1,2},?\s+\d{4})/i);
@@ -518,15 +553,15 @@ async function parseOrdersHistoryPage(page, session) {
     historyOrders.push({
       confirmationNumber: confMatch ? confMatch[1] : null,
       orderNumber: orderMatch ? orderMatch[1] : null,
-      distributorRaw: distributorMatch ? distributorMatch[1].trim() : null,
+      distributorRaw: distributorMatch ? distributorMatch[1].trim().replace(/[,.\s]+$/, "") : null,
       placedRaw,
       placedDate,
       placedIso,
       deliveryRaw: deliveryMatch ? deliveryMatch[1] : null,
-      subtotal: subtotalMatch ? Number(subtotalMatch[1].replace(/,/g, "")) : null,
-      total: totalMatch ? Number((totalMatch[2] || totalMatch[1]).replace(/,/g, "")) : null,
+      subtotal: subtotalVal,
+      total: totalVal,
       status: statusMatch ? statusMatch[1] : null,
-      blockTail: block.slice(-1_000),
+      blockTail: block.slice(-1_500),
     });
   }
 
