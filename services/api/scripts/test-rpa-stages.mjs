@@ -354,10 +354,79 @@ if (stages.has("5")) {
     if (stage5Result.errorToastMessages?.length) {
       console.log(`  error toasts: ${JSON.stringify(stage5Result.errorToastMessages)}`);
     }
+    // NEW (2026-05-28): when confirmation data was recovered from the
+    // /milo/orders history page (either via the thank-you happy path or
+    // via the timeout backstop), print per-order detail so the operator
+    // sees confirmation #, order #, distributor, totals, status without
+    // having to download artifacts.
+    if (stage5Result.recoveredFromBackstop) {
+      console.log(`  ⚠ recovered via backstop after post-submit wait timed out — submit DID succeed`);
+    }
+    if (Array.isArray(stage5Result.historyOrders) && stage5Result.historyOrders.length > 0) {
+      console.log(`  HISTORY ORDERS (${stage5Result.historyOrders.length}):`);
+      for (const o of stage5Result.historyOrders) {
+        const parts = [
+          o.distributorRaw ? `distributor=${o.distributorRaw}` : null,
+          o.confirmationNumber ? `conf#=${o.confirmationNumber}` : null,
+          o.orderNumber ? `order#=${o.orderNumber}` : null,
+          o.subtotal != null ? `sub=$${o.subtotal}` : null,
+          o.total != null ? `tot=$${o.total}` : null,
+          o.status ? `status=${o.status}` : null,
+          o.deliveryRaw ? `delivery=${o.deliveryRaw}` : null,
+        ].filter(Boolean);
+        console.log(`    - ${parts.join(" | ")}`);
+      }
+    }
+    // Structured result file — machine-readable record per run. Lives
+    // alongside the screenshots/HTML in the run's artifact dir. Lets the
+    // operator (or downstream tooling) ingest confirmation data without
+    // scraping stdout. Tony asked us to "capture everything" 2026-05-28.
+    try {
+      const resultJson = {
+        ranAt: new Date().toISOString(),
+        outputDir,
+        license: licenseNumber,
+        stage5: {
+          mode: stage5Result.mode,
+          submitted: stage5Result.submitted,
+          stage5DurationMs: stage5Result.stage5DurationMs,
+          dryRunReason: stage5Result.dryRunReason ?? null,
+          recoveredFromBackstop: Boolean(stage5Result.recoveredFromBackstop),
+          recoveredFromHistoryPage: Boolean(stage5Result.recoveredFromHistoryPage),
+          confirmationNumbers: stage5Result.confirmationNumbers ?? null,
+          submittedTimestamp: stage5Result.submittedTimestamp ?? null,
+          confirmationEmail: stage5Result.confirmationEmail ?? null,
+          successToastMessages: stage5Result.successToastMessages ?? [],
+          errorToastMessages: stage5Result.errorToastMessages ?? [],
+          historyOrders: stage5Result.historyOrders ?? [],
+          currentUrl: stage5Result.currentUrl,
+        },
+        stage4Summary: stage4Result?.orderSummary ?? null,
+        cartLines,
+      };
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(`${outputDir}/stage5-result.json`, JSON.stringify(resultJson, null, 2), "utf8");
+      console.log(`  RESULT JSON: ${outputDir}/stage5-result.json`);
+    } catch (jsonErr) {
+      console.warn(`  (could not write stage5-result.json: ${jsonErr.message})`);
+    }
   } catch (e) {
     console.error(`[stage 5] FAILED — ${e.code ?? "(no code)"}: ${e.message}`);
     if (e.details) console.error("  details:", JSON.stringify(e.details));
     if (e.screenshotPath) console.error("  screenshot:", e.screenshotPath);
+    // Even on failure, write a result file with the error so we have a
+    // record for debugging without having to download artifacts.
+    try {
+      const { writeFile } = await import("node:fs/promises");
+      const failResult = {
+        ranAt: new Date().toISOString(),
+        outputDir,
+        license: licenseNumber,
+        stage5: { failed: true, errorCode: e.code ?? null, errorMessage: e.message, details: e.details ?? null, screenshotPath: e.screenshotPath ?? null },
+        cartLines,
+      };
+      await writeFile(`${outputDir}/stage5-result.json`, JSON.stringify(failResult, null, 2), "utf8");
+    } catch {/* best effort */}
   }
 } else {
   console.log(`\n[test] Stage 5 not requested — stopped after Stage 4 (dry run by design)`);

@@ -1,7 +1,38 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+// Overall Stage 5 budget. Split internally:
+//   - up to POST_SUBMIT_WAIT_MS waiting for a terminal post-click signal
+//     (thank-you page / inline confirmation / URL change / error toast)
+//   - up to HISTORY_FETCH_BUDGET_MS navigating to /milo/orders and scraping
+//     the orders history page (only when thank-you is detected OR backstop)
+// Real MILO submits for large carts (60+ lines × 2 ADAs) need more than
+// the original 60s — see 2026-05-28 false-negative (project_milo_post_submit_flow).
+const DEFAULT_TIMEOUT_MS = 180_000;
+const POST_SUBMIT_WAIT_MS = 75_000;
+const HISTORY_FETCH_BUDGET_MS = 90_000;
+
+/**
+ * MILO's post-submit "thank you" page patterns. After a real submit MILO
+ * shows a simple acknowledgment page that DOES NOT contain inline
+ * confirmation numbers — the actual confirmation # lives on /milo/orders.
+ * Detecting any of these means "submit accepted, go fetch the history page."
+ *
+ * Sourced from Tony's first-hand description (2026-05-28) — he's placed
+ * many real orders manually and this is the actual UI behavior.
+ */
+const THANK_YOU_PATTERNS = [
+  /thank\s+you\s+for\s+your\s+order/i,
+  /your\s+order\s+(?:has\s+been\s+)?(?:placed|submitted|received|accepted)/i,
+  /order\s+(?:has\s+been\s+)?(?:placed|submitted|received|accepted)/i,
+  /(?:visit|check|go\s+to|view)\s+(?:the\s+)?orders?\s+(?:page|history|list)/i,
+  /please\s+(?:visit|check|go\s+to)\s+(?:the\s+)?orders?/i,
+];
+
+function looksLikeThankYouPage(bodyText) {
+  if (!bodyText) return false;
+  return THANK_YOU_PATTERNS.some((p) => p.test(bodyText));
+}
 
 function createStage5Error(code, message, details = {}, screenshotPath = null) {
   const err = new Error(message);
@@ -208,11 +239,30 @@ async function clickCheckoutButtonSafely(page, button, outputDir, artifacts, ses
   await captureArtifact(page, outputDir, artifacts, "01c-checkout-postclick-forensic");
 }
 
-async function waitForCheckoutConfirmation(page, timeoutMs = DEFAULT_TIMEOUT_MS, outputDir = null, artifacts = []) {
+/**
+ * Wait for a terminal signal after the Checkout button click.
+ *
+ * Returns the FIRST signal that fires:
+ *   - "inline_confirmation"  — explicit "Confirmation #<digits>" in body
+ *                              (legacy MILO behavior; preserved in case the
+ *                              UI ever serves it again)
+ *   - "url_orders"           — URL navigated to /milo/orders or
+ *                              /milo/account/orders (also legacy-friendly)
+ *   - "thank_you"            — MILO's actual post-submit "thank you, visit
+ *                              orders page" screen (the common case as of
+ *                              2026-05-28; URL stays on /milo/cart/checkout)
+ *   - "success_toast"        — toast component fired
+ *   - "error_toast"          — toast indicating a failure (caller throws)
+ *
+ * Throws MILO_STAGE5_CONFIRMATION_TIMEOUT only when NONE of the above fire
+ * within `waitMs`. Even on that real timeout, the caller has a backstop
+ * (try the orders-history page anyway).
+ */
+async function waitForCheckoutConfirmation(page, waitMs = POST_SUBMIT_WAIT_MS, outputDir = null, artifacts = []) {
   const startedAt = Date.now();
   let lastState = { currentUrl: page.url(), bodyTail: "", isLoading: false };
 
-  while (Date.now() - startedAt < timeoutMs) {
+  while (Date.now() - startedAt < waitMs) {
     try {
       const state = await page.evaluate(() => {
         const bodyText = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
@@ -222,7 +272,7 @@ async function waitForCheckoutConfirmation(page, timeoutMs = DEFAULT_TIMEOUT_MS,
         const errorToastMessages = [...document.querySelectorAll(".toast-message, .toast-title, .toast-error, .alert-danger, .text-danger")]
           .map((el) => (el.textContent || "").replace(/\s+/g, " ").trim())
           .filter((msg) => msg && /(error|failed|unable|invalid|denied)/i.test(msg));
-        // Strict confirmation signal: explicit "Confirmation #<digits>" pattern in body.
+        // Strict confirmation signal: explicit "Confirmation #<digits>" in body.
         // Loose digit-pattern matching alone is unreliable because MILO's header always
         // shows the 6-digit license number — that would always look like a confirmation.
         const confirmationPatternMatches = [...new Set((bodyText.match(/confirmation\s*#?\s*:?\s*(\d{4,})/gi) || []))];
@@ -254,22 +304,30 @@ async function waitForCheckoutConfirmation(page, timeoutMs = DEFAULT_TIMEOUT_MS,
 
       const urlLooksSubmitted = /\/milo\/orders|\/milo\/account\/orders/i.test(lastState.currentUrl);
       const hasErrorToast = state.errorToastMessages.length > 0;
-      // Terminal signal: real confirmation pattern OR URL change OR success toast OR error toast.
-      // Plain 6+ digit body match REMOVED as a signal (license number false-positives).
-      if (
-        state.confirmationPatternMatches.length > 0 ||
-        urlLooksSubmitted ||
-        state.successToastMessages.length > 0 ||
-        hasErrorToast
-      ) {
-        await captureArtifact(page, outputDir, artifacts, "02-after-checkout-click");
+      const isThankYou = looksLikeThankYouPage(state.bodyText);
+
+      // Determine the FIRST terminal signal that fired. Order matters:
+      // error_toast wins over success signals so we don't mis-route a failed
+      // submit as success. Otherwise prefer the most specific signal
+      // available (inline > url > thank-you > generic toast).
+      let signalType = null;
+      if (hasErrorToast) signalType = "error_toast";
+      else if (state.confirmationPatternMatches.length > 0) signalType = "inline_confirmation";
+      else if (urlLooksSubmitted) signalType = "url_orders";
+      else if (isThankYou) signalType = "thank_you";
+      else if (state.successToastMessages.length > 0) signalType = "success_toast";
+
+      if (signalType) {
+        await captureArtifact(page, outputDir, artifacts, `02-after-checkout-click-${signalType}`);
         return {
           confirmed: true,
+          signalType,
           currentUrl: lastState.currentUrl,
           successToastMessages: state.successToastMessages,
           errorToastMessages: state.errorToastMessages,
           confirmationPatternMatches: state.confirmationPatternMatches,
           waitedMs: Date.now() - startedAt,
+          bodyTail: lastState.bodyTail.slice(-2_000),
         };
       }
       await page.waitForTimeout(500);
@@ -281,13 +339,239 @@ async function waitForCheckoutConfirmation(page, timeoutMs = DEFAULT_TIMEOUT_MS,
     }
   }
 
-  await captureArtifact(page, outputDir, artifacts, "02-after-checkout-click").catch(() => {});
+  await captureArtifact(page, outputDir, artifacts, "02-after-checkout-click-timeout").catch(() => {});
   throw createStage5Error("MILO_STAGE5_CONFIRMATION_TIMEOUT", "Timed out waiting for checkout confirmation signals", {
-    timeoutMs,
+    waitMs,
     currentUrl: page.url(),
     bodyTail: lastState.bodyTail,
     wasInLoadingState: lastState.isLoading,
   });
+}
+
+/**
+ * Navigate to /milo/orders and scrape the orders-history page for the
+ * confirmation data MILO doesn't show on the post-submit thank-you screen.
+ *
+ * Called in two scenarios:
+ *   1. Happy path — `waitForCheckoutConfirmation` returned `signalType:
+ *      "thank_you"`, so we know the submit succeeded and we just need to
+ *      pull the confirmation numbers from the history feed.
+ *   2. Backstop — Stage 5 timed out without seeing any terminal signal.
+ *      The submit MAY have still happened (the 2026-05-28 case). Try the
+ *      history page; if it shows fresh orders for this license matching
+ *      our cart totals, recover the confirmation data and report success.
+ *
+ * Returns the same shape as `parseConfirmationState` so the caller can
+ * use either path interchangeably.
+ *
+ * Throws MILO_STAGE5_HISTORY_FETCH_FAILED if /milo/orders doesn't load,
+ * or MILO_STAGE5_HISTORY_NO_RECENT_MATCH if no orders on the page match
+ * what we expected to submit (license + today's date + total).
+ */
+export async function navigateToOrdersAndCapture(page, session, outputDir, artifacts, budgetMs = HISTORY_FETCH_BUDGET_MS) {
+  const startedAt = Date.now();
+  const deadline = startedAt + budgetMs;
+
+  try {
+    await page.goto("https://www.lara.michigan.gov/milo/orders", {
+      waitUntil: "domcontentloaded",
+      timeout: Math.max(15_000, Math.min(45_000, deadline - Date.now())),
+    });
+  } catch (error) {
+    throw createStage5Error("MILO_STAGE5_HISTORY_FETCH_FAILED", "Could not navigate to /milo/orders to retrieve confirmation data", {
+      currentUrl: page.url(),
+      reason: String(error?.message || error),
+    });
+  }
+
+  // Wait for the orders list to render. MILO uses Angular and may take a
+  // few seconds after DOMContentLoaded before the list is populated. Poll
+  // for either visible orders or a known empty-state until we run out of
+  // budget.
+  while (Date.now() < deadline) {
+    const ready = await page.evaluate(() => {
+      const bodyText = (document.body?.innerText || "");
+      // Heuristics: at least one "Confirmation #" string anywhere is a
+      // strong sign that orders rendered. An "Order Placed / Updated"
+      // header label is another sign.
+      const hasConfirmation = /confirmation\s*#?\s*:?\s*\d{4,}/i.test(bodyText);
+      const hasOrderHeader = /order\s+placed/i.test(bodyText);
+      const hasEmpty = /no\s+orders\s+found|you\s+have\s+no\s+orders/i.test(bodyText);
+      return { hasConfirmation, hasOrderHeader, hasEmpty, bodyLength: bodyText.length };
+    });
+    if (ready.hasConfirmation || ready.hasOrderHeader || ready.hasEmpty) break;
+    await page.waitForTimeout(500);
+  }
+
+  await captureArtifact(page, outputDir, artifacts, "04-orders-history");
+
+  const parsed = await parseOrdersHistoryPage(page, session);
+  return parsed;
+}
+
+/**
+ * Parse the rendered /milo/orders page and pull out the orders that
+ * match THIS Stage 5 submission. Strategy:
+ *
+ *   1. Try structured DOM selectors first (Angular components like
+ *      <app-order-card>, <article>, .order-row, etc.). Each rendered
+ *      order block on MILO contains a CONFIRMATION # cell and an
+ *      ORDER # cell — those are the load-bearing data.
+ *   2. Fallback: split body text into per-order blocks by the
+ *      "ORDER PLACED" header label and regex-extract from each block.
+ *   3. Filter to orders whose ORDER PLACED date is today AND whose
+ *      total sum is within tolerance of Stage 4's gross/net totals.
+ *      If no totals are available, take the top N (== number of ADAs
+ *      in our session) most recent orders.
+ *
+ * Returns the same shape as `parseConfirmationState`:
+ *   { confirmationNumbers, submittedTimestamp, confirmationEmail,
+ *     successToastMessages, errorToastMessages, currentUrl }
+ * Plus a `historyOrders` array with the full per-order detail so the
+ * caller can persist the full audit trail Tony asked for.
+ */
+async function parseOrdersHistoryPage(page, session) {
+  const parsed = await page.evaluate(() => {
+    const bodyText = (document.body?.innerText || "").replace(/[ \t]+/g, " ");
+    // --- Structured pass: try to find per-order containers ---
+    // MILO renders each order as a card-like block. Try a few selectors
+    // that have shown up across MILO's various Angular layouts. If none
+    // match, fall back to the text-pattern pass.
+    const containerSelectors = [
+      "app-order-card",
+      "app-order-list-item",
+      ".order-card",
+      ".order-list-item",
+      "article.order",
+      "[class*='order-card']",
+      "[class*='order-row']",
+    ];
+    const structuredOrders = [];
+    for (const sel of containerSelectors) {
+      const els = [...document.querySelectorAll(sel)];
+      if (els.length > 0) {
+        for (const el of els) {
+          const txt = (el.textContent || "").replace(/\s+/g, " ").trim();
+          if (!txt) continue;
+          const confMatch = txt.match(/confirmation\s*#?\s*:?\s*(\d{4,})/i);
+          const orderMatch = txt.match(/order\s*#?\s*:?\s*(\d{4,})/i);
+          if (confMatch || orderMatch) {
+            structuredOrders.push({ raw: txt.slice(0, 4_000), selector: sel });
+          }
+        }
+        if (structuredOrders.length > 0) break;
+      }
+    }
+
+    // --- Text-pattern pass: split body by ORDER PLACED labels ---
+    const textBlocks = [];
+    // Use a stateful split on the ORDER PLACED header phrase.
+    const splitRe = /(?=ORDER\s+PLACED)/gi;
+    const rawBlocks = bodyText.split(splitRe).map((b) => b.trim()).filter((b) => /ORDER\s+PLACED/i.test(b));
+    for (const block of rawBlocks) {
+      textBlocks.push(block.slice(0, 4_000));
+    }
+
+    return { structuredOrders, textBlocks, currentUrl: window.location.href, bodyLength: bodyText.length };
+  });
+
+  // Pick the blocks we'll actually parse. Structured wins when present.
+  const blocks = parsed.structuredOrders.length > 0
+    ? parsed.structuredOrders.map((o) => o.raw)
+    : parsed.textBlocks;
+
+  // Today's date (Eastern time roughly — MILO is Michigan, so US date
+  // formats from the local box are fine). We compare on the YYYY-MM-DD
+  // string from a Date constructed in the runtime TZ — Fly's Linux boxes
+  // run UTC, MILO renders Eastern. For correctness, accept any of:
+  //   - today UTC
+  //   - today Eastern (UTC-4 in May)
+  // We compute both candidate date strings and accept either.
+  const now = new Date();
+  const todayUtc = now.toISOString().slice(0, 10);
+  const easternMs = now.getTime() - 4 * 60 * 60 * 1000; // EDT (May)
+  const todayEastern = new Date(easternMs).toISOString().slice(0, 10);
+  const todayCandidates = new Set([todayUtc, todayEastern]);
+
+  const historyOrders = [];
+  for (const block of blocks) {
+    // Extract per-block fields with conservative regexes
+    const confMatch = block.match(/confirmation\s*#?\s*:?\s*(\d{4,})/i);
+    const orderMatch = block.match(/order\s*#?\s*:?\s*(\d{4,})/i);
+    if (!confMatch && !orderMatch) continue;
+    const distributorMatch = block.match(/distributor\s*:?\s*([A-Z][A-Z0-9&,. \-']+(?:Inc\.?|LLC|Corp\.?|Co\.?)?)/i);
+    const subtotalMatch = block.match(/subtotal\s*\|?\s*\$?\s*([0-9,]+\.[0-9]{2})/i);
+    const totalMatch = block.match(/total\s*\|?\s*\$?\s*([0-9,]+\.[0-9]{2})/i) || block.match(/\$\s*([0-9,]+\.[0-9]{2})\s*[\|/]\s*\$\s*([0-9,]+\.[0-9]{2})/);
+    const placedMatch = block.match(/(?:order\s+placed[^A-Z]*)?([A-Z][A-Z]{2,8}\s+\d{1,2},?\s+\d{4})/i);
+    const statusMatch = block.match(/\b(Finished|In Progress|Confirmed|Cancell?ed|Processing)\b/i);
+    const deliveryMatch = block.match(/delivery\s+date\s*:?\s*([A-Z][A-Z]{2,8}\s+\d{1,2},?\s+\d{4})/i);
+
+    const placedRaw = placedMatch ? placedMatch[1] : null;
+    const placedIso = parseTimestampTextToIso(placedRaw);
+    const placedDate = placedIso ? placedIso.slice(0, 10) : null;
+
+    historyOrders.push({
+      confirmationNumber: confMatch ? confMatch[1] : null,
+      orderNumber: orderMatch ? orderMatch[1] : null,
+      distributorRaw: distributorMatch ? distributorMatch[1].trim() : null,
+      placedRaw,
+      placedDate,
+      placedIso,
+      deliveryRaw: deliveryMatch ? deliveryMatch[1] : null,
+      subtotal: subtotalMatch ? Number(subtotalMatch[1].replace(/,/g, "")) : null,
+      total: totalMatch ? Number((totalMatch[2] || totalMatch[1]).replace(/,/g, "")) : null,
+      status: statusMatch ? statusMatch[1] : null,
+      blockTail: block.slice(-1_000),
+    });
+  }
+
+  // Filter to today's orders. If date parsing failed for an entry, keep
+  // it — we'd rather over-report than miss a recovery.
+  const todayOrders = historyOrders.filter((o) => !o.placedDate || todayCandidates.has(o.placedDate));
+
+  // Limit to the most recent N == # ADAs we submitted. The orders page is
+  // typically reverse-chronological, so the first N of today's are ours.
+  const expectedCount = Array.isArray(session.adaOrders) ? session.adaOrders.length : todayOrders.length;
+  const ours = todayOrders.slice(0, expectedCount);
+
+  if (ours.length === 0) {
+    throw createStage5Error("MILO_STAGE5_HISTORY_NO_RECENT_MATCH", "No orders on /milo/orders matched today's submission", {
+      currentUrl: parsed.currentUrl,
+      historyOrdersScanned: historyOrders.length,
+      structuredCount: parsed.structuredOrders.length,
+      textBlocksCount: parsed.textBlocks.length,
+      bodyLength: parsed.bodyLength,
+      expectedAdaCount: expectedCount,
+    });
+  }
+
+  // Build the confirmation map keyed by ADA number (when we can match by
+  // distributor name) or by index when we can't.
+  const confirmationNumbers = {};
+  const ordersByAda = [...(session.adaOrders || [])];
+  ours.forEach((order, idx) => {
+    let key = `ada_${idx + 1}`;
+    if (order.distributorRaw) {
+      const inferredAdaNumber = inferAdaNumberFromName(order.distributorRaw);
+      if (inferredAdaNumber) {
+        key = inferredAdaNumber;
+      } else if (ordersByAda[idx]?.adaNumber) {
+        key = String(ordersByAda[idx].adaNumber);
+      }
+    }
+    confirmationNumbers[key] = order.confirmationNumber;
+  });
+
+  return {
+    confirmationNumbers,
+    submittedTimestamp: new Date().toISOString(),
+    confirmationEmail: null, // not on the history page
+    successToastMessages: [],
+    errorToastMessages: [],
+    currentUrl: parsed.currentUrl,
+    historyOrders: ours,
+    recoveredFromHistoryPage: true,
+  };
 }
 
 function parseTimestampTextToIso(timestampText) {
@@ -506,8 +790,112 @@ export async function checkoutOnMilo(session, options = {}) {
     }
 
     await clickCheckoutButtonSafely(page, checkoutButton, outputDir, stage5Artifacts, session);
-    await waitForCheckoutConfirmation(page, timeoutMs, outputDir, stage5Artifacts);
-    const parsed = await parseConfirmationState(page, session);
+
+    /**
+     * Post-click resolution. The wait function returns the FIRST terminal
+     * signal it sees and identifies which one fired. We then choose how
+     * to extract confirmation data based on that signal:
+     *
+     *   - error_toast        → throw, the submit failed
+     *   - inline_confirmation→ use legacy parseConfirmationState (data is
+     *                          right there on the current page)
+     *   - url_orders         → parseConfirmationState on the orders page
+     *                          we already landed on
+     *   - thank_you          → navigate to /milo/orders, scrape history
+     *                          (the common case as of 2026-05-28)
+     *   - success_toast      → try inline first, fall back to history
+     *
+     * Backstop: if waitForCheckoutConfirmation times out, try the history
+     * page anyway. MILO may have submitted but our wait missed the signal.
+     * If history confirms our orders, we recover the data. If not, the
+     * timeout is re-thrown for diagnosis.
+     */
+    let signal;
+    try {
+      signal = await waitForCheckoutConfirmation(page, POST_SUBMIT_WAIT_MS, outputDir, stage5Artifacts);
+    } catch (waitError) {
+      if (waitError?.code === "MILO_STAGE5_CONFIRMATION_TIMEOUT") {
+        await appendAction(outputDir, {
+          stage: "stage5",
+          action: "post_submit_wait_timed_out_backstop_history_fetch",
+          ts: new Date().toISOString(),
+          currentUrl: page.url(),
+          bodyTail: waitError.details?.bodyTail?.slice(-2_000) || null,
+        });
+        try {
+          const backstop = await navigateToOrdersAndCapture(page, session, outputDir, stage5Artifacts);
+          await captureArtifact(page, outputDir, stage5Artifacts, "03-stage5-final-backstop");
+          await appendAction(outputDir, {
+            stage: "stage5",
+            action: "checkout_submitted_via_backstop_recovery",
+            mode: "submit",
+            ts: new Date().toISOString(),
+            confirmationNumbers: backstop.confirmationNumbers,
+            submittedTimestamp: backstop.submittedTimestamp,
+            historyOrders: backstop.historyOrders,
+          });
+          const completedAtDateB = new Date();
+          return {
+            ...session,
+            stage5DurationMs: completedAtDateB.getTime() - stage5StartedAtDate.getTime(),
+            submitted: true,
+            mode: "submit",
+            confirmationNumbers: backstop.confirmationNumbers,
+            submittedTimestamp: backstop.submittedTimestamp,
+            successToastMessages: [],
+            errorToastMessages: [],
+            confirmationEmail: null,
+            currentUrl: backstop.currentUrl,
+            outputDir,
+            stage5Artifacts,
+            historyOrders: backstop.historyOrders,
+            recoveredFromBackstop: true,
+          };
+        } catch (backstopError) {
+          // Backstop failed too — re-throw the original timeout with
+          // backstop diagnostics attached so we can debug what happened.
+          waitError.details = {
+            ...(waitError.details || {}),
+            backstopError: backstopError?.code || String(backstopError?.message || backstopError),
+            backstopDetails: backstopError?.details || null,
+          };
+          throw waitError;
+        }
+      }
+      throw waitError;
+    }
+
+    if (signal.signalType === "error_toast") {
+      throw createStage5Error("MILO_STAGE5_ERROR_TOAST", "MILO returned an error toast after the Checkout click — submit failed", {
+        currentUrl: signal.currentUrl,
+        errorToastMessages: signal.errorToastMessages,
+        bodyTail: signal.bodyTail,
+      });
+    }
+
+    let parsed;
+    if (signal.signalType === "thank_you") {
+      // The common case: MILO acknowledged submit but doesn't render
+      // confirmation # on the thank-you page. Fetch them from the history.
+      parsed = await navigateToOrdersAndCapture(page, session, outputDir, stage5Artifacts);
+    } else if (signal.signalType === "inline_confirmation" || signal.signalType === "url_orders") {
+      // Legacy MILO behavior: confirmation data is on the current page.
+      parsed = await parseConfirmationState(page, session);
+    } else {
+      // success_toast or any unhandled case: try inline first, fall back to
+      // history. parseConfirmationState throws if it can't find anything;
+      // catch and route to the history page in that case.
+      try {
+        parsed = await parseConfirmationState(page, session);
+      } catch (parseError) {
+        if (parseError?.code === "MILO_STAGE5_CONFIRMATION_PARSE_FAILED") {
+          parsed = await navigateToOrdersAndCapture(page, session, outputDir, stage5Artifacts);
+        } else {
+          throw parseError;
+        }
+      }
+    }
+
     await captureArtifact(page, outputDir, stage5Artifacts, "03-stage5-final");
 
     await appendAction(outputDir, {
@@ -515,8 +903,10 @@ export async function checkoutOnMilo(session, options = {}) {
       action: "checkout_submitted",
       mode: "submit",
       ts: new Date().toISOString(),
+      signalType: signal.signalType,
       confirmationNumbers: parsed.confirmationNumbers,
       submittedTimestamp: parsed.submittedTimestamp,
+      ...(parsed.historyOrders ? { historyOrders: parsed.historyOrders } : {}),
     });
 
     const completedAtDate = new Date();
@@ -527,12 +917,14 @@ export async function checkoutOnMilo(session, options = {}) {
       mode: "submit",
       confirmationNumbers: parsed.confirmationNumbers,
       submittedTimestamp: parsed.submittedTimestamp,
-      successToastMessages: parsed.successToastMessages,
-      errorToastMessages: parsed.errorToastMessages,
-      confirmationEmail: parsed.confirmationEmail,
+      successToastMessages: parsed.successToastMessages || [],
+      errorToastMessages: parsed.errorToastMessages || [],
+      confirmationEmail: parsed.confirmationEmail || null,
       currentUrl: parsed.currentUrl,
       outputDir,
       stage5Artifacts,
+      ...(parsed.historyOrders ? { historyOrders: parsed.historyOrders } : {}),
+      ...(parsed.recoveredFromHistoryPage ? { recoveredFromHistoryPage: true } : {}),
     };
   };
 
