@@ -100,8 +100,16 @@ try {
         `sub=$${o.subtotal ?? "?"}`,
         `tot=$${o.total ?? "?"}`,
         `status=${o.status ?? "?"}`,
+        `lines=${o.lineItemCount ?? 0}`,
       ];
       console.log(`  - ${parts.join(" | ")}`);
+      if (Array.isArray(o.lineItems) && o.lineItems.length > 0) {
+        for (const li of o.lineItems) {
+          console.log(
+            `      · code=${li.liquorCode} | qty=${li.quantity ?? "?"} | unit=$${li.unitPrice ?? "?"} | sub=$${li.lineSubtotal ?? "?"} | type=${li.orderType ?? "?"} | ${li.productName ?? "?"}`,
+          );
+        }
+      }
     }
   } else {
     console.log("");

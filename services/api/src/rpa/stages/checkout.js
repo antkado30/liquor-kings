@@ -550,6 +550,40 @@ async function parseOrdersHistoryPage(page, session) {
     const placedIso = parseTimestampTextToIso(placedRaw);
     const placedDate = placedIso ? placedIso.slice(0, 10) : null;
 
+    // Per-line items inside this order block. MILO renders each line as:
+    //   Liquor Code <code>  Product <name>  Quantity <n>  Unit Price $X.XX
+    //   Subtotal $Y.YY  Order Type MILO
+    //
+    // Strategy: split the block on "Liquor Code" markers, then regex-extract
+    // each field from each sub-block. This gives us the FULL order detail
+    // Tony wants mirrored from MLCC's confirmation page.
+    const lineItems = [];
+    const lineSplits = block.split(/(?=Liquor\s*Code\b)/i);
+    for (const seg of lineSplits) {
+      const codeM = seg.match(/Liquor\s*Code\s*:?\s*([0-9A-Za-z\-]+)/i);
+      if (!codeM) continue;
+      // Skip if the "code" we matched is actually the confirmation # or order #
+      // (some MILO blocks repeat those labels — defensive).
+      const code = codeM[1].trim();
+      if (!/^\d{1,7}$/.test(code)) continue;
+
+      // Product name: between "Product" and "Quantity" (lookahead).
+      const productM = seg.match(/Product\s*:?\s*([^\n\r]+?)\s+Quantity\b/i);
+      const qtyM = seg.match(/Quantity\s*:?\s*(\d+)/i);
+      const unitM = seg.match(/Unit\s*Price\s*\$?\s*([0-9,]+\.[0-9]{2})/i);
+      const subM = seg.match(/Subtotal\s*\$?\s*([0-9,]+\.[0-9]{2})/i);
+      const orderTypeM = seg.match(/Order\s*Type\s*:?\s*(MILO|Phone|ADA|EDI|[A-Z]{2,6})/i);
+
+      lineItems.push({
+        liquorCode: code,
+        productName: productM ? productM[1].replace(/\s+/g, " ").trim() : null,
+        quantity: qtyM ? Number(qtyM[1]) : null,
+        unitPrice: unitM ? Number(unitM[1].replace(/,/g, "")) : null,
+        lineSubtotal: subM ? Number(subM[1].replace(/,/g, "")) : null,
+        orderType: orderTypeM ? orderTypeM[1] : null,
+      });
+    }
+
     historyOrders.push({
       confirmationNumber: confMatch ? confMatch[1] : null,
       orderNumber: orderMatch ? orderMatch[1] : null,
@@ -561,6 +595,8 @@ async function parseOrdersHistoryPage(page, session) {
       subtotal: subtotalVal,
       total: totalVal,
       status: statusMatch ? statusMatch[1] : null,
+      lineItems,
+      lineItemCount: lineItems.length,
       blockTail: block.slice(-1_500),
     });
   }
