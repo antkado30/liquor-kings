@@ -4,6 +4,7 @@ import {
 } from "./cart-execution-payload.service.js";
 import { verifyCartItemsBeforeExecution } from "./bottle-identity.service.js";
 import { assertMlccExecutionReadinessForEnqueue } from "../mlcc/assert-mlcc-execution-readiness-for-cart.js";
+import { validateCartByCodes } from "../lib/cart-validation.js";
 import {
   fetchAttemptsByRunIdsGrouped,
   listItemAttemptFields,
@@ -550,6 +551,134 @@ export const createExecutionRunFromCart = async (
         error: `Cart is in state '${cartRow.status}' and cannot be sent to MILO`,
       },
     };
+  }
+
+  // Run the LK rule-engine (mlcc_rules table — split-case, 9L per ADA,
+  // full-case-only sizes, etc.) and persist the result to
+  // carts.validation_status. buildExecutionPayloadForSubmittedCart
+  // requires validation_status='validated' downstream — without this
+  // step it returns 400 "Cart must be validated before execution payload
+  // can be built", which is the failure mode Tony hit 2026-05-30.
+  //
+  // The scanner already runs this rule-engine client-side via the
+  // debounced validateCart in CartDrawer for instant feedback, but we
+  // ALSO run it server-side here because client-side state is never the
+  // source of truth — defense in depth + auditability.
+  //
+  // Idempotent: if validation_status is already 'validated' (e.g. the
+  // second call in the validate→submit sequence), we skip re-validating.
+  //
+  // Both modes (validate_only and rpa_run) need this — without
+  // validation_status='validated', the payload builder bails for either.
+  const { data: cartForValidation, error: cartReadError } = await supabase
+    .from("carts")
+    .select("id, validation_status")
+    .eq("id", cartId)
+    .eq("store_id", storeId)
+    .maybeSingle();
+  if (cartReadError) {
+    return {
+      statusCode: 500,
+      body: { error: cartReadError.message },
+    };
+  }
+
+  if (cartForValidation?.validation_status !== "validated") {
+    // Fetch the cart's items in the format validateCartByCodes expects.
+    const { data: cartItemRows, error: itemsErr } = await supabase
+      .from("cart_items")
+      .select("mlcc_item_id, quantity, mlcc_items(code)")
+      .eq("cart_id", cartId);
+    if (itemsErr) {
+      return { statusCode: 500, body: { error: itemsErr.message } };
+    }
+    const itemsForRuleEngine = (cartItemRows || [])
+      .map((r) => ({
+        code: r.mlcc_items?.code ?? null,
+        quantity: r.quantity,
+      }))
+      .filter((it) => it.code != null);
+
+    if (itemsForRuleEngine.length === 0) {
+      return {
+        statusCode: 400,
+        body: { error: "Cart has no items to validate" },
+      };
+    }
+
+    const ruleResult = await validateCartByCodes(supabase, itemsForRuleEngine);
+    const now = new Date().toISOString();
+
+    if (!ruleResult?.ok) {
+      // Rule engine itself errored — set invalid and surface upstream.
+      await supabase
+        .from("carts")
+        .update({
+          validation_status: "invalid",
+          validation_completed_at: now,
+          validation_error: ruleResult?.error ?? "Rule engine error",
+          updated_at: now,
+        })
+        .eq("id", cartId)
+        .eq("store_id", storeId);
+      return {
+        statusCode: 400,
+        body: {
+          error: "RULE_ENGINE_ERROR",
+          message: ruleResult?.error ?? "Rule engine error",
+        },
+      };
+    }
+
+    if (ruleResult.valid !== true) {
+      // Cart has rule-violations (split-case, 9L per ADA, etc.). Persist
+      // and return the structured errors so the scanner can render them.
+      const errorSummary = (ruleResult.errors || [])
+        .map((e) => e.reason)
+        .filter(Boolean)
+        .slice(0, 5)
+        .join("; ");
+      await supabase
+        .from("carts")
+        .update({
+          validation_status: "invalid",
+          validation_completed_at: now,
+          validation_error: errorSummary || "Cart violates MLCC ordering rules",
+          updated_at: now,
+        })
+        .eq("id", cartId)
+        .eq("store_id", storeId);
+      return {
+        statusCode: 400,
+        body: {
+          error: "CART_VALIDATION_FAILED",
+          message: "Cart violates MLCC ordering rules — fix and retry",
+          rule_errors: ruleResult.errors,
+          ada_breakdown: ruleResult.adaBreakdown,
+          unknown_codes: ruleResult.unknownCodes,
+        },
+      };
+    }
+
+    // Rule engine passed — persist validated state.
+    const { error: validatedWriteErr } = await supabase
+      .from("carts")
+      .update({
+        validation_status: "validated",
+        validation_completed_at: now,
+        validation_error: null,
+        updated_at: now,
+      })
+      .eq("id", cartId)
+      .eq("store_id", storeId);
+    if (validatedWriteErr) {
+      return {
+        statusCode: 500,
+        body: {
+          error: `Could not persist validated state: ${validatedWriteErr.message}`,
+        },
+      };
+    }
   }
 
   // Build the metadata blob the worker uses to decide which pipeline to
