@@ -1229,3 +1229,123 @@ select {
 .confirm-actions .btn {
   min-width: 110px;
 }
+
+/* ─── Stage-by-stage RPA progress panel (task #49, 2026-05-30) ──────────
+   Replaces the boring single-banner "Validating against MLCC…" message
+   with a checkable stage list. Visible progress = perceived speed even
+   when the actual wall-clock time hasn't changed. */
+
+.rpa-progress {
+  margin: 12px 0;
+  padding: 14px;
+  background: rgba(108, 99, 255, 0.08);
+  border: 1px solid rgba(108, 99, 255, 0.25);
+  border-radius: 12px;
+}
+
+.rpa-progress__headline {
+  margin-bottom: 12px;
+}
+
+.rpa-progress__headline strong {
+  font-size: 15px;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.rpa-progress__sub {
+  font-size: 12px;
+}
+
+.rpa-progress__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rpa-progress__step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 14px;
+  transition: opacity 0.2s ease;
+}
+
+.rpa-progress__icon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.rpa-progress__step--done .rpa-progress__icon {
+  background: #22c55e;
+  color: #fff;
+}
+
+.rpa-progress__step--done .rpa-progress__label {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.2);
+}
+
+.rpa-progress__step--active .rpa-progress__icon {
+  background: var(--accent);
+  color: #fff;
+  animation: rpa-progress-pulse 1.2s ease-in-out infinite;
+}
+
+.rpa-progress__step--active .rpa-progress__label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rpa-progress__step--pending .rpa-progress__icon {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1.5px solid rgba(148, 163, 184, 0.4);
+  font-size: 11px;
+}
+
+.rpa-progress__step--pending .rpa-progress__label {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+@keyframes rpa-progress-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(108, 99, 255, 0.5);
+  }
+  50% {
+    transform: scale(1.12);
+    box-shadow: 0 0 0 6px rgba(108, 99, 255, 0);
+  }
+}
+
+/* ─── banner-content-list (task #49, 2026-05-30) ─────────────────────────
+   For lists rendered INSIDE a banner (success-context messages from
+   MLCC validate). Inherits the banner's color instead of being
+   hardcoded red like .drawer-validation-errors. Fixes the red-text-on-
+   green-banner bug Tony hit during the first end-to-end validate. */
+
+.banner-content-list {
+  margin: 0 0 6px;
+  padding-left: 18px;
+  font-size: 0.9rem;
+  color: inherit;
+}
+
+.banner-content-list li {
+  margin: 2px 0;
+}

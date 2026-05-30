@@ -35,6 +35,32 @@ function money(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
 }
 
+/**
+ * Stages the user sees during a validate_only RPA run. The `id` matches
+ * the worker's `progress_stage` value reported via the heartbeat. The
+ * `label` is user-facing copy (kept short and concrete — "Logging in"
+ * not "Stage 1"). Order matters: the progress list checks indices left
+ * to right.
+ */
+const RPA_STAGES_VALIDATE: ReadonlyArray<{ id: string; label: string }> = [
+  { id: "rpa_login", label: "Logging into MLCC" },
+  { id: "rpa_navigate", label: "Loading products page" },
+  { id: "rpa_add_items", label: "Adding items to cart" },
+  { id: "rpa_validate", label: "Validating cart" },
+];
+
+/**
+ * Stages for a full submit run (Stages 1-5). Same shape as the validate
+ * list with one extra step at the end.
+ */
+const RPA_STAGES_SUBMIT: ReadonlyArray<{ id: string; label: string }> = [
+  { id: "rpa_login", label: "Logging into MLCC" },
+  { id: "rpa_navigate", label: "Loading products page" },
+  { id: "rpa_add_items", label: "Adding items to cart" },
+  { id: "rpa_validate", label: "Validating cart" },
+  { id: "rpa_checkout", label: "Submitting order" },
+];
+
 type CartDrawerProps = {
   cart: CartContextValue;
   onClose: () => void;
@@ -190,23 +216,41 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
     reset();
   };
 
-  // Helper to extract a readable progress label from the state machine.
-  const progressLabel = (s: typeof state): { title: string; sub?: string } => {
+  // Map the worker's progress_stage value to the current "active" stage
+  // index in our user-facing stage list. Returns -1 if the run hasn't
+  // claimed/started yet (still in sync phase).
+  const currentStageIndex = (s: typeof state): number => {
+    let progressStage: string | null = null;
+    if (s.kind === "validatePolling" || s.kind === "submitPolling") {
+      progressStage = s.progressStage;
+    }
+    if (!progressStage) {
+      // Pre-stage states map to "before stage 1" (no checkmarks yet).
+      // Returning -1 means "the work hasn't reached any RPA stage".
+      return -1;
+    }
+    const stages = s.kind === "submitPolling" ? RPA_STAGES_SUBMIT : RPA_STAGES_VALIDATE;
+    const idx = stages.findIndex((st) => st.id === progressStage);
+    return idx;
+  };
+
+  // Headline label for the progress panel.
+  const progressHeadline = (s: typeof state): { title: string; sub?: string } => {
     if (s.kind === "validateSyncing")
-      return { title: "Syncing cart…", sub: `${s.itemsSynced} / ${s.itemsTotal} items` };
+      return { title: "Syncing cart to server", sub: `${s.itemsSynced} / ${s.itemsTotal} items` };
     if (s.kind === "validateStarting")
-      return { title: "Starting validate…", sub: "Logging into MILO" };
+      return { title: "Validating against MLCC", sub: "Starting the RPA pipeline…" };
     if (s.kind === "validatePolling")
       return {
-        title: "Validating against MLCC…",
-        sub: s.progressMessage ?? s.progressStage ?? `Status: ${s.status}`,
+        title: "Validating against MLCC",
+        sub: s.progressMessage ?? undefined,
       };
     if (s.kind === "submitStarting")
-      return { title: "Starting submit…", sub: "Triggering MILO order pipeline" };
+      return { title: "Submitting order to MLCC", sub: "Starting the RPA pipeline…" };
     if (s.kind === "submitPolling")
       return {
-        title: "Submitting order…",
-        sub: s.progressMessage ?? s.progressStage ?? `Status: ${s.status}`,
+        title: "Submitting order to MLCC",
+        sub: s.progressMessage ?? undefined,
       };
     return { title: "Working…" };
   };
@@ -357,12 +401,22 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
           </>
         ) : null}
 
-        {/* ─── Async progress banner (validate OR submit) ────────────────── */}
+        {/* ─── Async progress (validate OR submit) ───────────────────────── */}
         {isBusy ? (
-          <div className="banner" role="status" aria-live="polite">
-            <strong>{progressLabel(state).title}</strong>
-            {progressLabel(state).sub ? <div>{progressLabel(state).sub}</div> : null}
-          </div>
+          <RpaProgressPanel
+            headline={progressHeadline(state)}
+            stages={
+              state.kind === "submitStarting" || state.kind === "submitPolling"
+                ? RPA_STAGES_SUBMIT
+                : RPA_STAGES_VALIDATE
+            }
+            currentStageIndex={currentStageIndex(state)}
+            preStage={
+              state.kind === "validateSyncing" ||
+              state.kind === "validateStarting" ||
+              state.kind === "submitStarting"
+            }
+          />
         ) : null}
 
         {/* ─── Validate result panel (after successful MLCC validate) ────── */}
@@ -534,15 +588,24 @@ function ValidateResultPanel({
           ? "MLCC says: cart is ready for checkout."
           : "MLCC validate completed — review issues below before submitting."}
       </strong>
+      {/*
+        Note: do NOT use .drawer-validation-errors here. That class is
+        hard-styled with color: #fecaca (light red) because it was built
+        for the cart's rule-engine error list. On the green success
+        banner, red bullets look broken. We use the
+        .banner-content-list class (defined in index.css alongside this
+        component) which inherits the banner's text color so success
+        messages render in the right tone.
+      */}
       {messages.length > 0 ? (
-        <ul className="drawer-validation-errors" style={{ marginTop: 8 }}>
+        <ul className="banner-content-list" style={{ marginTop: 8 }}>
           {messages.map((m, i) => (
             <li key={i}>{m}</li>
           ))}
         </ul>
       ) : null}
       {errors.length > 0 ? (
-        <ul className="drawer-validation-errors" style={{ marginTop: 8 }}>
+        <ul className="banner-content-list" style={{ marginTop: 8 }}>
           {errors.map((e, i) => (
             <li key={i}>{e}</li>
           ))}
@@ -553,6 +616,7 @@ function ValidateResultPanel({
           <div style={{ marginTop: 12, fontWeight: 600 }}>
             Out of stock at MLCC ({oos.length} item{oos.length === 1 ? "" : "s"}):
           </div>
+          {/* OOS items DO use the red error class — they're real problems */}
           <ul className="drawer-validation-errors">
             {oos.map((item, i) => (
               <li key={i}>
@@ -579,6 +643,77 @@ function ValidateResultPanel({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Stage-by-stage progress panel rendered during a Validate or Submit RPA
+ * run. Replaces the boring "Validating against MLCC…" banner with a
+ * checkable stage list so the user can see what's in flight, what's
+ * done, and what's coming.
+ *
+ * Each stage is one row with:
+ *   - icon: ✓ (done) / ⏳ (active, pulsing) / ○ (pending)
+ *   - label
+ *
+ * Headline at top of the panel shows the overall operation + the worker's
+ * latest progress_message (if it added any color).
+ *
+ * Why this matters: when MLCC takes 60-90s to respond, an unchanging
+ * banner feels frozen even when the system is working hard. Visible
+ * progress = perceived speed. The actual time is unchanged.
+ */
+function RpaProgressPanel({
+  headline,
+  stages,
+  currentStageIndex,
+  preStage,
+}: {
+  headline: { title: string; sub?: string };
+  stages: ReadonlyArray<{ id: string; label: string }>;
+  currentStageIndex: number;
+  /**
+   * True when the run hasn't reached any RPA stage yet (we're still
+   * syncing the cart to the server or waiting for the worker to claim).
+   * In this state all stages render as pending and we show a sub-line
+   * explaining the wait.
+   */
+  preStage: boolean;
+}) {
+  return (
+    <div className="rpa-progress" role="status" aria-live="polite">
+      <div className="rpa-progress__headline">
+        <strong>{headline.title}</strong>
+        {headline.sub ? (
+          <div className="rpa-progress__sub muted small">{headline.sub}</div>
+        ) : null}
+      </div>
+      <ol className="rpa-progress__list">
+        {stages.map((stage, idx) => {
+          const status: "done" | "active" | "pending" = preStage
+            ? "pending"
+            : currentStageIndex < 0
+              ? "pending"
+              : idx < currentStageIndex
+                ? "done"
+                : idx === currentStageIndex
+                  ? "active"
+                  : "pending";
+          return (
+            <li
+              key={stage.id}
+              className={`rpa-progress__step rpa-progress__step--${status}`}
+              aria-current={status === "active" ? "step" : undefined}
+            >
+              <span className="rpa-progress__icon" aria-hidden>
+                {status === "done" ? "✓" : status === "active" ? "●" : "○"}
+              </span>
+              <span className="rpa-progress__label">{stage.label}</span>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
