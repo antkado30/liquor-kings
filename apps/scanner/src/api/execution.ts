@@ -44,6 +44,51 @@ export type RunStatus =
   | "failed"
   | "cancelled";
 
+/**
+ * Mode passed to /execution-runs/from-cart. Phase 1 Week 1 of V1 roadmap
+ * (2026-05-30) introduced "validate_only" so the scanner can mirror MLCC's
+ * actual flow: user clicks Validate → backend runs Stages 1-4 against
+ * MILO → returns live cart state (in-stock / out-of-stock / totals)
+ * without ever entering Stage 5. After review the user clicks Submit
+ * separately, which triggers a "rpa_run" run for the real checkout.
+ */
+export type RunMode = "rpa_run" | "validate_only";
+
+/**
+ * Live cart state surfaced by the backend after a validate_only run
+ * finalizes. Captured from MILO directly via Stages 1-4 and lifted into
+ * the run summary so the scanner can render it without an extra fetch.
+ */
+export type ValidateResult = {
+  validated: boolean | null;
+  can_checkout: boolean | null;
+  ada_breakdown:
+    | Array<{
+        adaNumber?: string;
+        adaName?: string;
+        items?: Array<unknown>;
+        liters?: number;
+        meetsMinimum?: boolean;
+      }>
+    | null;
+  order_summary: {
+    grossTotal?: number;
+    liquorTax?: number;
+    discount?: number;
+    netTotal?: number;
+  } | null;
+  items_added: Array<unknown> | null;
+  items_rejected: Array<unknown> | null;
+  out_of_stock_items: Array<{
+    code?: string;
+    productName?: string;
+    quantity?: number;
+    reason?: string;
+  }> | null;
+  validate_messages: string[] | null;
+  validate_errors: string[] | null;
+};
+
 export type RunSummary = {
   id: string;
   status: RunStatus;
@@ -56,6 +101,13 @@ export type RunSummary = {
     heartbeat_at?: string | null;
     finished_at?: string | null;
   };
+  /**
+   * Populated by the backend ONLY when this run was a validate_only
+   * pipeline AND it reached the validate_only_complete step. Null in
+   * every other case (rpa_run runs, in-flight validate_only, failed
+   * validate_only that never reached Stage 4).
+   */
+  validate_result?: ValidateResult | null;
 };
 
 export type TriggerRpaRunResult =
@@ -64,6 +116,11 @@ export type TriggerRpaRunResult =
 
 export async function triggerRpaRunFromCart(args: {
   cartId: string;
+  /**
+   * Optional. Defaults to "rpa_run" to preserve existing callers.
+   * Pass "validate_only" to run Stages 1-4 only (no checkout).
+   */
+  mode?: RunMode;
 }): Promise<TriggerRpaRunResult> {
   const storeId = getStoreId();
   const url = `${EXECUTION_API_BASE}/from-cart/${encodeURIComponent(storeId)}/${encodeURIComponent(args.cartId)}`;
@@ -77,7 +134,7 @@ export async function triggerRpaRunFromCart(args: {
           ...(await getAuthHeaders()),
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ mode: "rpa_run" }),
+        body: JSON.stringify({ mode: args.mode ?? "rpa_run" }),
       },
       { maxRetries: 2, baseDelayMs: 500, timeoutMs: 15_000 },
     );

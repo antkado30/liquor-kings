@@ -57,14 +57,34 @@ router.post("/claim-next", requireServiceRole, async (req, res) => {
   return res.status(statusCode).json(body);
 });
 
+/**
+ * Create an execution_run from a built cart.
+ *
+ * Modes (Phase 1 Week 1 Validate→Submit refactor, 2026-05-30):
+ *   - "rpa_run"       — full pipeline. Worker runs Stages 1-5 against MILO.
+ *                       Stage 5 submission stays triple-gated downstream
+ *                       (metadata.mode + LK_ALLOW_ORDER_SUBMISSION env +
+ *                       per-store allow_order_submission). Default when no
+ *                       mode is provided (preserves existing callers).
+ *   - "validate_only" — preview pipeline. Worker runs Stages 1-4 only and
+ *                       finalizes succeeded with the live MILO cart state
+ *                       captured to evidence (in-stock items, out-of-stock
+ *                       items, ADA breakdown, validate messages). Used by
+ *                       the scanner "Validate against MLCC" button so users
+ *                       see exactly what MILO sees before they decide to
+ *                       submit. ZERO chance of accidental submission — the
+ *                       worker never enters Stage 5 for this mode.
+ */
+const VALID_FROM_CART_MODES = new Set(["rpa_run", "validate_only"]);
+
 router.post("/from-cart/:storeId/:cartId", async (req, res) => {
   const { storeId, cartId } = req.params;
   const mode = req.body?.mode;
 
-  if (mode !== undefined && mode !== "rpa_run") {
+  if (mode !== undefined && !VALID_FROM_CART_MODES.has(mode)) {
     return res.status(400).json({
       error: "INVALID_MODE",
-      details: "mode must be one of: rpa_run",
+      details: `mode must be one of: ${[...VALID_FROM_CART_MODES].join(", ")}`,
     });
   }
 

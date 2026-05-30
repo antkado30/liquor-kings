@@ -693,23 +693,31 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     }),
   ];
 
-  if (payload?.metadata?.run_type !== "rpa_run") {
+  // Both "rpa_run" and "validate_only" are accepted by this worker path.
+  // validate_only is the scanner's "Validate against MLCC" button — runs
+  // Stages 1-4 and stops; Stage 5 is never invoked. (Phase 1 Week 1 of
+  // the V1 roadmap, 2026-05-30.)
+  const acceptedRunTypes = new Set(["rpa_run", "validate_only"]);
+  const runType = payload?.metadata?.run_type ?? null;
+  const isValidateOnly = runType === "validate_only";
+  if (!acceptedRunTypes.has(runType)) {
     await finalizeRun({
       apiBaseUrl,
       runId: run.id,
       storeId,
       status: "failed",
-      workerNotes: "RPA worker rejected non-RPA payload",
-      errorMessage: "Worker in RPA mode claimed a non-RPA run",
+      workerNotes: "RPA worker rejected unrecognized run_type payload",
+      errorMessage: `Worker accepts rpa_run | validate_only; got ${runType}`,
       failureType: FAILURE_TYPE.UNKNOWN,
       evidence: [
         ...stepEvidence,
         buildEvidenceEntry({
           kind: "cart_verification_snapshot",
           stage: "rpa_run_dispatch",
-          message: "Payload metadata run_type was not rpa_run",
+          message: "Payload metadata run_type was not in accepted set",
           attributes: {
-            run_type: payload?.metadata?.run_type ?? null,
+            run_type: runType,
+            accepted: [...acceptedRunTypes],
           },
         }),
         buildNoSubmitAttestationEvidence("rpa_run_dispatch", "rpa_run"),
@@ -720,7 +728,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       claimed: true,
       failed: true,
       runId: run.id,
-      reason: "non_rpa_run_claimed",
+      reason: "unrecognized_run_type",
     };
   }
 
@@ -1302,6 +1310,87 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         },
       ),
     );
+
+    // ─── Validate-only short-circuit ──────────────────────────────────────
+    //
+    // If this run was kicked off as "validate_only", we stop here. The user
+    // has now seen Stages 1-4 results — login OK, products navigation OK,
+    // items added with MILO's real cart-verification (active vs. out-of-stock),
+    // Stage 4 MILO validate run. We finalize the run as succeeded and embed
+    // the live cart state into the evidence so the scanner UI can render a
+    // "here's what MILO sees" panel without us ever clicking the Checkout
+    // button. ZERO risk of accidental submission because Stage 5 isn't
+    // reachable from this branch.
+    if (isValidateOnly) {
+      const validateOnlySummary = {
+        validated: session?.validated ?? null,
+        can_checkout: session?.canCheckout ?? null,
+        ada_breakdown: session?.adaOrders ?? null,
+        order_summary: session?.orderSummary ?? null,
+        items_added: Array.isArray(session?.itemsAdded)
+          ? session.itemsAdded
+          : null,
+        items_rejected: Array.isArray(session?.itemsRejected)
+          ? session.itemsRejected
+          : null,
+        out_of_stock_items: Array.isArray(session?.outOfStockItems)
+          ? session.outOfStockItems
+          : null,
+        validate_messages: Array.isArray(session?.validationMessages)
+          ? session.validationMessages
+          : null,
+        validate_errors: Array.isArray(session?.validationErrors)
+          ? session.validationErrors
+          : null,
+        current_url: session?.currentUrl ?? null,
+      };
+
+      stepEvidence.push(
+        buildWorkerStepEvidence(
+          "validate_only_complete",
+          "validate_only pipeline complete; Stage 5 deliberately skipped",
+          { ...validateOnlySummary, stage_5_invoked: false },
+        ),
+      );
+
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "succeeded",
+        workerNotes:
+          "validate_only complete — Stages 1-4 ran successfully; Stage 5 was not reachable",
+        evidence: [
+          ...stepEvidence,
+          buildEvidenceEntry({
+            kind: "validate_only_summary",
+            stage: "validate_only_complete",
+            message:
+              "Live MILO cart state for the scanner's Validate-against-MLCC UI",
+            attributes: validateOnlySummary,
+          }),
+          buildNoSubmitAttestationEvidence(
+            "validate_only_complete",
+            "validate_only",
+          ),
+        ],
+      });
+      console.log(
+        `[worker] validate_only run ${run.id} finalized succeeded (canCheckout=${session?.canCheckout}, oos=${Array.isArray(session?.outOfStockItems) ? session.outOfStockItems.length : "?"})`,
+      );
+      return {
+        success: true,
+        claimed: true,
+        failed: false,
+        runId: run.id,
+        runType: "validate_only",
+        canCheckout: session?.canCheckout ?? null,
+        outOfStockCount: Array.isArray(session?.outOfStockItems)
+          ? session.outOfStockItems.length
+          : null,
+      };
+    }
+    // ─── End validate-only short-circuit ──────────────────────────────────
 
     await heartbeatRun({
       apiBaseUrl,

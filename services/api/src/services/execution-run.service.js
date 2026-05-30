@@ -277,6 +277,38 @@ const buildRunSummary = (run, operatorActions = []) => {
 
   const mlccOperatorContext = deriveMlccOperatorContext(run);
 
+  // Surface the validate-only result directly on the summary response when
+  // present. The scanner polls this endpoint to track progress; when the
+  // run finalizes (status === "succeeded") for a validate_only pipeline,
+  // we lift the validate_only_summary evidence entry up to a top-level
+  // `validate_result` field so the UI can render in-stock / OOS / totals
+  // without making a second HTTP call to the /evidence endpoint.
+  //
+  // Returns null for rpa_run runs or when no validate evidence is present
+  // (in-progress validate runs included — UI renders the progress message
+  // until terminal).
+  const validateOnlyEntry = evidence.find(
+    (e) =>
+      e?.kind === "validate_only_summary" ||
+      (e?.kind === "rpa_step" && e?.stage === "validate_only_complete"),
+  );
+  const validateResult =
+    validateOnlyEntry?.attributes && typeof validateOnlyEntry.attributes === "object"
+      ? {
+          validated: validateOnlyEntry.attributes.validated ?? null,
+          can_checkout: validateOnlyEntry.attributes.can_checkout ?? null,
+          ada_breakdown: validateOnlyEntry.attributes.ada_breakdown ?? null,
+          order_summary: validateOnlyEntry.attributes.order_summary ?? null,
+          items_added: validateOnlyEntry.attributes.items_added ?? null,
+          items_rejected: validateOnlyEntry.attributes.items_rejected ?? null,
+          out_of_stock_items:
+            validateOnlyEntry.attributes.out_of_stock_items ?? null,
+          validate_messages:
+            validateOnlyEntry.attributes.validate_messages ?? null,
+          validate_errors: validateOnlyEntry.attributes.validate_errors ?? null,
+        }
+      : null;
+
   return {
     run_id: run?.id ?? null,
     store_id: run?.store_id ?? null,
@@ -305,6 +337,7 @@ const buildRunSummary = (run, operatorActions = []) => {
     latest_operator_action: latestOperatorAction,
     pending_manual_review: pendingManualReview,
     actionable_next_step: actionableNextStep,
+    validate_result: validateResult,
   };
 };
 
@@ -463,15 +496,39 @@ export const createExecutionRunFromCart = async (
     };
   }
 
-  const metadata =
-    mode === "rpa_run"
-      ? {
-          run_type: "rpa_run",
-          mode: "dry_run",
-          requested_at: new Date().toISOString(),
-          requested_by_user_id: userId ?? null,
-        }
-      : undefined;
+  // Build the metadata blob the worker uses to decide which pipeline to
+  // run (Stages 1-5 vs Stages 1-4 only) and how Stage 5 should behave
+  // when it does run.
+  //
+  // run_type values:
+  //   "rpa_run"       → worker runs Stages 1-5; Stage 5 still triple-gated.
+  //   "validate_only" → worker runs Stages 1-4 only; NEVER enters Stage 5.
+  //                     Used by the scanner "Validate against MLCC" button
+  //                     so users see what MILO sees before submitting.
+  //
+  // mode (only meaningful when run_type === "rpa_run"):
+  //   "dry_run" (default) → Stage 5 falls back to dry_run regardless of
+  //                          env/store arming.
+  //   "submit"            → eligible for real submission IF the other two
+  //                          gates also align downstream.
+  let metadata;
+  if (mode === "rpa_run") {
+    metadata = {
+      run_type: "rpa_run",
+      mode: "dry_run",
+      requested_at: new Date().toISOString(),
+      requested_by_user_id: userId ?? null,
+    };
+  } else if (mode === "validate_only") {
+    metadata = {
+      run_type: "validate_only",
+      // No `mode` key — Stage 5 isn't reachable from this run_type.
+      requested_at: new Date().toISOString(),
+      requested_by_user_id: userId ?? null,
+    };
+  } else {
+    metadata = undefined;
+  }
 
   const payloadResult = await buildExecutionPayloadForSubmittedCart(
     supabase,

@@ -1,3 +1,31 @@
+/**
+ * CartDrawer — two-step Validate → Submit UX (Phase 1 Week 1 of V1 roadmap,
+ * 2026-05-30).
+ *
+ * Mirrors MLCC's actual user flow:
+ *   1. User reviews cart (with instant rule-engine feedback per line)
+ *   2. Clicks "Validate against MLCC" → backend RPA runs Stages 1-4 → we
+ *      surface MILO's live cart state (in-stock items, out-of-stock items,
+ *      totals, ADA breakdown, validate messages)
+ *   3. User can edit cart (any mutation invalidates the validate result
+ *      and the Submit button locks again — they must re-validate)
+ *   4. User clicks "Submit Order" → confirmation modal → RPA runs Stages
+ *      1-5 → real checkout
+ *
+ * Two layers of validation, each serving a different purpose:
+ *   - Instant rule-engine validation (validateCart from api/cart) — runs
+ *     locally as the cart changes, surfaces split-case errors, 9L
+ *     minimum-per-ADA, etc. WITHOUT hitting MILO. Catches obvious issues
+ *     in 50ms. ALWAYS runs.
+ *   - MLCC live validation (validate_only RPA run) — actually logs into
+ *     MILO, adds items, runs MILO's real Validate. Sees real stock
+ *     status, surfaces OOS items, MILO's own validation messages. Costs
+ *     30-60s + a few pennies per run.
+ *
+ * Submit is GATED on (a) instant rule-engine clean AND (b) at least one
+ * successful MLCC validate. This means a user can never accidentally
+ * submit a cart that hasn't been confirmed against MLCC's live view.
+ */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { validateCart, type CartValidationResult } from "../api/cart";
 import { cartLineId, type CartContextValue } from "../hooks/useCart";
@@ -25,19 +53,39 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
     updateQuantity,
   } = cart;
   const submission = useSubmission();
-  const { state, start, reset } = submission;
-  const isBusy = state.kind === "syncing" || state.kind === "submitting" || state.kind === "polling";
+  const { state, startValidate, startSubmit, invalidateValidation, reset } = submission;
+
+  // Compound "is the flow doing something async right now" flag. Used to
+  // disable UI controls during sync / poll. Covers both validate and
+  // submit phases.
+  const isBusy =
+    state.kind === "validateSyncing" ||
+    state.kind === "validateStarting" ||
+    state.kind === "validatePolling" ||
+    state.kind === "submitStarting" ||
+    state.kind === "submitPolling";
+
+  // Has MLCC actually said this cart is OK? Only true when the last
+  // validate ended succeeded AND MILO said canCheckout=true.
+  const mlccValidatePassed =
+    state.kind === "validateDone" &&
+    state.finalStatus === "succeeded" &&
+    state.validateResult?.can_checkout === true;
+
   const [isCheckingValidation, setIsCheckingValidation] = useState(false);
   const [validationResult, setValidationResult] = useState<CartValidationResult | null>(null);
   const validationRequestRef = useRef(0);
+
   /**
-   * Confirmation gate before the cart actually triggers a real MILO order
-   * via the RPA pipeline. Stage 5 is triple-gated server-side (mode +
-   * LK_ALLOW_ORDER_SUBMISSION + per-store arming), but this prevents the
-   * UX-level mistake of an accidental tap submitting a cart prematurely.
+   * Confirmation gate before triggering the real RPA submit. Stage 5 is
+   * triple-gated server-side, this is the UX-level "are you sure?"
    */
   const [confirmSubmit, setConfirmSubmit] = useState(false);
 
+  // ─── Instant rule-engine validation (unchanged from prior CartDrawer) ──
+  //
+  // Debounced 400ms after the cart changes. Surfaces split-case / quantity
+  // errors per line and ADA 9L violations. Does NOT hit MILO.
   useEffect(() => {
     if (items.length === 0) {
       setIsCheckingValidation(false);
@@ -68,14 +116,44 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
     };
   }, [items]);
 
+  // ─── Cart-mutation handlers that ALSO invalidate validate state ───────
+  //
+  // Whenever the user touches the cart, our validateDone state becomes
+  // stale — the next submit MUST re-validate. invalidateValidation()
+  // resets the submission state to idle so the Submit button locks again.
+  const handleIncrement = (lineId: string) => {
+    if (state.kind === "validateDone") invalidateValidation();
+    incrementQuantity(lineId);
+  };
+  const handleDecrement = (lineId: string) => {
+    if (state.kind === "validateDone") invalidateValidation();
+    decrementQuantity(lineId);
+  };
+  const handleRemove = (code: string) => {
+    if (state.kind === "validateDone") invalidateValidation();
+    removeItem(code);
+  };
+  const handleUpdateQuantity = (code: string, qty: number) => {
+    if (state.kind === "validateDone") invalidateValidation();
+    updateQuantity(code, qty);
+  };
+  const handleClearCart = () => {
+    if (state.kind !== "idle") reset();
+    clearCart();
+  };
+
   const hasDefinitiveValidationFailure =
     validationResult?.ok === true && validationResult.valid === false;
-  const submitDisabled = isBusy || hasDefinitiveValidationFailure;
+  // Validate is allowed only when rule-engine validation has cleared. We
+  // don't want to waste an RPA run on a cart that obviously won't pass.
+  const validateDisabled =
+    isBusy || items.length === 0 || hasDefinitiveValidationFailure;
+  // Submit is allowed only AFTER a successful MLCC validate, AND the
+  // rule-engine is still clean (user hasn't edited the cart since).
+  const submitDisabled = isBusy || !mlccValidatePassed || hasDefinitiveValidationFailure;
 
-  // Cart-wide blockers shown above the submit button. Per-line split-case
-  // errors are NOT listed here — they render inline on their cart line
-  // (with tap-to-fix chips) below. ADA_-prefixed errors are skipped here
-  // too; the adaBreakdown loop produces a cleaner message for those.
+  // Cart-wide blockers shown above the validate button. Per-line errors
+  // render inline on their cart line below.
   const validationBlockers = useMemo(() => {
     if (validationResult?.ok !== true || validationResult.valid !== false) return [];
     const cartCodes = new Set(items.map((line) => line.product.code));
@@ -98,7 +176,6 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
     return [...new Set(blockers)];
   }, [groupedByAda, validationResult, items]);
 
-  /** Split-case / quantity error for a specific cart line, if any. */
   const lineErrorFor = (code: string) =>
     validationResult?.ok === true
       ? validationResult.errors.find((err) => String(err.code) === code)
@@ -111,7 +188,27 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
 
   const handleRetry = () => {
     reset();
-    void start(items);
+  };
+
+  // Helper to extract a readable progress label from the state machine.
+  const progressLabel = (s: typeof state): { title: string; sub?: string } => {
+    if (s.kind === "validateSyncing")
+      return { title: "Syncing cart…", sub: `${s.itemsSynced} / ${s.itemsTotal} items` };
+    if (s.kind === "validateStarting")
+      return { title: "Starting validate…", sub: "Logging into MILO" };
+    if (s.kind === "validatePolling")
+      return {
+        title: "Validating against MLCC…",
+        sub: s.progressMessage ?? s.progressStage ?? `Status: ${s.status}`,
+      };
+    if (s.kind === "submitStarting")
+      return { title: "Starting submit…", sub: "Triggering MILO order pipeline" };
+    if (s.kind === "submitPolling")
+      return {
+        title: "Submitting order…",
+        sub: s.progressMessage ?? s.progressStage ?? `Status: ${s.status}`,
+      };
+    return { title: "Working…" };
   };
 
   return (
@@ -124,7 +221,8 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
           </button>
         </div>
 
-        {state.kind === "idle" ? (
+        {/* ─── Cart contents (always visible unless in submit-done state) ─── */}
+        {state.kind !== "submitDone" ? (
           <>
             {items.length === 0 ? (
               <p className="drawer-empty muted">Your cart is empty — scan items to add them</p>
@@ -171,8 +269,8 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                                       type="button"
                                       className="qty-stepper__btn"
                                       aria-label="Decrease quantity"
-                                      disabled={atMin}
-                                      onClick={() => decrementQuantity(lineId)}
+                                      disabled={atMin || isBusy}
+                                      onClick={() => handleDecrement(lineId)}
                                     >
                                       −
                                     </button>
@@ -183,7 +281,8 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                                       type="button"
                                       className="qty-stepper__btn"
                                       aria-label="Increase quantity"
-                                      onClick={() => incrementQuantity(lineId)}
+                                      disabled={isBusy}
+                                      onClick={() => handleIncrement(lineId)}
                                     >
                                       +
                                     </button>
@@ -191,7 +290,8 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                                   <button
                                     type="button"
                                     className="btn text danger"
-                                    onClick={() => removeItem(line.product.code)}
+                                    disabled={isBusy}
+                                    onClick={() => handleRemove(line.product.code)}
                                   >
                                     Remove
                                   </button>
@@ -207,7 +307,8 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                                             key={alt}
                                             type="button"
                                             className="drawer-line-suggestion"
-                                            onClick={() => updateQuantity(line.product.code, alt)}
+                                            disabled={isBusy}
+                                            onClick={() => handleUpdateQuantity(line.product.code, alt)}
                                           >
                                             Set to {alt}
                                           </button>
@@ -231,68 +332,89 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                 })}
               </div>
             )}
-
-            {items.length > 0 ? (
-              <>
-                {validationResult?.ok === false ? (
-                  <p className="drawer-validation-notice muted">
-                    Couldn&apos;t verify this cart right now ({validationResult.error}). You can still submit.
-                  </p>
-                ) : null}
-                {hasDefinitiveValidationFailure ? (
-                  <ul className="drawer-validation-errors">
-                    {validationBlockers.map((blocker) => (
-                      <li key={blocker}>{blocker}</li>
-                    ))}
-                  </ul>
-                ) : null}
-                <div className="drawer-total">
-                  <span>Total</span>
-                  <strong>{money(totalCost)}</strong>
-                </div>
-                <button type="button" className="btn secondary btn-block" onClick={() => clearCart()}>
-                  Clear cart
-                </button>
-                <button
-                  type="button"
-                  className="btn primary btn-block"
-                  disabled={submitDisabled}
-                  onClick={() => setConfirmSubmit(true)}
-                >
-                  {isCheckingValidation ? "Checking..." : "Validate & Submit"}
-                </button>
-              </>
-            ) : null}
           </>
         ) : null}
 
-        {state.kind === "syncing" ? (
-          <div className="banner">
-            Syncing item {state.itemsSynced} of {state.itemsTotal}...
+        {/* ─── Rule-engine validation messages ────────────────────────────── */}
+        {items.length > 0 && state.kind !== "submitDone" ? (
+          <>
+            {validationResult?.ok === false ? (
+              <p className="drawer-validation-notice muted">
+                Couldn&apos;t verify this cart right now ({validationResult.error}). You can still validate against MLCC.
+              </p>
+            ) : null}
+            {hasDefinitiveValidationFailure ? (
+              <ul className="drawer-validation-errors">
+                {validationBlockers.map((blocker) => (
+                  <li key={blocker}>{blocker}</li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="drawer-total">
+              <span>Total</span>
+              <strong>{money(totalCost)}</strong>
+            </div>
+          </>
+        ) : null}
+
+        {/* ─── Async progress banner (validate OR submit) ────────────────── */}
+        {isBusy ? (
+          <div className="banner" role="status" aria-live="polite">
+            <strong>{progressLabel(state).title}</strong>
+            {progressLabel(state).sub ? <div>{progressLabel(state).sub}</div> : null}
           </div>
         ) : null}
 
-        {state.kind === "submitting" ? (
-          <div className="banner">Triggering MILO order pipeline...</div>
+        {/* ─── Validate result panel (after successful MLCC validate) ────── */}
+        {state.kind === "validateDone" && state.finalStatus === "succeeded" ? (
+          <ValidateResultPanel result={state.validateResult} canCheckout={state.validateResult?.can_checkout ?? null} />
         ) : null}
 
-        {state.kind === "polling" ? (
-          <div className="banner">
-            {state.progressStage || state.progressMessage ? (
-              <>
-                {state.progressStage ? <strong>{state.progressStage}</strong> : null}
-                {state.progressMessage ? <div>{state.progressMessage}</div> : null}
-              </>
-            ) : (
-              <>Working on your order... (status: {state.status})</>
-            )}
+        {state.kind === "validateDone" && state.finalStatus !== "succeeded" ? (
+          <div className="banner banner-warn">
+            MLCC validate finished as <strong>{state.finalStatus}</strong>. Review the cart and try again.
           </div>
         ) : null}
 
-        {state.kind === "done" && state.finalStatus === "succeeded" ? (
+        {/* ─── Action buttons (idle / validateDone) ───────────────────────── */}
+        {(state.kind === "idle" || state.kind === "validateDone") && items.length > 0 ? (
+          <>
+            <button type="button" className="btn secondary btn-block" disabled={isBusy} onClick={handleClearCart}>
+              Clear cart
+            </button>
+            <button
+              type="button"
+              className="btn secondary btn-block"
+              disabled={validateDisabled}
+              onClick={() => void startValidate(items)}
+            >
+              {isCheckingValidation
+                ? "Checking…"
+                : state.kind === "validateDone"
+                ? "Re-validate against MLCC"
+                : "Validate against MLCC"}
+            </button>
+            <button
+              type="button"
+              className="btn primary btn-block"
+              disabled={submitDisabled}
+              onClick={() => setConfirmSubmit(true)}
+              title={
+                !mlccValidatePassed
+                  ? "Validate against MLCC first"
+                  : undefined
+              }
+            >
+              {mlccValidatePassed ? "Submit Order" : "Submit Order (validate first)"}
+            </button>
+          </>
+        ) : null}
+
+        {/* ─── Submit terminal states ─────────────────────────────────────── */}
+        {state.kind === "submitDone" && state.finalStatus === "succeeded" ? (
           <>
             <div className="banner banner-ok">
-              Cart validated and ready in MILO. Order is in dry_run mode — no real order placed yet.
+              Order submitted to MILO. Check the Orders page for confirmation numbers.
             </div>
             <button
               type="button"
@@ -308,15 +430,15 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
           </>
         ) : null}
 
-        {state.kind === "done" && state.finalStatus !== "succeeded" ? (
+        {state.kind === "submitDone" && state.finalStatus !== "succeeded" ? (
           <>
             <div className="banner banner-warn">
-              Run finished as {state.finalStatus}.{" "}
+              Submit finished as {state.finalStatus}.{" "}
               {state.progressMessage ??
                 (state.failureType ? `Failure type: ${state.failureType}` : "No further details were provided.")}
             </div>
             <button type="button" className="btn secondary btn-block" onClick={handleRetry}>
-              Try again
+              Back to cart
             </button>
             <button type="button" className="btn btn-block" onClick={onClose}>
               Close
@@ -328,7 +450,7 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
           <>
             <div className="banner banner-err">{state.message}</div>
             <button type="button" className="btn secondary btn-block" onClick={handleRetry}>
-              Try again
+              Back to cart
             </button>
             <button type="button" className="btn btn-block" onClick={onClose}>
               Close
@@ -337,13 +459,7 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
         ) : null}
       </div>
 
-      {/*
-        Pre-submission confirmation modal. Tap-outside dismisses. Once the
-        user confirms, useSubmission's start() runs the full pipeline
-        (sync → trigger RPA → poll). The server-side triple-gate on Stage 5
-        is the real safety net — this is the UX-level "are you sure?"
-        that prevents accidental thumb-taps from sending a real order.
-      */}
+      {/* ─── Submit-confirm modal (server-side gates still apply) ─────────── */}
       {confirmSubmit ? (
         <div
           className="confirm-overlay"
@@ -352,16 +468,13 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
           aria-label="Confirm submit order"
           onClick={() => setConfirmSubmit(false)}
         >
-          <div
-            className="confirm-card"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="confirm-card" onClick={(e) => e.stopPropagation()}>
             <h2 className="confirm-title">Submit this order to MILO?</h2>
             <p className="confirm-body">
               {items.length} item{items.length === 1 ? "" : "s"} ·{" "}
-              {money(totalCost)}. This starts the automated MILO ordering
-              pipeline. Make sure the cart is correct before continuing —
-              accidental submissions can place real orders.
+              {money(totalCost)}. MLCC already confirmed the cart is ready —
+              this submits the order to MILO for real. Final review:
+              this is your last chance to cancel.
             </p>
             <div className="confirm-actions">
               <button
@@ -376,12 +489,93 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                 className="btn primary"
                 onClick={() => {
                   setConfirmSubmit(false);
-                  void start(items);
+                  void startSubmit();
                 }}
               >
                 Submit
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Renders the live MILO cart state after a successful validate_only run.
+ * Shows: in-stock count, out-of-stock items (full list), totals, validate
+ * messages from MILO. This is the user's "here's what MILO sees" view
+ * before they commit to submitting.
+ */
+function ValidateResultPanel({
+  result,
+  canCheckout,
+}: {
+  result: import("../api/execution").ValidateResult | null;
+  canCheckout: boolean | null;
+}) {
+  if (!result) {
+    return (
+      <div className="banner banner-warn">
+        MLCC validate finished but no result data was returned. Re-validate to retry.
+      </div>
+    );
+  }
+  const oos = Array.isArray(result.out_of_stock_items) ? result.out_of_stock_items : [];
+  const messages = Array.isArray(result.validate_messages) ? result.validate_messages : [];
+  const errors = Array.isArray(result.validate_errors) ? result.validate_errors : [];
+  const summary = result.order_summary ?? null;
+
+  return (
+    <div className={`banner ${canCheckout ? "banner-ok" : "banner-warn"}`}>
+      <strong>
+        {canCheckout
+          ? "MLCC says: cart is ready for checkout."
+          : "MLCC validate completed — review issues below before submitting."}
+      </strong>
+      {messages.length > 0 ? (
+        <ul className="drawer-validation-errors" style={{ marginTop: 8 }}>
+          {messages.map((m, i) => (
+            <li key={i}>{m}</li>
+          ))}
+        </ul>
+      ) : null}
+      {errors.length > 0 ? (
+        <ul className="drawer-validation-errors" style={{ marginTop: 8 }}>
+          {errors.map((e, i) => (
+            <li key={i}>{e}</li>
+          ))}
+        </ul>
+      ) : null}
+      {oos.length > 0 ? (
+        <>
+          <div style={{ marginTop: 12, fontWeight: 600 }}>
+            Out of stock at MLCC ({oos.length} item{oos.length === 1 ? "" : "s"}):
+          </div>
+          <ul className="drawer-validation-errors">
+            {oos.map((item, i) => (
+              <li key={i}>
+                {item.productName ?? item.code ?? "Unknown item"}
+                {item.quantity ? ` × ${item.quantity}` : ""}
+                {item.reason ? ` — ${item.reason}` : ""}
+              </li>
+            ))}
+          </ul>
+          <p className="muted small" style={{ marginTop: 6 }}>
+            Remove these from your cart and re-validate to clear.
+          </p>
+        </>
+      ) : null}
+      {summary ? (
+        <div style={{ marginTop: 12 }}>
+          <div>
+            <span className="muted">MLCC subtotal: </span>
+            <strong>{money(Number(summary.grossTotal ?? 0))}</strong>
+          </div>
+          <div>
+            <span className="muted">Net total: </span>
+            <strong>{money(Number(summary.netTotal ?? 0))}</strong>
           </div>
         </div>
       ) : null}
