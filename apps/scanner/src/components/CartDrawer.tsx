@@ -36,6 +36,39 @@ function money(n: number): string {
 }
 
 /**
+ * Compute "inferred OOS" — cart items the user added that did NOT show up
+ * in MILO's ada_breakdown active items. Almost always means MILO demoted
+ * them to its OOS section even though Stage 3 thought it added them.
+ *
+ * Used in two places:
+ *   1. ValidateResultPanel — renders the list of likely-OOS items.
+ *   2. CartDrawer parent — gates Submit on inferredOos.length === 0
+ *      (otherwise we'd surface "MLCC says ready for checkout" + a list
+ *      of OOS items in the same banner, which is incoherent).
+ *
+ * Until the real Stage 3/4 OOS detection ships (task #53), this is the
+ * single source of truth for "are there OOS items?"
+ */
+function computeInferredOos(
+  cartItems: CartContextValue["items"],
+  result: import("../api/execution").ValidateResult | null,
+): CartContextValue["items"] {
+  if (!result) return [];
+  const adaBreakdown = Array.isArray(result.ada_breakdown) ? result.ada_breakdown : [];
+  const adaActiveCodes = new Set<string>();
+  for (const ada of adaBreakdown) {
+    const items = Array.isArray((ada as { items?: unknown[] }).items)
+      ? ((ada as { items: unknown[] }).items as unknown[])
+      : [];
+    for (const it of items) {
+      const code = (it as { code?: unknown })?.code;
+      if (typeof code === "string" && code) adaActiveCodes.add(code);
+    }
+  }
+  return cartItems.filter((line) => !adaActiveCodes.has(line.product.code));
+}
+
+/**
  * Stages the user sees during a validate_only RPA run. The `id` matches
  * the worker's `progress_stage` value reported via the heartbeat. The
  * `label` is user-facing copy (kept short and concrete — "Logging in"
@@ -100,12 +133,27 @@ export function CartDrawer({ cart, onClose, onLineProductClick }: CartDrawerProp
     state.kind === "submitStarting" ||
     state.kind === "submitPolling";
 
+  // Inferred OOS for the current validate result. Empty when not in
+  // validateDone state, or when MILO showed all cart items as active.
+  // Used to gate Submit so we never offer "submit a cart that has
+  // likely-OOS items in it".
+  const inferredOos =
+    state.kind === "validateDone"
+      ? computeInferredOos(items, state.validateResult)
+      : [];
+
   // Has MLCC actually said this cart is OK? Only true when the last
-  // validate ended succeeded AND MILO said canCheckout=true.
+  // validate ended succeeded AND MILO said canCheckout=true AND we
+  // didn't infer any OOS items. The inferredOos gate prevents the
+  // 2026-05-30 bug where MILO would return canCheckout=true for the
+  // items it DID accept while silently dropping the OOS row — leaving
+  // the user with a "ready for checkout" green banner that hid the
+  // problem.
   const mlccValidatePassed =
     state.kind === "validateDone" &&
     state.finalStatus === "succeeded" &&
-    state.validateResult?.can_checkout === true;
+    state.validateResult?.can_checkout === true &&
+    inferredOos.length === 0;
 
   const [isCheckingValidation, setIsCheckingValidation] = useState(false);
   const [validationResult, setValidationResult] = useState<CartValidationResult | null>(null);
@@ -459,7 +507,16 @@ export function CartDrawer({ cart, onClose, onLineProductClick }: CartDrawerProp
         {state.kind === "validateDone" && state.finalStatus === "succeeded" ? (
           <ValidateResultPanel
             result={state.validateResult}
-            canCheckout={state.validateResult?.can_checkout ?? null}
+            /*
+              canCheckout for the BANNER is the AND of MILO's flag and
+              our inferred-OOS check. When inferredOos is non-empty we
+              want the warn-yellow banner + "review issues below"
+              headline, not the green "ready for checkout" lie.
+            */
+            canCheckout={
+              (state.validateResult?.can_checkout ?? null) === true &&
+              inferredOos.length === 0
+            }
             cartItems={items}
           />
         ) : null}
@@ -659,23 +716,10 @@ function ValidateResultPanel({
   }
   const milccErrorList = [...milccErrors];
 
-  // Compute "inferred OOS" — items the user has in their local cart
-  // that DIDN'T appear in MILO's ada_breakdown active items. Almost
-  // always means MILO demoted them to its OOS section even though
-  // Stage 3 thought it added them successfully.
-  const adaActiveCodes = new Set<string>();
-  for (const ada of adaBreakdown) {
-    const items = Array.isArray((ada as { items?: unknown[] }).items)
-      ? ((ada as { items: unknown[] }).items as unknown[])
-      : [];
-    for (const it of items) {
-      const code = (it as { code?: unknown })?.code;
-      if (typeof code === "string" && code) adaActiveCodes.add(code);
-    }
-  }
-  const inferredOos = cartItems.filter(
-    (line) => !adaActiveCodes.has(line.product.code),
-  );
+  // Inferred OOS — uses the shared helper so the panel and the parent
+  // CartDrawer see the same list (parent uses it to gate Submit; we
+  // use it here to render the "Likely out of stock" block).
+  const inferredOos = computeInferredOos(cartItems, result);
 
   // Per-ADA liter progress (only shown when at least one ADA is under).
   const adaProgress = adaBreakdown
