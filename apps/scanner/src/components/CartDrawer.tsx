@@ -65,9 +65,18 @@ type CartDrawerProps = {
   cart: CartContextValue;
   onClose: () => void;
   onSubmit?: () => void;
+  /**
+   * Optional callback fired when the user taps a cart line's product
+   * name (task #51, 2026-05-30 — Amazon-style sibling browsing). The
+   * scanner page handles opening the ProductCard for that bottle's
+   * family so the user can swap sizes / see other SKUs in the same
+   * brand without re-scanning. If omitted, the line title is not
+   * tappable and the drawer behaves the same as before.
+   */
+  onLineProductClick?: (product: import("../types").MlccProduct) => void;
 };
 
-export function CartDrawer({ cart, onClose }: CartDrawerProps) {
+export function CartDrawer({ cart, onClose, onLineProductClick }: CartDrawerProps) {
   const {
     items,
     groupedByAda,
@@ -305,7 +314,26 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                           return (
                             <li key={lineId} className="drawer-line">
                               <div className="drawer-line-main">
-                                <div className="drawer-line-title">{line.product.name}</div>
+                                {/*
+                                  Title is tappable IF onLineProductClick is wired
+                                  (task #51, 2026-05-30). Opens the ProductCard for
+                                  this bottle's family — Amazon-style sibling
+                                  browsing without re-scanning. Disabled during
+                                  busy states so a tap mid-validate doesn't open
+                                  a new modal layer over the progress UI.
+                                */}
+                                {onLineProductClick ? (
+                                  <button
+                                    type="button"
+                                    className="drawer-line-title drawer-line-title--tappable"
+                                    onClick={() => onLineProductClick(line.product)}
+                                    disabled={isBusy}
+                                  >
+                                    {line.product.name}
+                                  </button>
+                                ) : (
+                                  <div className="drawer-line-title">{line.product.name}</div>
+                                )}
                                 <div className="muted small">{size}</div>
                                 <div className="drawer-line-controls">
                                   <div className="qty-stepper" role="group" aria-label="Quantity">
@@ -331,13 +359,21 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
                                       +
                                     </button>
                                   </div>
+                                  {/*
+                                    Clean trash icon (task #52, 2026-05-30).
+                                    Was: full-width red oval next to qty stepper that looked
+                                    like an alarm button. Now: square icon button on the right
+                                    edge with aria-label for screen readers + title tooltip.
+                                  */}
                                   <button
                                     type="button"
-                                    className="btn text danger"
+                                    className="cart-line-remove-btn"
                                     disabled={isBusy}
                                     onClick={() => handleRemove(line.product.code)}
+                                    aria-label={`Remove ${line.product.name} from cart`}
+                                    title="Remove from cart"
                                   >
-                                    Remove
+                                    <span aria-hidden>🗑️</span>
                                   </button>
                                 </div>
                                 {lineError ? (
@@ -421,7 +457,11 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
 
         {/* ─── Validate result panel (after successful MLCC validate) ────── */}
         {state.kind === "validateDone" && state.finalStatus === "succeeded" ? (
-          <ValidateResultPanel result={state.validateResult} canCheckout={state.validateResult?.can_checkout ?? null} />
+          <ValidateResultPanel
+            result={state.validateResult}
+            canCheckout={state.validateResult?.can_checkout ?? null}
+            cartItems={items}
+          />
         ) : null}
 
         {state.kind === "validateDone" && state.finalStatus !== "succeeded" ? (
@@ -561,13 +601,32 @@ export function CartDrawer({ cart, onClose }: CartDrawerProps) {
  * Shows: in-stock count, out-of-stock items (full list), totals, validate
  * messages from MILO. This is the user's "here's what MILO sees" view
  * before they commit to submitting.
+ *
+ * Iteration 2 (2026-05-30): Tony found that MILO's actual OOS-section
+ * items weren't being surfaced — Stage 3 incorrectly verifies them as
+ * "added", Stage 4 doesn't populate out_of_stock_items, and the user
+ * just saw a yellow banner with no explanation. Fix:
+ *
+ *   (a) Surface ada_breakdown.errors — MILO's actual error messages
+ *       per ADA ("You must order at least nine liters from this
+ *       distributor"). The most informative field we have.
+ *   (b) Compute "inferred OOS" by diffing the user's local cart against
+ *       ada_breakdown items. Anything the user added but MILO's active
+ *       orders don't show is almost certainly in MILO's OOS section.
+ *   (c) Show per-ADA progress against the 9L minimum so user can see
+ *       which distributor is under.
+ *
+ * (b) is a stopgap until the proper Stage 3/4 OOS detection ships — but
+ * it works with the data we already have.
  */
 function ValidateResultPanel({
   result,
   canCheckout,
+  cartItems,
 }: {
   result: import("../api/execution").ValidateResult | null;
   canCheckout: boolean | null;
+  cartItems: CartContextValue["items"];
 }) {
   if (!result) {
     return (
@@ -577,9 +636,63 @@ function ValidateResultPanel({
     );
   }
   const oos = Array.isArray(result.out_of_stock_items) ? result.out_of_stock_items : [];
+  const rejected = Array.isArray(result.items_rejected) ? result.items_rejected : [];
   const messages = Array.isArray(result.validate_messages) ? result.validate_messages : [];
   const errors = Array.isArray(result.validate_errors) ? result.validate_errors : [];
   const summary = result.order_summary ?? null;
+  const adaBreakdown = Array.isArray(result.ada_breakdown) ? result.ada_breakdown : [];
+
+  // Collect every error string MILO reported per ADA. These are the
+  // human-readable messages MILO itself shows (e.g. "You must order at
+  // least nine liters from this distributor"). De-duped.
+  const milccErrors = new Set<string>();
+  for (const ada of adaBreakdown) {
+    const adaErrors = Array.isArray((ada as { errors?: unknown[] }).errors)
+      ? ((ada as { errors: unknown[] }).errors as unknown[])
+      : [];
+    for (const e of adaErrors) {
+      const s = typeof e === "string" ? e.trim() : "";
+      // Filter junk: pure numbers, single chars (MILO sometimes echoes
+      // the liter count alongside the message).
+      if (s.length > 3 && !/^\d+(\.\d+)?$/.test(s)) milccErrors.add(s);
+    }
+  }
+  const milccErrorList = [...milccErrors];
+
+  // Compute "inferred OOS" — items the user has in their local cart
+  // that DIDN'T appear in MILO's ada_breakdown active items. Almost
+  // always means MILO demoted them to its OOS section even though
+  // Stage 3 thought it added them successfully.
+  const adaActiveCodes = new Set<string>();
+  for (const ada of adaBreakdown) {
+    const items = Array.isArray((ada as { items?: unknown[] }).items)
+      ? ((ada as { items: unknown[] }).items as unknown[])
+      : [];
+    for (const it of items) {
+      const code = (it as { code?: unknown })?.code;
+      if (typeof code === "string" && code) adaActiveCodes.add(code);
+    }
+  }
+  const inferredOos = cartItems.filter(
+    (line) => !adaActiveCodes.has(line.product.code),
+  );
+
+  // Per-ADA liter progress (only shown when at least one ADA is under).
+  const adaProgress = adaBreakdown
+    .filter((ada) => (ada as { meetsMinimum?: boolean }).meetsMinimum === false)
+    .map((ada) => {
+      const a = ada as {
+        adaName?: string;
+        adaNumber?: string;
+        subtotalLiters?: number;
+        meetsMinimum?: boolean;
+      };
+      return {
+        name: a.adaName ?? `ADA ${a.adaNumber ?? "?"}`,
+        liters: typeof a.subtotalLiters === "number" ? a.subtotalLiters : 0,
+        shortBy: Math.max(0, 9 - (typeof a.subtotalLiters === "number" ? a.subtotalLiters : 0)),
+      };
+    });
 
   return (
     <div className={`banner ${canCheckout ? "banner-ok" : "banner-warn"}`}>
@@ -629,6 +742,109 @@ function ValidateResultPanel({
           <p className="muted small" style={{ marginTop: 6 }}>
             Remove these from your cart and re-validate to clear.
           </p>
+        </>
+      ) : null}
+      {/*
+        Items REJECTED by MLCC during Stage 3 add-to-cart. Different from
+        OOS: MILO actively refused to add these (validation rule violation,
+        unknown code, MILO-side error, etc.). Without this list the user
+        sees a yellow 'review issues below' banner but no explanation of
+        what's wrong. Added 2026-05-30 to close that UX gap.
+      */}
+      {rejected.length > 0 ? (
+        <>
+          <div style={{ marginTop: 12, fontWeight: 600 }}>
+            Rejected by MLCC ({rejected.length} item{rejected.length === 1 ? "" : "s"}):
+          </div>
+          <ul className="drawer-validation-errors">
+            {rejected.map((item, i) => {
+              const it = item as {
+                code?: string;
+                productName?: string;
+                quantity?: number;
+                reason?: string;
+              };
+              return (
+                <li key={i}>
+                  {it.productName ?? it.code ?? "Unknown item"}
+                  {it.quantity ? ` × ${it.quantity}` : ""}
+                  {it.reason ? ` — ${it.reason}` : ""}
+                </li>
+              );
+            })}
+          </ul>
+          <p className="muted small" style={{ marginTop: 6 }}>
+            Remove these from your cart and re-validate to clear.
+          </p>
+        </>
+      ) : null}
+      {/*
+        Inferred OOS: items the user added that MILO's active orders don't
+        show. Almost always means MILO put them in its own OOS section
+        even though Stage 3 thought it added them. Stopgap until Stage
+        3/4 OOS detection ships properly — but works with what we have.
+      */}
+      {inferredOos.length > 0 ? (
+        <>
+          <div style={{ marginTop: 12, fontWeight: 600 }}>
+            Likely out of stock at MLCC ({inferredOos.length} item{inferredOos.length === 1 ? "" : "s"}):
+          </div>
+          <ul className="drawer-validation-errors">
+            {inferredOos.map((line) => (
+              <li key={cartLineId(line.product)}>
+                {line.product.name}
+                {line.quantity ? ` × ${line.quantity}` : ""}
+                {line.product.bottle_size_label
+                  ? ` (${line.product.bottle_size_label})`
+                  : ""}
+              </li>
+            ))}
+          </ul>
+          <p className="muted small" style={{ marginTop: 6 }}>
+            MLCC accepted the order but didn&apos;t show these on the cart —
+            usually means they&apos;re in MLCC&apos;s out-of-stock section. Remove
+            them and re-validate.
+          </p>
+        </>
+      ) : null}
+      {/*
+        Per-ADA progress for under-minimum cases. Shows distributor by
+        name, current liters, and how many more they need. This is what
+        the user actually needs to act on — "NWS Michigan needs 6.00 L
+        more" is concrete; "ADA breakdown is short" is not.
+      */}
+      {adaProgress.length > 0 ? (
+        <>
+          <div style={{ marginTop: 12, fontWeight: 600 }}>
+            Distributors below 9 L minimum:
+          </div>
+          <ul className="banner-content-list">
+            {adaProgress.map((ada) => (
+              <li key={ada.name}>
+                <strong>{ada.name}</strong>: {ada.liters.toFixed(2)} L / 9.00 L
+                {" — needs "}
+                <strong>{ada.shortBy.toFixed(2)} L</strong> more
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {/*
+        Generic MILO error strings from ada_breakdown.errors. Only render
+        if we haven't already covered them with the more-structured blocks
+        above. (The 9L minimum message is implicit in adaProgress, so we
+        hide it when adaProgress is non-empty.)
+      */}
+      {milccErrorList.length > 0 && adaProgress.length === 0 ? (
+        <>
+          <div style={{ marginTop: 12, fontWeight: 600 }}>
+            MLCC reported:
+          </div>
+          <ul className="banner-content-list">
+            {milccErrorList.map((m, i) => (
+              <li key={i}>{m}</li>
+            ))}
+          </ul>
         </>
       ) : null}
       {summary ? (

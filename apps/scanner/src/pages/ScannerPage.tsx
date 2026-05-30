@@ -396,6 +396,17 @@ export function ScannerPage() {
             setShowCart(false);
             navigate("/cart");
           }}
+          /*
+           * Task #51 (2026-05-30): Amazon-style sibling browsing from cart.
+           * Tap a cart line's product name → open ProductCard for that bottle's
+           * family. The cart drawer stays open underneath so dismissing the
+           * product card returns the user right back to where they were.
+           * z-index is bumped on product-card-backdrop to overlay the drawer
+           * (CSS change in index.css).
+           */
+          onLineProductClick={(product) => {
+            void openFamily(product);
+          }}
         />
       ) : null}
 

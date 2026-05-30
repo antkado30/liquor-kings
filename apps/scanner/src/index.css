@@ -406,7 +406,10 @@ select {
 .product-card-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  /* Bumped 50 → 70 so the product card overlays the cart drawer
+     (which is z-index 60). Task #51 — tap a cart line and the product
+     card opens on top; dismissing it returns to the open cart. */
+  z-index: 70;
   background: rgba(0, 0, 0, 0.55);
   display: flex;
   align-items: flex-end;
@@ -1348,4 +1351,88 @@ select {
 
 .banner-content-list li {
   margin: 2px 0;
+}
+
+/* ─── Cart line remove button (task #52, 2026-05-30) ───────────────────
+   Replaces the old `.btn.text.danger` solid-red oval next to the qty
+   stepper with a clean square icon-only button. Visually subordinate
+   to the qty stepper (which is the primary control) but still
+   accessible with a clear destructive intent on hover. */
+
+.cart-line-remove-btn {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  border-radius: 8px;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  margin-left: auto; /* right-align inside the .drawer-line-controls flex row */
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.cart-line-remove-btn:hover,
+.cart-line-remove-btn:focus-visible {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.6);
+  outline: none;
+}
+
+.cart-line-remove-btn:active {
+  transform: scale(0.96);
+}
+
+.cart-line-remove-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ─── Tappable cart line title (task #51, 2026-05-30) ──────────────────
+   When ScannerPage wires onLineProductClick, the cart line's product
+   name becomes a button that opens the ProductCard for that bottle's
+   family. Visually it should still LOOK like a title — not a button —
+   but signal tappability with a subtle hover/focus state and the
+   pointer cursor. Inherits text color so dark/light theme work. */
+
+.drawer-line-title--tappable {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  /* Subtle underline cue on hover so users discover the affordance.
+     We don't want a permanent underline because it'd compete with the
+     ADA grouping headers visually. */
+  text-decoration: none;
+}
+
+.drawer-line-title--tappable:hover,
+.drawer-line-title--tappable:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(108, 99, 255, 0.6);
+  text-underline-offset: 3px;
+  outline: none;
+}
+
+.drawer-line-title--tappable:active {
+  transform: translateY(1px);
+}
+
+.drawer-line-title--tappable:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  text-decoration: none;
 }
