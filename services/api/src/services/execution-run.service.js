@@ -496,6 +496,62 @@ export const createExecutionRunFromCart = async (
     };
   }
 
+  // Auto-transition the cart from 'active' to 'submitted' if needed.
+  //
+  // Phase 1 Week 1 of V1 (2026-05-30): the scanner's new two-step flow
+  // calls this endpoint twice — once for validate_only, once for rpa_run.
+  // Both calls reuse the same cart, which is still 'active' after
+  // addCartLine. buildExecutionPayloadForSubmittedCart requires
+  // status='submitted', so we flip it here before building the payload.
+  //
+  // Idempotent: if the cart is already 'submitted' (e.g. the second call
+  // in the validate→submit sequence), the update is a no-op-style write
+  // that doesn't break anything. We do not transition 'canceled' or
+  // unknown statuses — only active → submitted.
+  const { data: cartRow, error: cartLookupError } = await supabase
+    .from("carts")
+    .select("id, status, store_id")
+    .eq("id", cartId)
+    .eq("store_id", storeId)
+    .maybeSingle();
+
+  if (cartLookupError) {
+    return {
+      statusCode: 500,
+      body: { error: cartLookupError.message },
+    };
+  }
+  if (!cartRow) {
+    return {
+      statusCode: 404,
+      body: { error: "Submitted cart not found" },
+    };
+  }
+
+  if (cartRow.status === "active") {
+    const { error: transitionError } = await supabase
+      .from("carts")
+      .update({ status: "submitted", updated_at: new Date().toISOString() })
+      .eq("id", cartId)
+      .eq("store_id", storeId)
+      .eq("status", "active"); // optimistic: don't overwrite if another caller flipped it
+    if (transitionError) {
+      return {
+        statusCode: 500,
+        body: {
+          error: `Could not transition cart to submitted: ${transitionError.message}`,
+        },
+      };
+    }
+  } else if (cartRow.status !== "submitted") {
+    return {
+      statusCode: 400,
+      body: {
+        error: `Cart is in state '${cartRow.status}' and cannot be sent to MILO`,
+      },
+    };
+  }
+
   // Build the metadata blob the worker uses to decide which pipeline to
   // run (Stages 1-5 vs Stages 1-4 only) and how Stage 5 should behave
   // when it does run.
