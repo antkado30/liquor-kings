@@ -16,6 +16,22 @@ export interface MlccProduct {
   is_new_item: boolean;
   /** UPCitemdb product image when present (scanner UPC flows). */
   imageUrl?: string | null;
+  /**
+   * ISO date (YYYY-MM-DD) of the most recent MLCC price book that
+   * contained this product. Stored by the price-book ingestor. Used
+   * client-side (task #44) to flag products that haven't appeared in
+   * a recent price book — those are likely discontinued. Null when
+   * the column wasn't populated (older rows, manual seeds).
+   */
+  last_price_book_date?: string | null;
+  /**
+   * Server-side "active" flag. Defaults true. Reserved for future
+   * use — today the ingestor never flips it to false, but the
+   * /items/:code/family endpoint already filters on `is_active=true`,
+   * so once we have a process for marking products inactive the
+   * scanner respects it automatically.
+   */
+  is_active?: boolean;
 }
 
 export interface ProductFamily {

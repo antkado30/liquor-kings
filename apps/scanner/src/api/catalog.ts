@@ -90,6 +90,18 @@ function mapRow(row: Record<string, unknown>): MlccProduct {
   const imageUrlRaw = row.imageUrl ?? row.image_url;
   const imageUrl =
     imageUrlRaw != null && String(imageUrlRaw).trim() !== "" ? String(imageUrlRaw).trim() : null;
+  // last_price_book_date is stored in DB as a date (YYYY-MM-DD). Map to
+  // a string when present so the freshness helper can parse it. null
+  // when the row predates the column being added (older manual seeds).
+  const lastPriceBookDateRaw = row.last_price_book_date;
+  const lastPriceBookDate =
+    typeof lastPriceBookDateRaw === "string" && lastPriceBookDateRaw.trim() !== ""
+      ? lastPriceBookDateRaw.trim()
+      : null;
+  // is_active defaults true server-side; preserve undefined-on-missing
+  // so the freshness helper can tell the difference between "explicitly
+  // active" and "we don't know yet".
+  const isActive = typeof row.is_active === "boolean" ? row.is_active : undefined;
   return {
     id: String(row.id ?? ""),
     code: String(row.code ?? ""),
@@ -107,6 +119,8 @@ function mapRow(row: Record<string, unknown>): MlccProduct {
     base_price: num(row.base_price),
     is_new_item: Boolean(row.is_new_item),
     imageUrl,
+    last_price_book_date: lastPriceBookDate,
+    is_active: isActive,
   };
 }
 

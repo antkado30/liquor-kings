@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { flagIncorrectMatch } from "../api/catalog";
+import { getOrderingRuleDisplay } from "../lib/mlcc-ordering-rules";
+import { computeProductFreshness } from "../lib/product-freshness";
 import type { MlccProduct, ProductFamily } from "../types";
 import { pickInitialSizeByCode, ProductSizeSelector } from "./ProductSizeSelector";
 
@@ -18,6 +20,13 @@ type ProductCardProps = {
   scannedUpc?: string | null;
   /** True when this card was opened from a camera scan that used UPC matching (not name search). */
   wasUpcScanMatch?: boolean;
+  /**
+   * Latest MLCC price book date (YYYY-MM-DD) — drives the freshness /
+   * discontinuation heuristic (task #44). Null when /price-book/status
+   * hasn't returned yet; in that case freshness defaults to "fresh"
+   * (we don't falsely accuse). Provided by ScannerPage.
+   */
+  latestPriceBookDate?: string | null;
   onToast?: (message: string) => void;
 };
 
@@ -28,6 +37,7 @@ export function ProductCard({
   onDismiss,
   scannedUpc = null,
   wasUpcScanMatch = false,
+  latestPriceBookDate = null,
   onToast,
 }: ProductCardProps) {
   const [selectedProduct, setSelectedProduct] = useState<MlccProduct>(() =>
@@ -76,6 +86,57 @@ export function ProductCard({
 
   const cat = selectedProduct.category ?? "—";
   const showFlag = wasUpcScanMatch && Boolean(scannedUpc?.trim());
+
+  /*
+    MLCC ordering rules for the SELECTED size (task #43, 2026-05-30).
+    Surface at scan time so the user knows split-case rules and full-
+    case multiples BEFORE picking a quantity. Re-computed when the
+    user flips between sizes — 750ml vs 50ml have wildly different
+    rules. Pure function, no fetch — see lib/mlcc-ordering-rules.ts
+    for the rule table source.
+  */
+  const orderingRule = useMemo(
+    () =>
+      getOrderingRuleDisplay({
+        code: selectedProduct.code,
+        bottle_size_ml: selectedProduct.bottle_size_ml,
+        case_size: selectedProduct.case_size,
+        ada_name: selectedProduct.ada_name,
+      }),
+    [
+      selectedProduct.code,
+      selectedProduct.bottle_size_ml,
+      selectedProduct.case_size,
+      selectedProduct.ada_name,
+    ],
+  );
+
+  /*
+    Freshness / discontinuation check (task #44, 2026-05-30). Compares
+    the selected size's last_price_book_date against the latest book
+    date we know about. Surfaces "aging" (14+ days behind) or
+    "likely_discontinued" (30+ days behind) banners so the user doesn't
+    waste an RPA run on a SKU that's no longer carried.
+
+    Why per-selected-size: a brand may have a current 750ml SKU AND a
+    discontinued 1.75L SKU in the same family. The banner needs to
+    reflect THIS size, not the family.
+  */
+  const freshness = useMemo(
+    () =>
+      computeProductFreshness(
+        {
+          last_price_book_date: selectedProduct.last_price_book_date,
+          is_active: selectedProduct.is_active,
+        },
+        latestPriceBookDate,
+      ),
+    [
+      selectedProduct.last_price_book_date,
+      selectedProduct.is_active,
+      latestPriceBookDate,
+    ],
+  );
   const cardImageUrl =
     (!imageFailed &&
       (family.sizes.map((s) => s.imageUrl).find((u) => u && String(u).trim()) ??
@@ -103,6 +164,26 @@ export function ProductCard({
           </button>
         </div>
         <p className="product-card-category muted">{cat}</p>
+
+        {/*
+          Freshness banner (task #44, 2026-05-30). Only renders when the
+          selected size hasn't appeared in MLCC's last 14+ days of price
+          books. "aging" = soft yellow info; "likely_discontinued" = red
+          warn with stronger language. The user can still add to cart
+          (we never block — sometimes a "discontinued" SKU comes back
+          the next week), but they go in eyes open.
+        */}
+        {freshness.status !== "fresh" && freshness.message ? (
+          <div
+            className={`product-card-freshness product-card-freshness--${freshness.status}`}
+            role="status"
+          >
+            <span className="product-card-freshness__icon" aria-hidden>
+              {freshness.status === "likely_discontinued" ? "⚠" : "ℹ"}
+            </span>
+            <span className="product-card-freshness__text">{freshness.message}</span>
+          </div>
+        ) : null}
 
         <p className="label">Size</p>
         <ProductSizeSelector
@@ -137,6 +218,26 @@ export function ProductCard({
             <dd>{selectedProduct.proof ?? "—"}</dd>
           </div>
         </dl>
+
+        {/*
+          MLCC ordering rule callout (task #43, 2026-05-30). Sits above
+          the qty stepper so the user reads "must order in cases of 60"
+          BEFORE typing 1. The actual quantity stepper doesn't enforce
+          these yet — that's task #45. For now this is informational
+          only; the cart's per-line rule-engine validation still catches
+          violations before validate is allowed.
+        */}
+        <div
+          className={`product-card-rules${orderingRule.isConstrained ? " product-card-rules--constrained" : ""}`}
+        >
+          <span className="product-card-rules__label">MLCC ordering</span>
+          <span className="product-card-rules__primary">{orderingRule.primary}</span>
+          {orderingRule.secondary ? (
+            <span className="product-card-rules__secondary muted small">
+              {orderingRule.secondary}
+            </span>
+          ) : null}
+        </div>
 
         <div className="quantity-row">
           <button type="button" className="qty-btn" onClick={() => bump(-1)} aria-label="Decrease quantity">

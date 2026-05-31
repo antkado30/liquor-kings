@@ -68,6 +68,14 @@ export function ScannerPage() {
     status: "aging" | "stale";
     daysSinceUpdate: number;
   } | null>(null);
+  /**
+   * Latest price book date (YYYY-MM-DD) from /price-book/status.
+   * Captured separately from `priceBookAge` because ProductCard's
+   * freshness heuristic (task #44) needs the absolute date even when
+   * the cart-wide age banner is hidden (status=fresh). Null until the
+   * status endpoint responds.
+   */
+  const [latestPriceBookDate, setLatestPriceBookDate] = useState<string | null>(null);
   const [dismissPriceBookBanner, setDismissPriceBookBanner] = useState(false);
   const [networkWarn, setNetworkWarn] = useState(false);
 
@@ -76,6 +84,12 @@ export function ScannerPage() {
       const s = await getPriceBookStatus();
       if (s.ok && (s.status === "aging" || s.status === "stale") && s.daysSinceUpdate != null) {
         setPriceBookAge({ status: s.status, daysSinceUpdate: s.daysSinceUpdate });
+      }
+      // Always capture the latest date if the endpoint returned one,
+      // even when status=fresh. ProductCard needs it for per-product
+      // freshness checks (task #44 discontinuation detection).
+      if (s.ok && typeof s.priceBookDate === "string" && s.priceBookDate.trim() !== "") {
+        setLatestPriceBookDate(s.priceBookDate.trim());
       }
     })();
   }, []);
@@ -370,6 +384,8 @@ export function ScannerPage() {
           initialSelectedCode={productCardInitialCode}
           scannedUpc={upcScanContext?.upc ?? null}
           wasUpcScanMatch={Boolean(upcScanContext?.upc)}
+          /* task #44: latest price book date drives the freshness/discontinuation banner */
+          latestPriceBookDate={latestPriceBookDate}
           onToast={(msg) => setToast(msg)}
           onDismiss={() => {
             setShowProductCard(false);
