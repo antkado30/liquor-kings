@@ -530,9 +530,23 @@ export function CartDrawer({ cart, onClose, onLineProductClick }: CartDrawerProp
         {/* ─── Action buttons (idle / validateDone) ───────────────────────── */}
         {(state.kind === "idle" || state.kind === "validateDone") && items.length > 0 ? (
           <>
+            {/*
+              "Clear scanner cart" — clears LOCAL + LK server cart only.
+              MILO's actual cart state lives in their session and won't
+              empty until the next validate/submit run (Stage 3's auto-
+              clear-cart pre-flight, task #9). The caption below tells
+              the user this honestly. Bug found 2026-05-30: Tony hit
+              "Clear cart" and MLCC still showed Tito's + Ciroc on the
+              website — because we'd only ever cleared the scanner side.
+              True MILO clear is task #56 (deferred — it costs an RPA
+              run and most users don't actually need it between orders).
+            */}
             <button type="button" className="btn secondary btn-block" disabled={isBusy} onClick={handleClearCart}>
-              Clear cart
+              Clear scanner cart
             </button>
+            <p className="muted small" style={{ marginTop: 4, marginBottom: 8, textAlign: "center" }}>
+              MLCC&apos;s cart resets automatically on your next validate.
+            </p>
             <button
               type="button"
               className="btn secondary btn-block"
