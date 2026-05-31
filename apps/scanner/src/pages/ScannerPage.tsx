@@ -395,11 +395,16 @@ export function ScannerPage() {
           }}
           onAddToCart={(product, quantity) => {
             cart.addItem(product, quantity);
-            setToast("Added to cart");
-            setShowProductCard(false);
-            setCurrentFamily(null);
-            setProductCardInitialCode(undefined);
-            setUpcScanContext(null);
+            // Task #58 (2026-05-31): card stays open after Add so the
+            // user can pick another size of the same brand without re-
+            // scanning. Toast still fires for global feedback; the
+            // ProductCard renders its own inline last-added indicator
+            // and resets quantity to 1 internally. Dismissal is now
+            // ONLY via the "Done" button (formerly ×) — gives the user
+            // explicit control of when to move on to the next scan.
+            const sizeLabel =
+              product.bottle_size_label ?? `${product.bottle_size_ml ?? ""} mL`;
+            setToast(`Added ${quantity} × ${sizeLabel}`);
           }}
         />
       ) : null}

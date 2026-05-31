@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flagIncorrectMatch } from "../api/catalog";
 import { getOrderingRuleDisplay } from "../lib/mlcc-ordering-rules";
 import { computeProductFreshness } from "../lib/product-freshness";
@@ -47,6 +47,29 @@ export function ProductCard({
   const [flagBusy, setFlagBusy] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
 
+  /*
+    Task #58 (2026-05-31) — stay-open behavior after Add to Cart.
+    Card no longer dismisses on add; user picks more sizes or taps
+    Done to close. lastAdded is the most-recent add receipt, used to
+    render the inline success indicator above the Add button. Cleared
+    whenever the user changes size so it doesn't lie about what's
+    selected NOW vs what was just added.
+  */
+  const [lastAdded, setLastAdded] = useState<{
+    quantity: number;
+    sizeLabel: string;
+    productCode: string;
+  } | null>(null);
+
+  /*
+    Ref on the size selector — after a successful add, we scroll it
+    back into view so the user (whose finger was on the Add button at
+    the bottom of the card) sees the size chips again without having
+    to scroll manually. Critical for taller phone screens where the
+    card body scrolls.
+  */
+  const sizeSelectorRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     setImageFailed(false);
   }, [selectedProduct.id]);
@@ -55,9 +78,42 @@ export function ProductCard({
     setQuantity((q) => Math.min(99, Math.max(1, q + delta)));
   };
 
-  const onAdd = () => {
-    onAddToCart(selectedProduct, quantity);
+  /*
+    Wrap setSelectedProduct so changing size also resets qty to 1 AND
+    clears the lastAdded indicator. The indicator referenced a specific
+    size; once the user picks a different one it would lie about which
+    size the add applied to.
+  */
+  const handleSelectSize = (next: MlccProduct) => {
+    setSelectedProduct(next);
     setQuantity(1);
+    setLastAdded(null);
+  };
+
+  const onAdd = () => {
+    const addedQty = quantity;
+    const addedSizeLabel =
+      selectedProduct.bottle_size_label ??
+      `${selectedProduct.bottle_size_ml ?? ""} mL`;
+    onAddToCart(selectedProduct, addedQty);
+    setQuantity(1);
+    setLastAdded({
+      quantity: addedQty,
+      sizeLabel: addedSizeLabel,
+      productCode: selectedProduct.code,
+    });
+    /*
+      Smooth-scroll the size selector back into view so the next size
+      pick is one tap away. Defer to next tick so the lastAdded indicator
+      has been rendered above the button — otherwise the scroll lands
+      on stale layout.
+    */
+    requestAnimationFrame(() => {
+      sizeSelectorRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
   };
 
   const onFlagWrongMatch = async () => {
@@ -159,8 +215,20 @@ export function ProductCard({
             {family.baseName}
           </h2>
           {selectedProduct.is_new_item ? <span className="badge-new">New Item</span> : null}
-          <button type="button" className="product-card-close" onClick={onDismiss} aria-label="Close">
-            ×
+          {/*
+            Header dismiss button. Was a bare ×, now labeled "Done" so
+            the user sees an explicit "I'm finished with this brand"
+            affordance — important now that the card stays open after
+            Add to Cart (task #58, 2026-05-31). The × glyph stays as a
+            visual cue alongside the label.
+          */}
+          <button
+            type="button"
+            className="product-card-close product-card-close--labeled"
+            onClick={onDismiss}
+            aria-label="Done — close product card"
+          >
+            <span aria-hidden>Done</span>
           </button>
         </div>
         <p className="product-card-category muted">{cat}</p>
@@ -186,11 +254,18 @@ export function ProductCard({
         ) : null}
 
         <p className="label">Size</p>
-        <ProductSizeSelector
-          sizes={family.sizes}
-          selected={selectedProduct}
-          onSelect={setSelectedProduct}
-        />
+        {/*
+          ref wraps the size selector so onAdd can scrollIntoView after
+          a successful add (task #58, 2026-05-31). Keeps the next size
+          pick one tap away on tall phone screens.
+        */}
+        <div ref={sizeSelectorRef}>
+          <ProductSizeSelector
+            sizes={family.sizes}
+            selected={selectedProduct}
+            onSelect={handleSelectSize}
+          />
+        </div>
 
         <dl className="product-card-details">
           <div>
@@ -258,6 +333,30 @@ export function ProductCard({
             +
           </button>
         </div>
+
+        {/*
+          Inline last-added indicator (task #58, 2026-05-31). Sticky
+          since the most recent successful add; cleared when the user
+          changes size (because then it would lie about which size).
+          Replaces the previous "card dismisses on add" UX — now the
+          user sees explicit confirmation of what landed AND can pick
+          another size without re-scanning.
+        */}
+        {lastAdded ? (
+          <div
+            className="product-card-last-added"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="product-card-last-added__icon" aria-hidden>
+              ✓
+            </span>
+            <span className="product-card-last-added__text">
+              Added {lastAdded.quantity} × {lastAdded.sizeLabel} — pick another
+              size or tap <strong>Done</strong> to scan the next bottle
+            </span>
+          </div>
+        ) : null}
 
         <button type="button" className="btn primary btn-block" onClick={onAdd}>
           Add to Cart

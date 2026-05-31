@@ -520,6 +520,74 @@ select {
   cursor: pointer;
 }
 
+/*
+  Labeled Done variant (task #58, 2026-05-31). When the card stays
+  open after Add to Cart, a plain × becomes ambiguous — "is this
+  close or undo my add?" Renaming to "Done" + giving it a pill shape
+  with the accent tint makes the dismiss action obvious. Sized for
+  one-handed thumb reach.
+*/
+.product-card-close--labeled {
+  width: auto;
+  min-width: 72px;
+  padding: 0 16px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: rgba(108, 99, 255, 0.18);
+  border: 1px solid rgba(108, 99, 255, 0.35);
+}
+
+.product-card-close--labeled:active {
+  background: rgba(108, 99, 255, 0.32);
+}
+
+/*
+  Inline last-added indicator (task #58, 2026-05-31). Sticky success
+  message above the Add to Cart button so the user sees explicit
+  confirmation of what just landed without the card dismissing.
+  Cleared when they switch size (would otherwise lie about what's
+  active now). Green tone matches our success palette but stays muted
+  to not compete with the Add button below it.
+*/
+.product-card-last-added {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.12);
+  border-left: 3px solid #22c55e;
+  color: #bbf7d0;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.product-card-last-added__icon {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #22c55e;
+  color: #0f0f1a;
+  font-weight: 700;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.product-card-last-added__text {
+  flex: 1;
+}
+
+.product-card-last-added__text strong {
+  color: #fff;
+  font-weight: 600;
+}
+
 .product-card-category {
   margin: 6px 0 12px;
 }
