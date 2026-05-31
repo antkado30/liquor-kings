@@ -25,6 +25,7 @@
 
 import process from "node:process";
 import { processOneRpaRun } from "./execution-worker.js";
+import { forceCloseAll as forceCloseRpaSessions } from "./rpa-session-manager.js";
 
 // Polling cadence when the queue is empty — snappy enough for orders to feel
 // instant, cheap enough that we're not hammering claim-next.
@@ -124,6 +125,17 @@ async function main() {
     }
     // Otherwise: claimed + processed cleanly — loop immediately. There's
     // probably more work waiting.
+  }
+
+  // Tear down any held persistent MILO session (task #46 Phase A). Safe
+  // no-op when persist is disabled or no session is currently held.
+  // Done AFTER the in-flight check above so we never close a session
+  // mid-use.
+  try {
+    await forceCloseRpaSessions("worker_shutdown");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[rpa-worker] forceCloseRpaSessions raised on shutdown: ${msg}`);
   }
 
   console.log(`[rpa-worker] shutdown complete (inFlight at exit: ${inFlight})`);

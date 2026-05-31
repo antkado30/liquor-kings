@@ -11,6 +11,11 @@ import { addItemsToCart } from "../rpa/stages/add-items-to-cart.js";
 import { validateCartOnMilo } from "../rpa/stages/validate-cart.js";
 import { checkoutOnMilo } from "../rpa/stages/checkout.js";
 import {
+  acquireSession,
+  attachFreshSession,
+  releaseSession,
+} from "./rpa-session-manager.js";
+import {
   FAILURE_TYPE,
   classifyFailureType,
   isRetryableFailureType,
@@ -1041,35 +1046,101 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
 
   let session;
   let checkedOut;
+  // Persistent session bookkeeping (task #46 Phase A, 2026-05-31).
+  //   - persistEnabled: env-gated kill switch; when "no"/unset the worker
+  //     behaves exactly like before (cold pipeline every run + close on
+  //     finally). Default off until Tony validates against real MILO.
+  //   - sessionId: assigned by the session manager on acquire/attach.
+  //     Null in the cold path.
+  //   - sessionWasReused: true iff acquireSession returned reused=true.
+  //     Drives the "skip Stages 1+2" branch below.
+  //   - runSucceeded: tracked across all stages. Set true ONLY on the
+  //     successful-completion returns. Reads in the finally block to
+  //     decide whether to hold the session for reuse (healthy) or tear
+  //     it down (poisoned). Any early-return from a stage's catch leaves
+  //     this false, so failed runs always tear down.
+  const persistEnabled = process.env.LK_RPA_PERSIST_SESSION === "yes";
+  let sessionId = null;
+  let sessionWasReused = false;
+  let runSucceeded = false;
+  let runUnhealthyReason = null;
   try {
-    await heartbeatRun({
-      apiBaseUrl,
-      runId: run.id,
-      storeId,
-      workerId,
-      progressStage: "rpa_login",
-      progressMessage: "Starting RPA Stage 1: login",
-    });
-    stepEvidence.push(
-      buildWorkerStepEvidence("rpa_login_started", "RPA Stage 1 started", {
-        stage: 1,
-      }),
-    );
+    // ─── Phase A reuse path ──────────────────────────────────────────
+    // If persist is enabled AND we have a warm session for THIS store
+    // with THIS license, skip Stages 1 + 2 entirely. The session
+    // manager's idle-timeout + liveness probe guarantees that any
+    // session we get back here is still alive and usable. Stage 3
+    // always runs, and its existing auto-clear-cart pre-flight (task #9)
+    // handles any cart state left behind by the previous run.
+    if (persistEnabled) {
+      const acq = await acquireSession({
+        storeId,
+        licenseNumber: normalizedLicenseNumber,
+      });
+      if (acq.reused) {
+        session = acq.session;
+        sessionId = acq.sessionId;
+        sessionWasReused = true;
+        await heartbeatRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          workerId,
+          progressStage: "rpa_add_items",
+          progressMessage:
+            "Reusing warm MILO session — skipping login + navigate",
+        });
+        stepEvidence.push(
+          buildWorkerStepEvidence(
+            "rpa_session_reused",
+            "Reusing held MILO session; Stages 1+2 skipped",
+            {
+              session_id: sessionId,
+              current_url:
+                session?.page?.url?.() ?? session?.currentUrl ?? null,
+            },
+          ),
+        );
+      } else {
+        stepEvidence.push(
+          buildWorkerStepEvidence(
+            "rpa_session_cold",
+            "No reusable session — running full pipeline from Stage 1",
+            { reason: acq.reason },
+          ),
+        );
+      }
+    }
 
-    try {
-      session = await loginToMilo(
-        {
-          username,
-          password,
-          ...(loginUrl ? { loginUrl } : {}),
-        },
-        {
-          headless: process.env.WORKER_HEADFUL !== "1",
-          slowMo: process.env.WORKER_HEADFUL === "1" ? 250 : 0,
-          captureArtifacts: true,
-        },
+    if (!sessionWasReused) {
+      await heartbeatRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        workerId,
+        progressStage: "rpa_login",
+        progressMessage: "Starting RPA Stage 1: login",
+      });
+      stepEvidence.push(
+        buildWorkerStepEvidence("rpa_login_started", "RPA Stage 1 started", {
+          stage: 1,
+        }),
       );
-    } catch (loginError) {
+
+      try {
+        session = await loginToMilo(
+          {
+            username,
+            password,
+            ...(loginUrl ? { loginUrl } : {}),
+          },
+          {
+            headless: process.env.WORKER_HEADFUL !== "1",
+            slowMo: process.env.WORKER_HEADFUL === "1" ? 250 : 0,
+            captureArtifacts: true,
+          },
+        );
+      } catch (loginError) {
       const failure = summarizeFailure(
         loginError?.message ?? "RPA Stage 1 login failed",
         loginError?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -1168,13 +1239,37 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       };
     }
 
-    stepEvidence.push(
-      buildWorkerStepEvidence(
-        "rpa_navigate_complete",
-        "Stage 2 navigation succeeded",
-        { current_url: session?.currentUrl ?? session?.page?.url?.() ?? null },
-      ),
-    );
+      stepEvidence.push(
+        buildWorkerStepEvidence(
+          "rpa_navigate_complete",
+          "Stage 2 navigation succeeded",
+          { current_url: session?.currentUrl ?? session?.page?.url?.() ?? null },
+        ),
+      );
+
+      // After a cold Stage 1+2, put the session under management so the
+      // next run for this store can skip straight to Stage 3. Attach
+      // failure is non-fatal — if the manager refuses (invalid args
+      // somehow), we just run this one as a one-shot and close the
+      // browser in finally as before.
+      if (persistEnabled) {
+        const att = await attachFreshSession({
+          storeId,
+          licenseNumber: normalizedLicenseNumber,
+          session,
+        });
+        if (att.ok) {
+          sessionId = att.sessionId;
+          stepEvidence.push(
+            buildWorkerStepEvidence(
+              "rpa_session_attached",
+              "Fresh MILO session attached for future reuse",
+              { session_id: sessionId },
+            ),
+          );
+        }
+      }
+    } // end if (!sessionWasReused) — Stages 1+2 either ran or were skipped
 
     await heartbeatRun({
       apiBaseUrl,
@@ -1378,6 +1473,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       console.log(
         `[worker] validate_only run ${run.id} finalized succeeded (canCheckout=${session?.canCheckout}, oos=${Array.isArray(session?.outOfStockItems) ? session.outOfStockItems.length : "?"})`,
       );
+      runSucceeded = true;
       return {
         success: true,
         claimed: true,
@@ -1388,6 +1484,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         outOfStockCount: Array.isArray(session?.outOfStockItems)
           ? session.outOfStockItems.length
           : null,
+        sessionReused: sessionWasReused,
       };
     }
     // ─── End validate-only short-circuit ──────────────────────────────────
@@ -1495,6 +1592,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       ],
     });
 
+    runSucceeded = true;
     return {
       success: true,
       claimed: true,
@@ -1504,9 +1602,31 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       confirmationNumbers: checkedOut?.confirmationNumbers ?? null,
       dryRunReason: checkedOut?.dryRunReason ?? null,
       stage5DurationMs: checkedOut?.stage5DurationMs,
+      sessionReused: sessionWasReused,
     };
   } finally {
-    if (session?.browser) {
+    /*
+      Session disposal (task #46 Phase A). Two paths:
+        a. Persist enabled + we have a sessionId — call releaseSession.
+           The manager decides whether to keep the browser warm (healthy
+           run, hold for reuse) or close it (poisoned, tear down).
+        b. Otherwise (legacy path / no managed session) — close the
+           browser like the original code did. Preserves behavior when
+           the env flag is off OR when persist failed to attach (e.g.
+           Stage 1+2 threw before we could attach).
+
+      runSucceeded is the source of truth for "is this session safe to
+      reuse." Any return-from-catch in a stage leaves it false, so a
+      failed run always tears down. Validate-only success and rpa_run
+      success both set it true right before returning.
+    */
+    if (persistEnabled && sessionId) {
+      await releaseSession({
+        sessionId,
+        healthy: runSucceeded,
+        reason: runUnhealthyReason || (runSucceeded ? null : "run_did_not_complete"),
+      });
+    } else if (session?.browser) {
       await session.browser.close().catch(() => {});
     }
   }
