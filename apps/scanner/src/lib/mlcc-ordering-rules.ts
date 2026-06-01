@@ -186,3 +186,86 @@ export function getOrderingRuleDisplay(product: {
     caseSize: caseSize > 0 ? caseSize : null,
   };
 }
+
+/**
+ * Enumerate the valid order quantities for a product, in ascending
+ * order. Used by the ProductCard's constrained qty stepper (task #45,
+ * 2026-05-31) so the user can only land on quantities MLCC will accept
+ * — no more typing 5 bottles of a 750ml that allows splits of 1/3/6/12.
+ *
+ * Three branches:
+ *   - Unknown size: returns empty array. Caller falls back to a free
+ *     1-99 input (current behavior — don't lie about rules we don't
+ *     have for this size).
+ *   - Split-case size (e.g. 750ml [1, 3, 6, 12]): returns the explicit
+ *     splits PLUS multiples of the largest (full case) up to maxN.
+ *     Result for 750ml: [1, 3, 6, 12, 24, 36, ..., 480].
+ *   - Full-case-only size (e.g. 100ml × 48): returns multiples of the
+ *     case size up to maxN. Result: [48, 96, 144, ..., 480].
+ *
+ * `maxN` defaults to 500 — covers every realistic order. A store
+ * placing >500 bottles of a single SKU is sufficiently unusual that
+ * forcing them to do a separate cart line is fine.
+ *
+ * @param rule - The display rule from getOrderingRuleDisplay (carries
+ *   allowedSplits + caseSize already, so we don't redo the lookup).
+ * @param maxN - Hard ceiling on enumerated quantities. Defaults to 500.
+ */
+export function generateValidQuantities(
+  rule: OrderingRuleDisplay,
+  maxN: number = 500,
+): number[] {
+  if (rule.allowedSplits === null) return [];
+
+  if (rule.allowedSplits.length === 0) {
+    // Full-case-only size. Need a known case size to enumerate.
+    const cs = rule.caseSize ?? 0;
+    if (cs <= 0) return [];
+    const result: number[] = [];
+    for (let n = cs; n <= maxN; n += cs) result.push(n);
+    return result;
+  }
+
+  // Split-case size. Combine explicit allowed splits with multiples of
+  // the largest one (the full-case stand-in per the milo-ordering-rules
+  // engine). Dedup + sort because explicit splits and case multiples
+  // can overlap (e.g. 12 is both in [1,3,6,12] AND a multiple of 12).
+  const explicit = [...rule.allowedSplits];
+  const largest = Math.max(...explicit);
+  const set = new Set<number>(explicit);
+  for (let n = largest; n <= maxN; n += largest) set.add(n);
+  return [...set].sort((a, b) => a - b);
+}
+
+/**
+ * Step through the valid quantities by delta. Returns the next/previous
+ * valid quantity from `current`, or 0 if going below the smallest.
+ *
+ * Going UP from 0 jumps to the smallest valid (matches MLCC's actual UX
+ * — user taps `+` once on a 50ml shot and qty jumps from 0 to 60).
+ * Going DOWN at the smallest valid returns to 0 (so user can "deselect"
+ * a quantity entirely without removing the line).
+ *
+ * @param current - Current quantity (may be 0).
+ * @param delta - +1 to go up, -1 to go down. Other values are clamped.
+ * @param validQuantities - From generateValidQuantities. Must be sorted ascending.
+ */
+export function stepValidQuantity(
+  current: number,
+  delta: number,
+  validQuantities: number[],
+): number {
+  if (validQuantities.length === 0) {
+    // No constraints. Fall back to ±1 with floor at 0.
+    return Math.max(0, current + (delta > 0 ? 1 : -1));
+  }
+  if (delta > 0) {
+    const above = validQuantities.find((n) => n > current);
+    return above ?? validQuantities[validQuantities.length - 1];
+  }
+  if (delta < 0) {
+    const below = [...validQuantities].reverse().find((n) => n < current);
+    return below ?? 0;
+  }
+  return current;
+}

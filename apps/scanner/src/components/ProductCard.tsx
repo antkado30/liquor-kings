@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flagIncorrectMatch } from "../api/catalog";
-import { getOrderingRuleDisplay } from "../lib/mlcc-ordering-rules";
+import {
+  generateValidQuantities,
+  getOrderingRuleDisplay,
+  stepValidQuantity,
+} from "../lib/mlcc-ordering-rules";
 import { computeProductFreshness } from "../lib/product-freshness";
 import type { MlccProduct, ProductFamily } from "../types";
 import { pickInitialSizeByCode, ProductSizeSelector } from "./ProductSizeSelector";
@@ -43,7 +47,15 @@ export function ProductCard({
   const [selectedProduct, setSelectedProduct] = useState<MlccProduct>(() =>
     pickInitialSizeByCode(family.sizes, initialSelectedCode),
   );
-  const [quantity, setQuantity] = useState(1);
+  /*
+    Default qty is 0 (task #45, 2026-05-31) — matches MLCC's actual
+    behavior on milo: a scanned product shows qty=0 until the user
+    taps `+` once, at which point it jumps to the smallest valid
+    quantity for the size (1 for 750ml splits, 60 for a 50ml × 60
+    case). Forces an explicit "yes I want this many" tap before Add
+    to Cart fires; prevents oops-clicks on pre-filled defaults.
+  */
+  const [quantity, setQuantity] = useState(0);
   const [flagBusy, setFlagBusy] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
 
@@ -75,28 +87,44 @@ export function ProductCard({
   }, [selectedProduct.id]);
 
   const bump = (delta: number) => {
-    setQuantity((q) => Math.min(99, Math.max(1, q + delta)));
+    if (isQtyConstrained) {
+      // Constrained: snap to next/prev valid quantity. Going up from 0
+      // jumps to the smallest valid (e.g. 0 → 60 for a 50ml shot case).
+      setQuantity((q) => stepValidQuantity(q, delta, validQuantities));
+      return;
+    }
+    // Unconstrained fallback (unknown size, no rule): plain ±1, no cap.
+    setQuantity((q) => Math.max(0, Math.min(99, q + delta)));
   };
 
   /*
-    Wrap setSelectedProduct so changing size also resets qty to 1 AND
-    clears the lastAdded indicator. The indicator referenced a specific
-    size; once the user picks a different one it would lie about which
-    size the add applied to.
+    Wrap setSelectedProduct so changing size also resets qty to 0 AND
+    clears the lastAdded indicator. Qty=0 matches MLCC — user must
+    explicitly tap `+` (or use the dropdown) to commit to a quantity
+    for the new size. The indicator referenced a specific size; once
+    the user picks a different one it would lie about which size the
+    add applied to.
   */
   const handleSelectSize = (next: MlccProduct) => {
     setSelectedProduct(next);
-    setQuantity(1);
+    setQuantity(0);
     setLastAdded(null);
   };
 
+  // Add to Cart is disabled when qty is 0 — explicit pick is required
+  // (task #45). The button still renders so its position is stable.
+  const canAdd = quantity > 0;
+
   const onAdd = () => {
+    if (!canAdd) return;
     const addedQty = quantity;
     const addedSizeLabel =
       selectedProduct.bottle_size_label ??
       `${selectedProduct.bottle_size_ml ?? ""} mL`;
     onAddToCart(selectedProduct, addedQty);
-    setQuantity(1);
+    // Reset back to 0 so the user must re-pick a qty for the next add.
+    // Matches MLCC — there's no implicit "do it again at the same qty".
+    setQuantity(0);
     setLastAdded({
       quantity: addedQty,
       sizeLabel: addedSizeLabel,
@@ -166,6 +194,19 @@ export function ProductCard({
       selectedProduct.ada_name,
     ],
   );
+
+  /*
+    Enumerate the valid quantities for the currently-selected size
+    (task #45, 2026-05-31). Drives both the constrained +/− stepper
+    and the dropdown picker. Empty array means "unknown size, no
+    constraint" — caller falls back to free input behavior. Recomputes
+    on size change so a switch from 750ml → 100ml refreshes the list.
+  */
+  const validQuantities = useMemo(
+    () => generateValidQuantities(orderingRule),
+    [orderingRule],
+  );
+  const isQtyConstrained = validQuantities.length > 0;
 
   /*
     Freshness / discontinuation check (task #44, 2026-05-30). Compares
@@ -315,21 +356,65 @@ export function ProductCard({
         </div>
 
         <div className="quantity-row">
-          <button type="button" className="qty-btn" onClick={() => bump(-1)} aria-label="Decrease quantity">
+          <button
+            type="button"
+            className="qty-btn"
+            onClick={() => bump(-1)}
+            aria-label="Decrease quantity"
+            disabled={quantity <= 0}
+          >
             −
           </button>
-          <input
-            className="qty-input"
-            type="number"
-            min={1}
-            max={99}
-            value={quantity}
-            onChange={(e) => {
-              const v = Number.parseInt(e.target.value, 10);
-              if (Number.isFinite(v)) setQuantity(Math.min(99, Math.max(1, v)));
-            }}
-          />
-          <button type="button" className="qty-btn" onClick={() => bump(1)} aria-label="Increase quantity">
+          {isQtyConstrained ? (
+            /*
+              Constrained mode (task #45, 2026-05-31). The displayed
+              number is a div (not an input — typing arbitrary numbers
+              would let users land on invalid quantities). A native
+              <select> is layered ON TOP of the display at opacity 0:
+              tapping the number opens the OS-native picker (iOS gets
+              the wheel modal, Android gets a dropdown), letting the
+              user JUMP to any valid quantity instead of tapping `+`
+              ten times to reach 60. The empty-state "—" shows when
+              qty=0; option labels include " bottles" for clarity in
+              the picker UI.
+            */
+            <div className="qty-picker-wrap" aria-live="polite">
+              <span className="qty-picker-display">
+                {quantity > 0 ? quantity : "—"}
+              </span>
+              <select
+                className="qty-picker-select"
+                value={quantity}
+                onChange={(e) => setQuantity(Number(e.target.value))}
+                aria-label="Quantity (tap to choose from valid amounts)"
+              >
+                <option value={0}>—</option>
+                {validQuantities.map((q) => (
+                  <option key={q} value={q}>
+                    {q} bottles
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <input
+              className="qty-input"
+              type="number"
+              min={0}
+              max={99}
+              value={quantity}
+              onChange={(e) => {
+                const v = Number.parseInt(e.target.value, 10);
+                if (Number.isFinite(v)) setQuantity(Math.max(0, Math.min(99, v)));
+              }}
+            />
+          )}
+          <button
+            type="button"
+            className="qty-btn"
+            onClick={() => bump(1)}
+            aria-label="Increase quantity"
+          >
             +
           </button>
         </div>
@@ -358,8 +443,14 @@ export function ProductCard({
           </div>
         ) : null}
 
-        <button type="button" className="btn primary btn-block" onClick={onAdd}>
-          Add to Cart
+        <button
+          type="button"
+          className="btn primary btn-block"
+          onClick={onAdd}
+          disabled={!canAdd}
+          title={!canAdd ? "Choose a quantity first" : undefined}
+        >
+          {canAdd ? "Add to Cart" : "Add to Cart (choose qty first)"}
         </button>
 
         {showFlag ? (

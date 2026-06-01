@@ -774,6 +774,66 @@ select {
   background: var(--bg);
 }
 
+/*
+  Constrained quantity picker (task #45, 2026-05-31). Tap the number
+  to open the OS-native dropdown of valid quantities — iOS shows the
+  wheel modal, Android shows a list. Lets the user JUMP to a quantity
+  (e.g. 60 for a case of 50ml shots) without tapping `+` ten times.
+
+  Implementation: a div with the number visible, plus a transparent
+  <select> stretched over the entire box. The select catches taps and
+  opens the native picker. The visible number updates from React state
+  when an option is chosen. Border + caret indicator hint that this is
+  tappable, not just static text.
+*/
+.qty-picker-wrap {
+  position: relative;
+  width: 88px;
+  min-height: var(--touch);
+  border-radius: 10px;
+  border: 1px solid rgba(108, 99, 255, 0.4);
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qty-picker-wrap::after {
+  /* tiny caret in the corner so the user sees this is tappable */
+  content: "▾";
+  position: absolute;
+  right: 6px;
+  bottom: 2px;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.qty-picker-display {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  pointer-events: none; /* clicks pass through to the underlying select */
+}
+
+.qty-picker-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  /*
+    Remove default browser styling — we don't want the OS-default
+    dropdown chrome competing with the styled wrap. The native picker
+    UI is what we DO want, and that's controlled by the OS, not CSS.
+  */
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+}
+
 .btn {
   min-height: var(--touch);
   padding: 0 16px;
