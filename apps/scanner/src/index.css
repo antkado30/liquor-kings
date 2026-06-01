@@ -798,6 +798,16 @@ select {
   justify-content: center;
 }
 
+/*
+  Cart-line variant — narrower since the cart row already has the
+  product name, size, total, and trash button competing for space.
+  Same behavior as the ProductCard picker; just slimmer chrome.
+*/
+.qty-picker-wrap--cart {
+  width: 64px;
+  min-height: 36px;
+}
+
 .qty-picker-wrap::after {
   /* tiny caret in the corner so the user sees this is tappable */
   content: "▾";

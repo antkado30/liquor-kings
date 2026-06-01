@@ -11,6 +11,11 @@ import {
 } from "react";
 import type { CartItem, MlccProduct } from "../types";
 import { Sentry } from "../lib/sentry";
+import {
+  generateValidQuantities,
+  getOrderingRuleDisplay,
+  stepValidQuantity,
+} from "../lib/mlcc-ordering-rules";
 
 const STORAGE_KEY = "lk-scanner-cart-v1";
 
@@ -118,14 +123,23 @@ export function CartProvider({ children }: { children: ReactNode }) {
     };
   }, [items]);
 
+  /*
+    2026-05-31 (#45 follow-up): dropped the 99-bottle cap that used to
+    live on addItem / updateQuantity / merge math. Real liquor-store
+    orders can be 100s of bottles per SKU (Tony's actual case: 480 of
+    a 50ml × 60 = 8 full cases). The rule engine validates quantities
+    at validate-time anyway, so a client-side ceiling just frustrated
+    legitimate orders. Floor stays at 1 — cart lines with qty=0 don't
+    make sense; user removes via the trash icon instead.
+  */
   const addItem = useCallback((product: MlccProduct, quantity: number) => {
-    const q = Math.max(1, Math.min(99, Math.floor(quantity)));
+    const q = Math.max(1, Math.floor(quantity));
     setItems((prev) => {
       const k = lineKey(product);
       const idx = prev.findIndex((c) => lineKey(c.product) === k);
       if (idx >= 0) {
         const next = [...prev];
-        const nq = Math.min(99, next[idx].quantity + q);
+        const nq = next[idx].quantity + q;
         next[idx] = { ...next[idx], quantity: nq };
         return next;
       }
@@ -138,22 +152,59 @@ export function CartProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateQuantity = useCallback((mlccCode: string, quantity: number) => {
-    const q = Math.max(1, Math.min(99, Math.floor(quantity)));
+    const q = Math.max(1, Math.floor(quantity));
     setItems((prev) =>
       prev.map((c) => (c.product.code === mlccCode ? { ...c, quantity: q } : c)),
     );
   }, []);
 
+  /*
+    Cart-line steppers (2026-05-31, fix for #45): snap to valid MLCC
+    quantities for THIS line's product instead of plain ±1. So `+` on
+    a 750ml Tito's line at qty=12 jumps to 24 (next full case), not 13.
+    `−` from 12 → 6, then 3, then 1. At smallest valid (e.g. 1 for
+    750ml), `−` clamps — user uses trash icon to remove entirely.
+
+    Why not strip the cap further? A cart line with qty=0 is a UX
+    paradox (it's "in" the cart but doesn't exist). Removal is the
+    intentional action, deserves its own affordance.
+  */
+  const stepLineQuantity = (
+    line: CartItem,
+    delta: number,
+  ): number => {
+    const rule = getOrderingRuleDisplay({
+      code: line.product.code,
+      bottle_size_ml: line.product.bottle_size_ml,
+      case_size: line.product.case_size,
+      ada_name: line.product.ada_name,
+    });
+    const valid = generateValidQuantities(rule);
+    if (valid.length === 0) {
+      // Unknown size — fall back to plain ±1 (free).
+      return Math.max(1, line.quantity + (delta > 0 ? 1 : -1));
+    }
+    const next = stepValidQuantity(line.quantity, delta, valid);
+    // Clamp to smallest valid; removal is the trash icon's job.
+    return Math.max(valid[0], next);
+  };
+
   const incrementQuantity = useCallback((lineId: string) => {
     setItems((prev) =>
-      prev.map((c) => (lineKey(c.product) === lineId ? { ...c, quantity: c.quantity + 1 } : c)),
+      prev.map((c) =>
+        lineKey(c.product) === lineId
+          ? { ...c, quantity: stepLineQuantity(c, +1) }
+          : c,
+      ),
     );
   }, []);
 
   const decrementQuantity = useCallback((lineId: string) => {
     setItems((prev) =>
       prev.map((c) =>
-        lineKey(c.product) === lineId ? { ...c, quantity: Math.max(1, c.quantity - 1) } : c,
+        lineKey(c.product) === lineId
+          ? { ...c, quantity: stepLineQuantity(c, -1) }
+          : c,
       ),
     );
   }, []);

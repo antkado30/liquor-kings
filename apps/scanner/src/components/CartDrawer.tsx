@@ -30,6 +30,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { validateCart, type CartValidationResult } from "../api/cart";
 import { cartLineId, type CartContextValue } from "../hooks/useCart";
 import { useSubmission } from "../hooks/useSubmission";
+import {
+  generateValidQuantities,
+  getOrderingRuleDisplay,
+} from "../lib/mlcc-ordering-rules";
 
 function money(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
@@ -356,7 +360,20 @@ export function CartDrawer({ cart, onClose, onLineProductClick }: CartDrawerProp
                           const size =
                             line.product.bottle_size_label ?? `${line.product.bottle_size_ml ?? ""} ML`;
                           const lineId = cartLineId(line.product);
-                          const atMin = line.quantity <= 1;
+                          // Hoisted out of the qty-controls IIFE below so
+                          // atMin can use it too. lineSmallestValid is what
+                          // the `−` button bottoms out at (user must use
+                          // trash icon to remove past that).
+                          const lineRule = getOrderingRuleDisplay({
+                            code: line.product.code,
+                            bottle_size_ml: line.product.bottle_size_ml,
+                            case_size: line.product.case_size,
+                            ada_name: line.product.ada_name,
+                          });
+                          const lineValid = generateValidQuantities(lineRule);
+                          const lineConstrained = lineValid.length > 0;
+                          const lineSmallestValid = lineConstrained ? lineValid[0] : 1;
+                          const atMin = line.quantity <= lineSmallestValid;
                           const lineError = lineErrorFor(line.product.code);
                           const suggestions = lineError?.suggestedAlternatives ?? [];
                           return (
@@ -384,6 +401,14 @@ export function CartDrawer({ cart, onClose, onLineProductClick }: CartDrawerProp
                                 )}
                                 <div className="muted small">{size}</div>
                                 <div className="drawer-line-controls">
+                                  {/*
+                                    Cart-line quantity controls (2026-05-31
+                                    fix for #45). +/− snap to valid MLCC
+                                    quantities via useCart's stepLineQuantity
+                                    helper; tapping the qty number opens a
+                                    native dropdown of all valid amounts so
+                                    the user can jump to 240 without 20 taps.
+                                  */}
                                   <div className="qty-stepper" role="group" aria-label="Quantity">
                                     <button
                                       type="button"
@@ -394,9 +419,47 @@ export function CartDrawer({ cart, onClose, onLineProductClick }: CartDrawerProp
                                     >
                                       −
                                     </button>
-                                    <span className="qty-stepper__value" aria-live="polite">
-                                      {line.quantity}
-                                    </span>
+                                    {lineConstrained ? (
+                                      <div className="qty-picker-wrap qty-picker-wrap--cart" aria-live="polite">
+                                        <span className="qty-picker-display">{line.quantity}</span>
+                                        <select
+                                          className="qty-picker-select"
+                                          value={line.quantity}
+                                          disabled={isBusy}
+                                          onChange={(e) =>
+                                            handleUpdateQuantity(
+                                              line.product.code,
+                                              Number(e.target.value),
+                                            )
+                                          }
+                                          aria-label="Quantity (tap to choose from valid amounts)"
+                                        >
+                                          {/*
+                                            Include the line's current qty as
+                                            a "(not valid)" option if it's
+                                            not in the valid list (e.g. a
+                                            cart saved before this shipped).
+                                            Lets the user see what they have
+                                            without the select silently
+                                            snapping to a different value.
+                                          */}
+                                          {!lineValid.includes(line.quantity) ? (
+                                            <option value={line.quantity}>
+                                              {line.quantity} (not valid)
+                                            </option>
+                                          ) : null}
+                                          {lineValid.map((q) => (
+                                            <option key={q} value={q}>
+                                              {q} bottles
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    ) : (
+                                      <span className="qty-stepper__value" aria-live="polite">
+                                        {line.quantity}
+                                      </span>
+                                    )}
                                     <button
                                       type="button"
                                       className="qty-stepper__btn"
