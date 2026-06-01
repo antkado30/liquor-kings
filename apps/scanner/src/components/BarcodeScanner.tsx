@@ -13,6 +13,24 @@ type BarcodeScannerProps = {
 const COOLDOWN_MS = 2000;
 const DETECT_INTERVAL_MS = 220;
 const ZXING_COOLDOWN_MS = 200;
+/*
+  Time (ms) of continuous scanning with no successful read before we
+  show the "trouble scanning?" hint. Tuned to feel natural: under 5s
+  is too aggressive (interrupts during normal aim), >12s is too late
+  (user already gave up). 8s is the sweet spot we landed on based on
+  Tony's 23-min Captain Morgan plastic-shot failure 2026-06-01.
+*/
+const TROUBLE_HINT_MS = 8000;
+
+/*
+  Tighter focusing window for the BarcodeDetector. Higher resolution
+  means more pixels per barcode, which dramatically improves recognition
+  of small/curved labels (50ml shots, pints). 1280×720 is the iPhone
+  rear-cam default sweet spot — bigger and the frame analysis slows
+  down without giving the decoder more info.
+*/
+const VIDEO_IDEAL_WIDTH = 1280;
+const VIDEO_IDEAL_HEIGHT = 720;
 
 type ZxDecodeHintType = import("@zxing/library").DecodeHintType;
 
@@ -145,6 +163,49 @@ function hasCameraSupport(): boolean {
   return typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getUserMedia === "function";
 }
 
+/*
+  Try to coax the active video track into continuous autofocus +
+  whatever focal helpers the device exposes. This is the SINGLE LARGEST
+  reliability improvement for handheld scanning of small/curved labels
+  — without it, the camera locks focus where it was when the stream
+  started and the user has to physically position the bottle at that
+  distance. With it, focus follows the bottle as the user moves.
+
+  We probe capabilities first and only request supported modes (passing
+  unsupported modes throws OverconstrainedError on iOS Safari). Quiet
+  failures are fine — the camera still works without continuous focus,
+  just less well on small labels.
+*/
+async function applyAutofocusEnhancements(
+  track: MediaStreamTrack,
+): Promise<void> {
+  try {
+    const getCaps = (track as { getCapabilities?: () => MediaTrackCapabilities }).getCapabilities;
+    if (typeof getCaps !== "function") return;
+    const caps = getCaps.call(track) as MediaTrackCapabilities & {
+      focusMode?: string[];
+      exposureMode?: string[];
+      whiteBalanceMode?: string[];
+    };
+    const advanced: Array<Record<string, unknown>> = [];
+    if (Array.isArray(caps.focusMode) && caps.focusMode.includes("continuous")) {
+      advanced.push({ focusMode: "continuous" });
+    }
+    if (Array.isArray(caps.exposureMode) && caps.exposureMode.includes("continuous")) {
+      advanced.push({ exposureMode: "continuous" });
+    }
+    if (Array.isArray(caps.whiteBalanceMode) && caps.whiteBalanceMode.includes("continuous")) {
+      advanced.push({ whiteBalanceMode: "continuous" });
+    }
+    if (advanced.length === 0) return;
+    await track.applyConstraints({ advanced } as MediaTrackConstraints);
+  } catch (err) {
+    // Non-fatal — log and continue. The video stream is still usable
+    // without continuous focus, just less reliable on small labels.
+    console.warn("[BarcodeScanner] continuous-focus apply failed (continuing without)", err);
+  }
+}
+
 export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -158,6 +219,35 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState("");
   const [engine, setEngine] = useState<ScannerEngine>("unsupported");
+  /*
+    Becomes true if we've been scanning for TROUBLE_HINT_MS without a
+    successful read. Drives the "Having trouble?" prompt with manual-
+    entry / search shortcuts. Reset whenever a scan succeeds — see the
+    handleScan wrapper below.
+  */
+  const [showTroubleHint, setShowTroubleHint] = useState(false);
+  const troubleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /*
+    Wrap the prop's onScan so we can reset the trouble-hint timer on
+    every successful read. Without this, the hint would stay up forever
+    after one bad scan, even after subsequent scans succeed.
+  */
+  const handleSuccessfulScan = useCallback(
+    (code: string) => {
+      setShowTroubleHint(false);
+      if (troubleTimerRef.current) {
+        clearTimeout(troubleTimerRef.current);
+        // Restart the timer for the next scan attempt.
+        troubleTimerRef.current = setTimeout(
+          () => setShowTroubleHint(true),
+          TROUBLE_HINT_MS,
+        );
+      }
+      onScan(code);
+    },
+    [onScan],
+  );
 
   const reportCameraError = useCallback((error: unknown) => {
     const sentryCapture = Sentry?.captureException;
@@ -239,8 +329,21 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
           const detector = new Detector({ formats }) as NativeBarcodeDetector;
           detectorRef.current = detector;
 
+          /*
+            Camera constraints upgrade (task #60, 2026-06-01). We request
+            1280×720 (ideal) so the BarcodeDetector gets enough pixels
+            per barcode to read curved/small labels on plastic shots.
+            facingMode: "environment" stays — back camera. After the
+            stream starts, applyAutofocusEnhancements probes the track's
+            capabilities and turns on continuous focus / exposure /
+            white-balance for whatever the device supports.
+          */
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment" },
+            video: {
+              facingMode: "environment",
+              width: { ideal: VIDEO_IDEAL_WIDTH },
+              height: { ideal: VIDEO_IDEAL_HEIGHT },
+            },
             audio: false,
           });
           if (cancelled) {
@@ -248,6 +351,10 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
             return;
           }
           streamRef.current = stream;
+          const track = stream.getVideoTracks()[0];
+          if (track) {
+            void applyAutofocusEnhancements(track);
+          }
           const v = videoRef.current;
           if (v) {
             v.srcObject = stream;
@@ -267,7 +374,7 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
                 const raw = codes[0].rawValue?.trim();
                 if (raw) {
                   lastScanRef.current = Date.now();
-                  onScan(raw);
+                  handleSuccessfulScan(raw);
                 }
               }
             } catch {
@@ -290,8 +397,14 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
           setPermissionError(cameraFailureMessage("unknown"));
           return;
         }
+        // Same higher-res + continuous-focus pass as the native path
+        // (task #60). ZXing benefits from the larger frame too.
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: VIDEO_IDEAL_WIDTH },
+            height: { ideal: VIDEO_IDEAL_HEIGHT },
+          },
           audio: false,
         });
         if (cancelled) {
@@ -299,6 +412,10 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
           return;
         }
         streamRef.current = stream;
+        const zxTrack = stream.getVideoTracks()[0];
+        if (zxTrack) {
+          void applyAutofocusEnhancements(zxTrack);
+        }
         const readerOptions = { delayBetweenScanSuccess: 200 };
         let reader: InstanceType<typeof BrowserMultiFormatReader>;
         try {
@@ -322,7 +439,7 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
           const prev = lastZxingScanRef.current;
           if (prev && prev.code === raw && now - prev.at < ZXING_COOLDOWN_MS) return;
           lastZxingScanRef.current = { code: raw, at: now };
-          onScan(raw);
+          handleSuccessfulScan(raw);
         });
         zxingControlsRef.current = controls;
         setScanning(true);
@@ -341,6 +458,34 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
     };
   }, [active, engine, onScan, reportCameraError, stopCamera]);
 
+  /*
+    Trouble-hint timer (task #60, 2026-06-01). When scanning starts,
+    arm a TROUBLE_HINT_MS timer. If the user successfully scans before
+    it fires, handleSuccessfulScan resets it. If it fires, we render
+    the "Having trouble?" prompt below the video to surface manual
+    entry / search. This is the soft fallback before #37 ships.
+  */
+  useEffect(() => {
+    if (troubleTimerRef.current) {
+      clearTimeout(troubleTimerRef.current);
+      troubleTimerRef.current = null;
+    }
+    if (!scanning) {
+      setShowTroubleHint(false);
+      return;
+    }
+    troubleTimerRef.current = setTimeout(
+      () => setShowTroubleHint(true),
+      TROUBLE_HINT_MS,
+    );
+    return () => {
+      if (troubleTimerRef.current) {
+        clearTimeout(troubleTimerRef.current);
+        troubleTimerRef.current = null;
+      }
+    };
+  }, [scanning]);
+
   const submitManual = () => {
     const c = manualCode.trim();
     if (c) {
@@ -358,6 +503,21 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
         <>
           <div className="scanner-video-wrap">
             <video ref={videoRef} className="scanner-video" playsInline muted />
+            {/*
+              Visual aim rectangle (task #60). Gives the user a clear
+              "point here" target instead of a blank video frame. The
+              dashed inner box matches the BarcodeDetector's sweet spot
+              for label-sized barcodes. Pointer-events:none so it
+              never blocks the manual-entry field below.
+            */}
+            {scanning ? (
+              <div className="scanner-aim-rect" aria-hidden>
+                <span className="scanner-aim-corner scanner-aim-corner--tl" />
+                <span className="scanner-aim-corner scanner-aim-corner--tr" />
+                <span className="scanner-aim-corner scanner-aim-corner--bl" />
+                <span className="scanner-aim-corner scanner-aim-corner--br" />
+              </div>
+            ) : null}
             {scanning ? (
               <div className="scanner-overlay">
                 <span className="scanner-pulse" />
@@ -366,6 +526,37 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
             ) : null}
           </div>
           <p className="muted small">{engine === "native" ? "Using native scanner" : "Using ZXing fallback"}</p>
+          {/*
+            Trouble-scanning prompt (task #60). Renders after
+            TROUBLE_HINT_MS of unsuccessful scanning. Surfaces the
+            highest-leverage fallback inline so the user doesn't have
+            to remember the manual input field exists below. The
+            "Type code instead" button focuses the manual input so
+            the next tap puts the cursor where it needs to be.
+          */}
+          {showTroubleHint ? (
+            <div className="scanner-trouble" role="status">
+              <strong>Can&apos;t read the barcode?</strong>
+              <p className="muted small">
+                Try moving the bottle closer, better light, or hold steady.
+                Plastic shots and curved labels can be tricky.
+              </p>
+              <div className="scanner-trouble-actions">
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={() => {
+                    // Scroll/focus the manual entry input.
+                    const el = document.querySelector<HTMLInputElement>(".scanner-manual-input");
+                    el?.focus();
+                    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }}
+                >
+                  Type code instead
+                </button>
+              </div>
+            </div>
+          ) : null}
         </>
       ) : null}
       {engine === "unsupported" ? (

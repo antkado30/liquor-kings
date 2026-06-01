@@ -171,6 +171,89 @@ select {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
+/*
+  Visual aim rectangle inside the video frame (task #60, 2026-06-01).
+  Four corner brackets — no full border so the camera image stays
+  visible inside. Roughly centered, sized for label-scale barcodes
+  on bottles held at a comfortable distance. Pointer-events:none so
+  scrolls and taps pass through. Subtle violet matches the LK accent.
+*/
+.scanner-aim-rect {
+  position: absolute;
+  inset: 22% 18%;
+  pointer-events: none;
+}
+
+.scanner-aim-corner {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--accent);
+  opacity: 0.85;
+}
+
+.scanner-aim-corner--tl {
+  top: 0;
+  left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-top-left-radius: 6px;
+}
+
+.scanner-aim-corner--tr {
+  top: 0;
+  right: 0;
+  border-left: 0;
+  border-bottom: 0;
+  border-top-right-radius: 6px;
+}
+
+.scanner-aim-corner--bl {
+  bottom: 0;
+  left: 0;
+  border-right: 0;
+  border-top: 0;
+  border-bottom-left-radius: 6px;
+}
+
+.scanner-aim-corner--br {
+  bottom: 0;
+  right: 0;
+  border-left: 0;
+  border-top: 0;
+  border-bottom-right-radius: 6px;
+}
+
+/*
+  Trouble-scanning prompt (task #60). Appears after 8s of unsuccessful
+  scanning. Soft amber tint — not an error, just "hey try this." The
+  action button surfaces manual entry, which the user might not have
+  realized exists below the camera. Sits ABOVE the manual input so
+  the path from "I gave up scanning" to "I typed the code" is direct.
+*/
+.scanner-trouble {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.10);
+  border-left: 3px solid #fbbf24;
+}
+
+.scanner-trouble strong {
+  color: #fde68a;
+  font-size: 0.95rem;
+}
+
+.scanner-trouble p {
+  margin: 4px 0 10px;
+}
+
+.scanner-trouble-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 @keyframes pulse {
   0% {
     transform: scale(1);
