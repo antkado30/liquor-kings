@@ -15,6 +15,11 @@ import { CartDrawer } from "../components/CartDrawer";
 import { AssistantPanel } from "../components/AssistantPanel";
 import { ProductCard } from "../components/ProductCard";
 import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
+import { VisionCandidatePicker } from "../components/VisionCandidatePicker";
+import {
+  identifyFromImage,
+  type VisionExtracted,
+} from "../api/catalog-vision";
 import { SearchBar } from "../components/SearchBar";
 import { useCart } from "../hooks/useCart";
 import { useCatalogSearch } from "../hooks/useCatalogSearch";
@@ -78,6 +83,20 @@ export function ScannerPage() {
   const [latestPriceBookDate, setLatestPriceBookDate] = useState<string | null>(null);
   const [dismissPriceBookBanner, setDismissPriceBookBanner] = useState(false);
   const [networkWarn, setNetworkWarn] = useState(false);
+  /*
+    Vision identification state (task #37, 2026-06-01). When the user
+    taps "Take a photo" from the scanner's trouble panel, we POST the
+    frame to /catalog/identify-from-image and stash the result here.
+    Null when not in flight or no result yet.
+    visionBusy gates the camera button while the API call is running.
+  */
+  const [visionResult, setVisionResult] = useState<{
+    extracted: VisionExtracted;
+    candidates: MlccProduct[];
+    hint: string | null;
+  } | null>(null);
+  const [visionBusy, setVisionBusy] = useState(false);
+  const [visionError, setVisionError] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -127,6 +146,35 @@ export function ScannerPage() {
       }
       setCurrentFamily(fam);
       setShowProductCard(true);
+    }
+  }, []);
+
+  /*
+    Vision capture handler (task #37, 2026-06-01). Called by
+    BarcodeScanner when the user taps "Take a photo" from the trouble
+    panel. POSTs the JPEG to /catalog/identify-from-image and stashes
+    the result so VisionCandidatePicker can render the choices. Errors
+    surface as a toast — the user can retry without losing context.
+  */
+  const handlePhotoCapture = useCallback(async (jpegDataUri: string) => {
+    setVisionBusy(true);
+    setVisionError(null);
+    setToast("Identifying bottle…");
+    try {
+      const result = await identifyFromImage(jpegDataUri);
+      if (!result.ok) {
+        setVisionError(result.error);
+        setToast(`Couldn't identify bottle: ${result.error}`);
+        return;
+      }
+      setVisionResult({
+        extracted: result.extracted,
+        candidates: result.candidates,
+        hint: result.hint,
+      });
+      setToast(null);
+    } finally {
+      setVisionBusy(false);
     }
   }, []);
 
@@ -290,7 +338,13 @@ export function ScannerPage() {
         </label>
       </div>
 
-      {scannerActive ? <BarcodeScanner active={scannerActive} onScan={handleScan} /> : null}
+      {scannerActive ? (
+        <BarcodeScanner
+          active={scannerActive}
+          onScan={handleScan}
+          onPhotoCapture={visionBusy ? undefined : handlePhotoCapture}
+        />
+      ) : null}
 
       {upcBeingMapped ? (
         <div className="upc-mapping-banner" role="status" aria-live="polite">
@@ -536,6 +590,57 @@ export function ScannerPage() {
             }}
           />
         </>
+      ) : null}
+
+      {/*
+        Vision candidate picker (task #37, 2026-06-01). Renders when
+        handlePhotoCapture has a result. User picks a candidate →
+        ProductCard opens via openFamily; cancels → fall back to manual
+        entry or scan again; "Try a different photo" clears the result
+        and the user can re-trigger from the trouble panel.
+      */}
+      {visionResult ? (
+        <VisionCandidatePicker
+          extracted={visionResult.extracted}
+          candidates={visionResult.candidates}
+          hint={visionResult.hint}
+          onSelect={(product) => {
+            setVisionResult(null);
+            setVisionError(null);
+            void openFamily(product);
+          }}
+          onRetake={() => {
+            setVisionResult(null);
+            setVisionError(null);
+            // Stay in scanner mode — user re-frames + retaps "Take a photo"
+            // from the trouble panel.
+          }}
+          onCancel={() => {
+            setVisionResult(null);
+            setVisionError(null);
+            const el = document.querySelector<HTMLInputElement>(".scanner-manual-input");
+            el?.focus();
+            el?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }}
+        />
+      ) : null}
+      {visionError && !visionResult ? (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 80,
+            left: 12,
+            right: 12,
+            padding: "10px 14px",
+            borderRadius: 10,
+            background: "rgba(248, 113, 113, 0.18)",
+            borderLeft: "3px solid #f87171",
+            color: "#fecaca",
+            zIndex: 1100,
+          }}
+        >
+          Vision error: {visionError}
+        </div>
       ) : null}
     </div>
   );

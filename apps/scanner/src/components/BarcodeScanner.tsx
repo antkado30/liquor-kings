@@ -8,6 +8,13 @@ import { Sentry } from "../lib/sentry";
 type BarcodeScannerProps = {
   onScan: (code: string) => void;
   active: boolean;
+  /**
+   * Optional — fires when the user taps "Take a photo" from the
+   * trouble-hint panel (task #37 fallback). Receives a JPEG data URI
+   * captured from the current video frame. Parent handles the API
+   * call + result UI. Without this prop, the button is hidden.
+   */
+  onPhotoCapture?: (jpegDataUri: string) => void | Promise<void>;
 };
 
 const COOLDOWN_MS = 2000;
@@ -206,7 +213,7 @@ async function applyAutofocusEnhancements(
   }
 }
 
-export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
+export function BarcodeScanner({ onScan, active, onPhotoCapture }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectorRef = useRef<NativeBarcodeDetector | null>(null);
@@ -494,6 +501,39 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
     }
   };
 
+  /*
+    Capture the current video frame to a JPEG data URI and emit it to
+    the parent (task #37, 2026-06-01). Used by the "Take a photo"
+    button in the trouble panel. We draw the video to an offscreen
+    canvas at its native resolution (which is whatever
+    applyAutofocusEnhancements + the 1280×720 ideal request landed on),
+    then toDataURL gives us the base64 to ship.
+
+    JPEG quality 0.85 is the sweet spot — enough for vision OCR + label
+    recognition, small enough to not balloon the upload (typical
+    output ~80-150 KB for a 1280×720 frame).
+  */
+  const handlePhotoTap = () => {
+    if (!onPhotoCapture) return;
+    const vid = videoRef.current;
+    if (!vid || vid.readyState < 2) {
+      console.warn("[BarcodeScanner] cannot capture — video not ready");
+      return;
+    }
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = vid.videoWidth || 1280;
+      canvas.height = vid.videoHeight || 720;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+      const dataUri = canvas.toDataURL("image/jpeg", 0.85);
+      void onPhotoCapture(dataUri);
+    } catch (err) {
+      console.warn("[BarcodeScanner] frame capture failed", err);
+    }
+  };
+
   return (
     <section className="scanner-panel">
       {permissionError ? (
@@ -542,6 +582,23 @@ export function BarcodeScanner({ onScan, active }: BarcodeScannerProps) {
                 Plastic shots and curved labels can be tricky.
               </p>
               <div className="scanner-trouble-actions">
+                {onPhotoCapture ? (
+                  /*
+                    Task #37 fallback: Claude vision identifies the
+                    bottle from a photo. Captures the current video
+                    frame and hands it to the parent's onPhotoCapture
+                    callback. Primary CTA — most users would rather
+                    take a photo than type a code. Falls back to manual
+                    entry if vision can't find the bottle either.
+                  */
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={handlePhotoTap}
+                  >
+                    📷 Take a photo
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="btn secondary"

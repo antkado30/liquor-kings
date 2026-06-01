@@ -19,6 +19,7 @@ import storeMlccCredentialsRouter from "./routes/store-mlcc-credentials.routes.j
 import nrsImportRouter from "./routes/nrs-import.routes.js";
 import nrsReviewRouter from "./routes/nrs-review.routes.js";
 import assistantRouter from "./routes/assistant.routes.js";
+import catalogVisionRouter from "./routes/catalog-vision.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -78,6 +79,13 @@ app.use("/operator-review", operatorReviewRouter);
 app.use("/price-book", priceBookRouter);
 /** AI Assistant: POST /assistant/ask — Claude tool-use over store data. */
 app.use("/assistant", assistantRouter);
+/**
+ * Catalog vision: POST /catalog/identify-from-image — fallback when
+ * the in-store scanner can't read a barcode (task #37, 2026-06-01).
+ * Behind the existing store-auth middleware because each call costs us
+ * money via the Anthropic API.
+ */
+app.use("/catalog", resolveAuthenticatedStore, catalogVisionRouter);
 
 /**
  * Operator admin SPA (built apps/admin). Same origin as session + API under /operator-review/*.

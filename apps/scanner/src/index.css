@@ -891,6 +891,122 @@ select {
   min-height: 36px;
 }
 
+/*
+  Vision-candidate picker (task #37, 2026-06-01). Reuses the .product-
+  card backdrop + container so it feels like a sibling of ProductCard
+  but with bottle-list semantics. "What vision saw" eyebrow at top
+  gives the user a sanity-check chance before tapping a row.
+*/
+.vision-picker-saw {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  margin: 10px 0 0;
+  border-radius: 8px;
+  background: rgba(108, 99, 255, 0.10);
+  border-left: 3px solid var(--accent);
+  font-size: 0.9rem;
+}
+
+.vision-picker-saw__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.vision-picker-saw__value {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.vision-picker-saw__size {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.78rem;
+}
+
+.vision-picker-saw__confidence {
+  margin-left: auto;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.vision-picker-saw__confidence--high {
+  background: rgba(34, 197, 94, 0.18);
+  color: #bbf7d0;
+}
+
+.vision-picker-saw__confidence--medium {
+  background: rgba(251, 191, 36, 0.18);
+  color: #fde68a;
+}
+
+.vision-picker-saw__confidence--low {
+  background: rgba(248, 113, 113, 0.18);
+  color: #fecaca;
+}
+
+.vision-picker-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vision-picker-row__button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: var(--bg);
+  border-radius: 10px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.vision-picker-row__button:active {
+  background: rgba(108, 99, 255, 0.12);
+  border-color: rgba(108, 99, 255, 0.40);
+}
+
+.vision-picker-row__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.vision-picker-row__name {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.vision-picker-row__price {
+  font-weight: 600;
+  color: #c4b5fd;
+  font-variant-numeric: tabular-nums;
+}
+
+.vision-picker-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
 .qty-picker-wrap::after {
   /* tiny caret in the corner so the user sees this is tappable */
   content: "▾";
