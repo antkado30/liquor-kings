@@ -142,88 +142,140 @@ function normalizeExtracted(raw) {
 }
 
 /**
- * Search mlcc_items via the existing trigram index. Combines brand +
- * product name into a single fuzzy search string, applies the size
- * filter if extracted, and returns up to MAX_CANDIDATES_RETURNED rows.
- * Returns empty array on any DB error or empty input.
+ * Search mlcc_items for vision-extracted brand + product name (task
+ * #62 fix, 2026-06-01). The previous implementation required ALL
+ * tokens to match via ilike AND'd — that broke immediately on the
+ * MLCC catalog's abbreviations: vision says "Captain Morgan" but the
+ * catalog row reads "CAPT MORGAN ORIG SPICED RUM", so requiring
+ * "Captain" as a substring kills every candidate.
+ *
+ * New approach: brand-prefix search + JS ranking.
+ *   1. Brand prefix: take the first 4 chars of the brand token (e.g.
+ *      "Captain" → "capt"), search for rows where name ilike %capt%
+ *      OR ilike %<first 4 of product_name token 1>%. Catches both
+ *      "CAPTAIN" and "CAPT MORGAN" without hand-coded abbreviation
+ *      tables.
+ *   2. Pull a generous candidate pool (50-100 rows).
+ *   3. Rank in JS: count how many of the original tokens (full + 4-
+ *      char prefix) appear as substrings in each row's name. Award
+ *      bonus points for name prefix-matching the brand and for size
+ *      matching the extracted size_label.
+ *   4. Return top MAX_CANDIDATES_RETURNED.
+ *
+ * This is robust to abbreviations (CAPT/Captain, ORIG/Original) and
+ * to word-order variation in MLCC names. Trigram index still
+ * accelerates the underlying ilike. When we need more accuracy we can
+ * promote to a proper trgm_similarity RPC, but this fixes the
+ * immediate bug.
  */
-async function searchCatalog(supabase, extracted) {
-  const queryText = [extracted.brand, extracted.product_name]
-    .filter((s) => s && s.length > 0)
-    .join(" ")
-    .trim();
-  if (queryText.length === 0) {
-    return [];
-  }
-
-  // Use ilike with the trigram-supported name column. The migration
-  // 20260419040000_add_trigram_search added GIN trigram indexes on
-  // mlcc_items.name + name_normalized so this remains fast at scale.
-  //
-  // We use a simpler ilike here (not the full trgm_similarity RPC) so
-  // this route stays self-contained — the trigram index still
-  // accelerates the LIKE pattern.
-  const tokens = queryText
+function tokenize(raw) {
+  return String(raw ?? "")
     .split(/\s+/)
     .map((t) => t.replace(/[^A-Za-z0-9]/g, ""))
     .filter((t) => t.length >= 2);
-  if (tokens.length === 0) return [];
+}
 
-  // Match rows that contain the brand token AT MINIMUM. Add product
-  // tokens as additional ilike filters where present (narrows the
-  // result for "Captain Morgan Original Spiced Rum" vs all Captain
-  // Morgan SKUs).
+function shortenForAbbrevMatch(token) {
+  // 4-char prefix catches the common MLCC abbreviations:
+  //   Captain → CAPT, Original → ORIG, Tennessee → TENN, Whiskey → WHSK.
+  // For tokens already < 4 chars, return as-is.
+  return token.length <= 4 ? token : token.slice(0, 4);
+}
+
+async function searchCatalog(supabase, extracted) {
+  const brandTokens = tokenize(extracted.brand);
+  const productTokens = tokenize(extracted.product_name);
+  if (brandTokens.length === 0 && productTokens.length === 0) {
+    return [];
+  }
+
+  // The PRIMARY anchor is the brand's first token — it's the strongest
+  // signal we have. Search using its 4-char prefix as an ilike pattern.
+  // If no brand, fall back to first product token.
+  const primaryToken = brandTokens[0] ?? productTokens[0];
+  if (!primaryToken) return [];
+  const primaryPrefix = shortenForAbbrevMatch(primaryToken).toLowerCase();
+
   let q = supabase
     .from("mlcc_items")
     .select("*")
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .ilike("name", `%${primaryPrefix}%`);
 
-  for (const t of tokens) {
-    q = q.ilike("name", `%${t}%`);
-  }
-
-  // Size filter if extracted. Allow some slop on the label format
-  // (e.g. "750ml" vs "750 ml" vs "750 ML" in the catalog).
+  // Size filter if extracted. Allow some slop on the label format.
   const sizeRaw = extracted.size_label;
+  let sizeMlNumeric = null;
   if (sizeRaw && sizeRaw.length > 0) {
     const sizeMatch = sizeRaw.match(/(\d+(?:\.\d+)?)\s*(ml|l)/i);
     if (sizeMatch) {
       let sizeMl = Number(sizeMatch[1]);
       if (sizeMatch[2].toLowerCase() === "l") sizeMl = sizeMl * 1000;
       if (Number.isFinite(sizeMl) && sizeMl > 0) {
-        q = q.eq("bottle_size_ml", Math.round(sizeMl));
+        sizeMlNumeric = Math.round(sizeMl);
+        q = q.eq("bottle_size_ml", sizeMlNumeric);
       }
     }
   }
 
-  q = q.limit(MAX_CANDIDATES_RETURNED * 4);
+  // Generous pool so the JS ranker has options. 100 rows is fast even
+  // without further filtering (trigram index handles the ilike).
+  q = q.limit(100);
 
-  const { data, error } = await q;
+  let { data, error } = await q;
   if (error) {
     console.warn(`[catalog-vision] catalog search failed: ${error.message}`);
     return [];
   }
-  if (!Array.isArray(data)) return [];
+  if (!Array.isArray(data)) data = [];
+
+  // If size filter killed all rows AND we had a size, retry WITHOUT
+  // the size filter — the vision may have read "750ml" but the
+  // catalog SKU is 1000ml and we'd rather show a near-match than
+  // nothing.
+  if (data.length === 0 && sizeMlNumeric != null) {
+    const retry = await supabase
+      .from("mlcc_items")
+      .select("*")
+      .eq("is_active", true)
+      .ilike("name", `%${primaryPrefix}%`)
+      .limit(100);
+    if (!retry.error && Array.isArray(retry.data)) data = retry.data;
+  }
+
+  if (data.length === 0) return [];
 
   /*
-    Simple ranking: rows that match MORE of the input tokens float up.
-    Then prefer rows whose name_normalized starts with the brand token
-    (catches "TITOS HANDMADE VODKA" matched on "tito"). Reasonable
-    ordering for a small candidate set — we don't need real ranking
-    sophistication when we're returning <=5 rows for user selection.
+    JS ranking — count how many tokens (full + 4-char prefix) appear in
+    each row's name. Bonus for name starting with the brand prefix
+    (catches "CAPT MORGAN..." being ranked above any other "...capt..."
+    coincidence) and for size match when known.
   */
-  const brandToken = tokens[0]?.toLowerCase() ?? "";
+  const allTokens = [...brandTokens, ...productTokens];
+  const allTokensLc = allTokens.map((t) => t.toLowerCase());
+  const allPrefixesLc = allTokens.map((t) => shortenForAbbrevMatch(t).toLowerCase());
+
   const ranked = data
     .map((row) => {
       const name = String(row.name ?? "").toLowerCase();
-      const hits = tokens.reduce(
-        (acc, t) => acc + (name.includes(t.toLowerCase()) ? 1 : 0),
-        0,
-      );
-      const startsWithBrand = name.startsWith(brandToken) ? 1 : 0;
-      const score = hits * 10 + startsWithBrand;
+      let hits = 0;
+      for (let i = 0; i < allTokens.length; i++) {
+        // Count once per token — credit either the full or prefix match.
+        if (name.includes(allTokensLc[i]) || name.includes(allPrefixesLc[i])) {
+          hits += 1;
+        }
+      }
+      const startsWithBrand = name.startsWith(primaryPrefix) ? 5 : 0;
+      const sizeMatches =
+        sizeMlNumeric != null && Number(row.bottle_size_ml) === sizeMlNumeric
+          ? 3
+          : 0;
+      const score = hits * 10 + startsWithBrand + sizeMatches;
       return { row, score };
     })
+    // Drop rows that match NOTHING beyond the broad brand-prefix pull.
+    // A row where only the primary prefix coincidentally appears (e.g.
+    // "CAPRI SUN") would score 0 hits + bonuses; not useful.
+    .filter((entry) => entry.score >= 10)
     .sort((a, b) => b.score - a.score)
     .slice(0, MAX_CANDIDATES_RETURNED)
     .map((entry) => entry.row);
