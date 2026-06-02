@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flagIncorrectMatch } from "../api/catalog";
-import { fetchTagsHtml, openAndPrintTagHtml } from "../api/tags";
+import { fetchTagsHtml } from "../api/tags";
+import { TagPrintPreview } from "./TagPrintPreview";
 import {
   generateValidQuantities,
   getOrderingRuleDisplay,
@@ -147,26 +148,29 @@ export function ProductCard({
 
   /*
     Print tag handler (task #22, 2026-06-02 — Pillar 3). Fetches the
-    server-rendered HTML for the selected product's MLCC code, opens
-    it in a new window, triggers the browser print dialog. Real
-    Code 128 barcode is server-generated via bwip-js. The new window
-    stays open after printing so the user can re-print or close it
-    manually; popup-blocker note in api/tags.ts.
+    server-rendered HTML for the selected product's MLCC code and
+    opens an in-app preview modal (TagPrintPreview). The modal
+    embeds an iframe with the rendered tag and calls
+    iframe.contentWindow.print() when the user taps Print.
+
+    Why an in-app modal instead of window.open: when the scanner is
+    installed as an iOS home-screen PWA, window.open is blocked
+    outright. An iframe inside the same document works in both
+    standalone PWA mode AND regular Safari. Bonus UX: user sees the
+    tag BEFORE printing instead of getting an instant print dialog.
   */
   const [printing, setPrinting] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const onPrintTag = async () => {
     if (printing) return;
     setPrinting(true);
     try {
       const r = await fetchTagsHtml([selectedProduct.code]);
       if (!r.ok) {
-        onToast?.(`Couldn't print tag: ${r.error}`);
+        onToast?.(`Couldn't render tag: ${r.error}`);
         return;
       }
-      const opened = openAndPrintTagHtml(r.html);
-      if (!opened) {
-        onToast?.("Couldn't open print window — check popup blocker");
-      }
+      setPreviewHtml(r.html);
     } finally {
       setPrinting(false);
     }
@@ -511,6 +515,15 @@ export function ProductCard({
           </div>
         ) : null}
       </div>
+      {/*
+        Shelf tag print preview modal. Renders above ProductCard via
+        the higher-z product-card-backdrop variant (tag-print-backdrop)
+        so the user sees the tag overlay while the underlying
+        ProductCard stays in place.
+      */}
+      {previewHtml ? (
+        <TagPrintPreview html={previewHtml} onClose={() => setPreviewHtml(null)} />
+      ) : null}
     </div>
   );
 }

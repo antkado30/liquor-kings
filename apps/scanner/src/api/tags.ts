@@ -56,29 +56,10 @@ export async function fetchTagsHtml(codes: string[]): Promise<PrintTagsResult> {
   return { ok: false, error: errorText };
 }
 
-/**
- * Open the rendered HTML in a new window and trigger print. Used
- * directly from ProductCard's "Print tag" button. The new window
- * stays open after printing so the user can re-print or close it
- * manually — no auto-close because Safari sometimes interprets the
- * window.close() as a popup-blocker violation.
- */
-export function openAndPrintTagHtml(html: string): boolean {
-  const w = window.open("", "_blank", "noopener");
-  if (!w) {
-    return false; // popup blocked
-  }
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
-  // Defer to give the embedded fitText script time to run before print.
-  setTimeout(() => {
-    try {
-      w.focus();
-      w.print();
-    } catch {
-      /* user can still hit Cmd+P manually */
-    }
-  }, 500);
-  return true;
-}
+/*
+  openAndPrintTagHtml was removed 2026-06-02 — window.open is blocked
+  in iOS PWA standalone mode. Use TagPrintPreview (component) which
+  embeds the HTML in an iframe inside the scanner UI and prints via
+  iframe.contentWindow.print(). That path works in BOTH PWA and
+  regular Safari.
+*/
