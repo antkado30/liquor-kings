@@ -197,58 +197,29 @@ ${
     opts.embedded
       ? /*
            Embedded mode (iframe inside the scanner app preview modal).
-           Three things:
-             1. Hide the howto banner — the app's own modal has Print
-                + Done controls; the howto would just crowd the iframe.
-             2. Shrink body padding so the tag sits at the top.
-             3. Override the tag's fixed 100mm width to fit the iframe
-                responsively. The tag is fixed at ~378px (100mm @ 96dpi)
-                which OVERFLOWED the iframe on iPhone portrait
-                (~360px), clipping the name + ADA number. With
-                width:100% + max-width:100mm + aspect-ratio:100/62 the
-                tag scales to whatever the iframe has, preserving
-                proportions. The fitText script re-fits the price +
-                name to the new container size. @media print rules
-                still use @page 100mm × 62mm so actual print output is
-                unchanged — only the preview shrinks.
+           ALL preview-specific overrides are scoped under @media screen.
+           When the user prints from the iframe, @media print rules in
+           the base CSS take over — @page 100mm × 62mm, original .tag
+           width 100mm, original padding 3mm/3.5mm, original bottom-row
+           gap 2.5mm, original .tag__price font-size set by fitText.
+           Preview cosmetic compromises do NOT affect actual print.
          */
-        `.howto { display: none !important; }
-         body { background: #fff; }
-         .sheet { padding: 0; }
-         /*
-           Tighter sizing for the preview so the right edge fits in
-           the iframe without clipping. Tony's 2026-06-02 evening
-           test of the 375ml Tito's preview showed "ML" cut off at
-           the end of "375 ML" because the standard 3mm/3.5mm padding
-           + 2.5mm bottom-row gap exceeded the narrow iPhone-portrait
-           iframe. These overrides only apply to the preview path —
-           @media print rules still use the standard padding and
-           gaps so the actual print output is unchanged.
-         */
-         .tag {
-           width: 96%;
-           max-width: 100mm;
-           height: auto;
-           aspect-ratio: 100 / 62;
-           margin: 4px auto;
-           padding: 2mm 2.5mm;
-         }
-         .tag__bottom {
-           gap: 1.8mm;
-           font-size: 2.7mm;
-         }
-         /*
-           Force a guaranteed-fit font size in screen-only mode.
-           fitText keeps mis-computing inside the modal iframe (the
-           scrollWidth/clientWidth check sees the wrong viewport at
-           load), so the price overflows even after viewport=400.
-           CSS clamp(...) with viewport units gives a deterministic
-           size that always fits. @media screen scopes this to the
-           PREVIEW only — the actual print uses fitText's inline
-           font-size set on load (which is close to right since
-           the canvas is 400px vs print 378px).
-         */
-         @media screen {
+        `@media screen {
+           .howto { display: none !important; }
+           body { background: #fff; }
+           .sheet { padding: 0; }
+           .tag {
+             width: 96%;
+             max-width: 100mm;
+             height: auto;
+             aspect-ratio: 100 / 62;
+             margin: 4px auto;
+             padding: 2mm 2.5mm;
+           }
+           .tag__bottom {
+             gap: 1.8mm;
+             font-size: 2.7mm;
+           }
            .tag__price {
              font-size: clamp(48px, 18vw, 96px) !important;
            }
