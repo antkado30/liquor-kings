@@ -200,12 +200,27 @@ const PAGE_SHELL = (tags, opts = {}) => `<!DOCTYPE html>
         `.howto { display: none !important; }
          body { background: #fff; }
          .sheet { padding: 0; }
+         /*
+           Tighter sizing for the preview so the right edge fits in
+           the iframe without clipping. Tony's 2026-06-02 evening
+           test of the 375ml Tito's preview showed "ML" cut off at
+           the end of "375 ML" because the standard 3mm/3.5mm padding
+           + 2.5mm bottom-row gap exceeded the narrow iPhone-portrait
+           iframe. These overrides only apply to the preview path —
+           @media print rules still use the standard padding and
+           gaps so the actual print output is unchanged.
+         */
          .tag {
-           width: 100%;
+           width: 96%;
            max-width: 100mm;
            height: auto;
            aspect-ratio: 100 / 62;
            margin: 4px auto;
+           padding: 2mm 2.5mm;
+         }
+         .tag__bottom {
+           gap: 1.8mm;
+           font-size: 2.7mm;
          }`
       : ""
   }
