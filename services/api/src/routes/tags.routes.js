@@ -157,7 +157,22 @@ function buildTagHtml(p) {
 const PAGE_SHELL = (tags, opts = {}) => `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+${
+  opts.embedded
+    ? /*
+         Embedded viewport override (2026-06-02 evening polish).
+         Telling the iframe its viewport is 110mm wide gives the
+         100mm tag + 5mm padding-and-margins breathing room — the
+         browser then proportionally scales the rendered content
+         DOWN to fit whatever the iframe's actual width is. fitText
+         calculates against the 110mm canvas so price/name auto-fit
+         to a CONSISTENT layout, not whichever phone-portrait pixel
+         width Tony happens to be on. This is the standard mobile
+         Safari "fixed-canvas" pattern.
+       */
+      `<meta name="viewport" content="width=400, initial-scale=1, user-scalable=no">`
+    : `<meta name="viewport" content="width=device-width, initial-scale=1">`
+}
 <title>Liquor Kings — Shelf Tags</title>
 <style>
   :root { --tag-w: 100mm; --tag-h: 62mm; }
