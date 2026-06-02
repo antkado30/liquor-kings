@@ -13,6 +13,7 @@
     "build:admin": "npm run build -w lk-admin",
     "dev:scanner": "npm run dev -w lk-scanner",
     "build:scanner": "npm run build -w lk-scanner",
+    "deploy": "fly deploy -a liquor-kings --strategy immediate --wait-timeout 600",
     "audit:lk": "node scripts/lk-audit/run-full-audit.mjs",
     "audit:lk:repo": "node scripts/lk-audit/audit-repo.mjs",
     "audit:lk:supabase": "node scripts/lk-audit/audit-supabase.mjs",
