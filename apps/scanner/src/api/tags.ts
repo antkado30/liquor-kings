@@ -36,7 +36,14 @@ export async function fetchTagsHtml(codes: string[]): Promise<PrintTagsResult> {
         "Content-Type": "application/json",
         Accept: "text/html, application/json",
       },
-      body: JSON.stringify({ codes }),
+      /*
+        embedded:true tells the server to suppress the "Print shelf
+        tags — Brother QL-810W" howto banner that's meant for the
+        standalone HTML page. In the scanner's in-app modal, our own
+        Print/Done buttons cover that need; the howto would just
+        crowd the iframe. Bug fix 2026-06-02 evening.
+      */
+      body: JSON.stringify({ codes, embedded: true }),
     });
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };

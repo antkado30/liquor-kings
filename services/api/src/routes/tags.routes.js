@@ -154,7 +154,7 @@ function buildTagHtml(p) {
   `;
 }
 
-const PAGE_SHELL = (tags) => `<!DOCTYPE html>
+const PAGE_SHELL = (tags, opts = {}) => `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -178,6 +178,20 @@ const PAGE_SHELL = (tags) => `<!DOCTYPE html>
     background: #6c63ff; color: #fff; border: 0; border-radius: 7px; cursor: pointer;
   }
   .sheet { text-align: center; padding: 8px 0 30px; }
+  ${
+    opts.embedded
+      ? /*
+           Embedded mode (iframe inside the scanner app preview modal).
+           Hide the howto banner since the app's own modal has Print +
+           Done controls. Shrink body padding so the tag sits at the
+           top of the iframe without scroll. Bug 2026-06-02: in the
+           default page the howto banner ate ~half the iframe height.
+         */
+        `.howto { display: none !important; }
+         body { background: #fff; }
+         .sheet { padding: 0; }`
+      : ""
+  }
   .tag {
     width: var(--tag-w); height: var(--tag-h);
     background: #fff; color: #000;
@@ -286,7 +300,14 @@ router.post("/render", async (req, res) => {
       .json({ ok: false, error: "no matching products in catalog" });
   }
   const tagsHtml = products.map(buildTagHtml).join("\n");
-  const html = PAGE_SHELL(tagsHtml);
+  // ?embedded=1 (or body.embedded:true) → suppress the howto banner
+  // for the scanner's in-app iframe preview modal. Default false
+  // preserves direct-link / desktop usage.
+  const embedded =
+    req.query.embedded === "1" ||
+    req.query.embedded === "true" ||
+    req.body?.embedded === true;
+  const html = PAGE_SHELL(tagsHtml, { embedded });
   res.set("Content-Type", "text/html; charset=utf-8");
   return res.send(html);
 });
@@ -309,7 +330,9 @@ router.get("/render", async (req, res) => {
       .json({ ok: false, error: "product not found in catalog" });
   }
   const tagsHtml = products.map(buildTagHtml).join("\n");
-  const html = PAGE_SHELL(tagsHtml);
+  const embedded =
+    req.query.embedded === "1" || req.query.embedded === "true";
+  const html = PAGE_SHELL(tagsHtml, { embedded });
   res.set("Content-Type", "text/html; charset=utf-8");
   return res.send(html);
 });
