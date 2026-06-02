@@ -60,6 +60,17 @@ const STABILITY_DEBOUNCE_MS = 5000;
 const POLL_INTERVAL_MS = 2500;
 const MAX_POLL_MS = 3 * 60 * 1000;
 
+/*
+  Kill switch (2026-06-02 evening). Was set to false when a validate
+  flake hit prod and I incorrectly suspected the background pre-
+  validate. Real cause turned out to be the rule engine table (18 ×
+  750ml was offered as valid by the picker but rejected by MLCC at
+  Stage 4). After the rule fix shipped, pre-validate re-enabled and
+  staying on. Keep the constant in place for future emergencies —
+  one-line flip disables the whole feature without ripping wiring.
+*/
+const PRE_VALIDATE_ENABLED = true;
+
 /**
  * Cached result of a successful background pre-validate. cartHash is
  * the hash of the cart contents that were validated; we compare it to
@@ -240,6 +251,11 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
     cache.
   */
   useEffect(() => {
+    // Kill switch — when off, the hook is inert. useSubmission gets
+    // null cache results and falls back to the foreground flow it had
+    // before #47. See PRE_VALIDATE_ENABLED comment above.
+    if (!PRE_VALIDATE_ENABLED) return;
+
     const currentHash = hashCart(items);
 
     // Already have a fresh cache for this exact cart? Nothing to do.
