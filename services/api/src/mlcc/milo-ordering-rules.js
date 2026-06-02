@@ -16,14 +16,23 @@
  * 100ml, 50ml, and 70000-series products allow NO splits — must be ordered
  * as full case (empty array = full case only, derived from pack size).
  */
+/*
+  Each entry's LAST value is the full case size for that bottle size.
+  This matters because the validator uses Math.max(...allowedMultiples)
+  as the "multiples of full case" denominator. Bug found 2026-06-02:
+  table had 750ml: [1, 3, 6] so Math.max=6 → it accepted 18 (6*3) as
+  valid. MLCC's actual rule: 750ml accepts 1, 3, 6, 12, then multiples
+  of 12 only. 18 is rejected at Stage 4 with "Invalid split quantities."
+  Real cases per MLCC: 1.75L=6, 1L=12, 750ml=12, 375ml=24, 200ml=24.
+*/
 export const SPLIT_CASE_RULES_BY_SIZE_ML = Object.freeze({
-  1750: [1, 3],
-  1000: [1, 3, 6],
-  750: [1, 3, 6],
-  375: [3, 6, 12],
+  1750: [1, 3, 6],
+  1000: [1, 3, 6, 12],
+  750: [1, 3, 6, 12],
+  375: [3, 6, 12, 24],
   200: [12, 24],
-  100: [], // full case only
-  50: [], // full case only
+  100: [], // full case only — case size is product-specific
+  50: [], // full case only — case size is product-specific
 });
 
 /**

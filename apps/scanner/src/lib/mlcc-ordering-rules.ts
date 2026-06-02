@@ -28,11 +28,22 @@
  * Empty array = full case only (no splits).
  * Mirror of SPLIT_CASE_RULES_BY_SIZE_ML in milo-ordering-rules.js.
  */
+/*
+  Each entry's LAST value is the full case size — Math.max of the
+  list becomes the "multiples of full case" denominator. Bug fixed
+  2026-06-02: previously 750ml: [1, 3, 6] which meant generateValid-
+  Quantities offered 18 (6 × 3) as a valid pick. MLCC actually
+  rejects 18: it requires multiples of 12 (the case size) after the
+  sub-case splits. Real cases per MLCC: 1.75L=6, 1L=12, 750ml=12,
+  375ml=24, 200ml=24.
+  Mirrors the server table in services/api/src/mlcc/milo-ordering-rules.js
+  — keep them in sync.
+*/
 const SPLIT_CASE_RULES: Record<number, number[]> = {
-  1750: [1, 3],
-  1000: [1, 3, 6],
-  750: [1, 3, 6],
-  375: [3, 6, 12],
+  1750: [1, 3, 6],
+  1000: [1, 3, 6, 12],
+  750: [1, 3, 6, 12],
+  375: [3, 6, 12, 24],
   200: [12, 24],
   100: [],
   50: [],

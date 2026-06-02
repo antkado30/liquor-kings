@@ -29,8 +29,12 @@ describe("constants", () => {
     expect(KNOWN_ADAS["321"]).toMatch(/nws/i);
   });
 
-  it("split-case table: 750ml allows 1, 3, 6", () => {
-    expect(SPLIT_CASE_RULES_BY_SIZE_ML[750]).toEqual([1, 3, 6]);
+  it("split-case table: 750ml allows 1, 3, 6, 12", () => {
+    // Bug fix 2026-06-02: previously the table was [1, 3, 6] which
+    // made 18 (= 6 × 3) validate as a "multiple of largest." But MLCC
+    // rejects 18 at Stage 4 with "Invalid split quantities" — actual
+    // rule is "multiples of the full case (12)" after the sub-splits.
+    expect(SPLIT_CASE_RULES_BY_SIZE_ML[750]).toEqual([1, 3, 6, 12]);
   });
 
   it("split-case table: 50ml and 100ml are full-case-only (empty array)", () => {
@@ -69,10 +73,20 @@ describe("validateQuantityForSize", () => {
     expect(validateQuantityForSize(6, 750, "100009").valid).toBe(true);
   });
 
-  it("accepts full-case multiples for 750ml (12, 18, 24)", () => {
+  it("accepts full-case multiples for 750ml (12, 24, 36)", () => {
+    // Fix 2026-06-02: was previously asserting 18 is valid, which it
+    // is NOT. MLCC rejects 18 × 750ml at Stage 4. Full case = 12, so
+    // valid multiples are 12, 24, 36, 48...
     expect(validateQuantityForSize(12, 750, "100009").valid).toBe(true);
-    expect(validateQuantityForSize(18, 750, "100009").valid).toBe(true);
     expect(validateQuantityForSize(24, 750, "100009").valid).toBe(true);
+    expect(validateQuantityForSize(36, 750, "100009").valid).toBe(true);
+  });
+
+  it("rejects 18 × 750ml (the prod-observed false-valid)", () => {
+    // Regression guard for the 2026-06-02 bug. 18 = 6 × 3 satisfied
+    // the old `q % largest === 0` check when largest=6, but MLCC
+    // rejects it ("Invalid split quantities, please fix...").
+    expect(validateQuantityForSize(18, 750, "100009").valid).toBe(false);
   });
 
   it("rejects an invalid 750ml quantity and suggests alternatives", () => {
@@ -87,9 +101,14 @@ describe("validateQuantityForSize", () => {
     expect(validateQuantityForSize(13, 750, "100009").valid).toBe(false);
   });
 
-  it("1750ml allows only 1 or 3", () => {
+  it("1750ml allows 1, 3, 6 (full case)", () => {
+    // Updated 2026-06-02: full case for 1.75L at MLCC is 6 bottles.
+    // [1, 3, 6] makes 6 (one full case) explicitly valid and
+    // multiples-of-6 (12, 18) valid via Math.max(...).
     expect(validateQuantityForSize(1, 1750, "60418").valid).toBe(true);
     expect(validateQuantityForSize(3, 1750, "60418").valid).toBe(true);
+    expect(validateQuantityForSize(6, 1750, "60418").valid).toBe(true);
+    expect(validateQuantityForSize(12, 1750, "60418").valid).toBe(true);
     expect(validateQuantityForSize(2, 1750, "60418").valid).toBe(false);
     expect(validateQuantityForSize(4, 1750, "60418").valid).toBe(false);
   });
@@ -118,11 +137,18 @@ describe("validateQuantityForSize", () => {
     expect(r.reason).toMatch(/not in/i);
   });
 
-  it("375ml allows 3, 6, 12", () => {
+  it("375ml allows 3, 6, 12, 24 (full case) and rejects 36 (1.5 cases)", () => {
+    // 2026-06-02: full case for 375ml = 24. Old table was [3, 6, 12]
+    // which made 36 valid as "multiple of 12" — MLCC actually rejects
+    // 36 (it's 1.5 cases). New table [3, 6, 12, 24] makes 24, 48,
+    // 72 valid and 36 invalid.
     expect(validateQuantityForSize(3, 375, "9091").valid).toBe(true);
     expect(validateQuantityForSize(6, 375, "9091").valid).toBe(true);
     expect(validateQuantityForSize(12, 375, "9091").valid).toBe(true);
+    expect(validateQuantityForSize(24, 375, "9091").valid).toBe(true);
+    expect(validateQuantityForSize(48, 375, "9091").valid).toBe(true);
     expect(validateQuantityForSize(5, 375, "9091").valid).toBe(false);
+    expect(validateQuantityForSize(36, 375, "9091").valid).toBe(false);
   });
 });
 
