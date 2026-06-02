@@ -236,6 +236,25 @@ ${
          .tag__bottom {
            gap: 1.8mm;
            font-size: 2.7mm;
+         }
+         /*
+           Force a guaranteed-fit font size in screen-only mode.
+           fitText keeps mis-computing inside the modal iframe (the
+           scrollWidth/clientWidth check sees the wrong viewport at
+           load), so the price overflows even after viewport=400.
+           CSS clamp(...) with viewport units gives a deterministic
+           size that always fits. @media screen scopes this to the
+           PREVIEW only — the actual print uses fitText's inline
+           font-size set on load (which is close to right since
+           the canvas is 400px vs print 378px).
+         */
+         @media screen {
+           .tag__price {
+             font-size: clamp(48px, 18vw, 96px) !important;
+           }
+           .tag__name span {
+             font-size: clamp(11px, 3.2vw, 16px) !important;
+           }
          }`
       : ""
   }
