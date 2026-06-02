@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flagIncorrectMatch } from "../api/catalog";
+import { fetchTagsHtml, openAndPrintTagHtml } from "../api/tags";
 import {
   generateValidQuantities,
   getOrderingRuleDisplay,
@@ -142,6 +143,33 @@ export function ProductCard({
         block: "center",
       });
     });
+  };
+
+  /*
+    Print tag handler (task #22, 2026-06-02 — Pillar 3). Fetches the
+    server-rendered HTML for the selected product's MLCC code, opens
+    it in a new window, triggers the browser print dialog. Real
+    Code 128 barcode is server-generated via bwip-js. The new window
+    stays open after printing so the user can re-print or close it
+    manually; popup-blocker note in api/tags.ts.
+  */
+  const [printing, setPrinting] = useState(false);
+  const onPrintTag = async () => {
+    if (printing) return;
+    setPrinting(true);
+    try {
+      const r = await fetchTagsHtml([selectedProduct.code]);
+      if (!r.ok) {
+        onToast?.(`Couldn't print tag: ${r.error}`);
+        return;
+      }
+      const opened = openAndPrintTagHtml(r.html);
+      if (!opened) {
+        onToast?.("Couldn't open print window — check popup blocker");
+      }
+    } finally {
+      setPrinting(false);
+    }
   };
 
   const onFlagWrongMatch = async () => {
@@ -451,6 +479,23 @@ export function ProductCard({
           title={!canAdd ? "Choose a quantity first" : undefined}
         >
           {canAdd ? "Add to Cart" : "Add to Cart (choose qty first)"}
+        </button>
+
+        {/*
+          Print shelf tag (Pillar 3, task #22, 2026-06-02). Opens the
+          server-rendered HTML in a new window and triggers the
+          browser print dialog. iOS users get AirPrint → Brother
+          QL-810W if the printer is shared on Wi-Fi. macOS users get
+          the standard print dialog.
+        */}
+        <button
+          type="button"
+          className="btn secondary btn-block"
+          onClick={() => void onPrintTag()}
+          disabled={printing}
+          style={{ marginTop: 8 }}
+        >
+          {printing ? "Generating tag…" : "🏷️ Print shelf tag"}
         </button>
 
         {showFlag ? (

@@ -21,6 +21,7 @@ import nrsReviewRouter from "./routes/nrs-review.routes.js";
 import assistantRouter from "./routes/assistant.routes.js";
 import catalogVisionRouter from "./routes/catalog-vision.routes.js";
 import ordersRouter from "./routes/orders.routes.js";
+import tagsRouter from "./routes/tags.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -94,6 +95,13 @@ app.use("/catalog", resolveAuthenticatedStore, catalogVisionRouter);
  * a queryable table.
  */
 app.use("/orders", resolveAuthenticatedStore, ordersRouter);
+/**
+ * Shelf tags: POST /tags/render, GET /tags/render?code=N — render
+ * printable HTML shelf tags for one or more MLCC products. Pillar 3
+ * of V1 (task #22, 2026-06-02). Auth-gated; barcode generation is
+ * server-side via bwip-js (real Code 128).
+ */
+app.use("/tags", resolveAuthenticatedStore, tagsRouter);
 
 /**
  * Operator admin SPA (built apps/admin). Same origin as session + API under /operator-review/*.
