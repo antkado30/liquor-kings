@@ -182,14 +182,31 @@ const PAGE_SHELL = (tags, opts = {}) => `<!DOCTYPE html>
     opts.embedded
       ? /*
            Embedded mode (iframe inside the scanner app preview modal).
-           Hide the howto banner since the app's own modal has Print +
-           Done controls. Shrink body padding so the tag sits at the
-           top of the iframe without scroll. Bug 2026-06-02: in the
-           default page the howto banner ate ~half the iframe height.
+           Three things:
+             1. Hide the howto banner — the app's own modal has Print
+                + Done controls; the howto would just crowd the iframe.
+             2. Shrink body padding so the tag sits at the top.
+             3. Override the tag's fixed 100mm width to fit the iframe
+                responsively. The tag is fixed at ~378px (100mm @ 96dpi)
+                which OVERFLOWED the iframe on iPhone portrait
+                (~360px), clipping the name + ADA number. With
+                width:100% + max-width:100mm + aspect-ratio:100/62 the
+                tag scales to whatever the iframe has, preserving
+                proportions. The fitText script re-fits the price +
+                name to the new container size. @media print rules
+                still use @page 100mm × 62mm so actual print output is
+                unchanged — only the preview shrinks.
          */
         `.howto { display: none !important; }
          body { background: #fff; }
-         .sheet { padding: 0; }`
+         .sheet { padding: 0; }
+         .tag {
+           width: 100%;
+           max-width: 100mm;
+           height: auto;
+           aspect-ratio: 100 / 62;
+           margin: 4px auto;
+         }`
       : ""
   }
   .tag {
