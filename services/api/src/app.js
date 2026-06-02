@@ -150,9 +150,46 @@ const serveOperatorReviewLegacyHtml = (req, res) => {
  */
 if (scannerDistReady) {
   console.log(`[scanner] Serving scanner SPA from ${scannerDist}`);
-  app.use("/scanner", express.static(scannerDist));
+  /*
+    Two-tier cache headers (fix for the iOS PWA blank-screen bug,
+    2026-06-02 evening). The problem: Vite emits content-hashed
+    asset filenames (index-ABCD.js) referenced by index.html. iOS
+    home-screen PWAs cache index.html aggressively. After a new
+    deploy, the cached index.html points to OLD asset URLs that no
+    longer exist in dist → blank screen until Tony deletes + re-adds
+    the home-screen icon.
+
+    Fix:
+      - index.html → Cache-Control: no-store. Always pulls fresh.
+        Tiny file (~500 bytes), revalidation cost is negligible.
+      - /assets/* → Cache-Control: public, max-age=31536000, immutable.
+        Filenames are content-hashed, so the same URL always means
+        the same bytes — safe to cache forever.
+
+    The express.static middleware is wrapped so it sets the long
+    cache header on everything; the index.html sender (below) sets
+    its own no-store header that overrides for that one file.
+  */
+  app.use(
+    "/scanner",
+    express.static(scannerDist, {
+      // Default for all files under /scanner/ (mostly /assets/*) —
+      // content-hashed filenames make eternal caching safe.
+      maxAge: "1y",
+      immutable: true,
+      // index.html itself is served by the fallback handler below
+      // so we can give it different cache headers.
+      index: false,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-store, max-age=0");
+        }
+      },
+    }),
+  );
   app.use("/scanner", (req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
+    res.setHeader("Cache-Control", "no-store, max-age=0");
     res.sendFile(scannerIndexHtml);
   });
 } else {
