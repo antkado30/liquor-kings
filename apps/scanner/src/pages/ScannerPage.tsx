@@ -24,6 +24,7 @@ import { SearchBar } from "../components/SearchBar";
 import { useCart } from "../hooks/useCart";
 import { useCatalogSearch } from "../hooks/useCatalogSearch";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
+import { useBackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
 import type { MlccProduct, ProductFamily, UpcLookupResponse } from "../types";
 
 function money(n: number | null | undefined): string {
@@ -36,6 +37,15 @@ export function ScannerPage() {
   const search = useCatalogSearch();
   const navigate = useNavigate();
   const isOnline = useOnlineStatus();
+  /*
+    Background pre-validate (task #47, 2026-06-02). Lives at the
+    ScannerPage level so the cart-watch effect keeps running even
+    when the cart drawer is closed (which is the whole point — the
+    user scans bottles, we silently validate them, by the time they
+    open the drawer the result is waiting). CartDrawer receives the
+    cache via props and threads it into useSubmission.
+  */
+  const preValidate = useBackgroundPreValidate(cart.items);
 
   const [scannerActive, setScannerActive] = useState(true);
   /**
@@ -466,6 +476,7 @@ export function ScannerPage() {
       {showCart ? (
         <CartDrawer
           cart={cart}
+          preValidate={preValidate}
           onClose={() => setShowCart(false)}
           onSubmit={() => {
             setShowCart(false);

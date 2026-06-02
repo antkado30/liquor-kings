@@ -30,6 +30,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { validateCart, type CartValidationResult } from "../api/cart";
 import { cartLineId, type CartContextValue } from "../hooks/useCart";
 import { useSubmission } from "../hooks/useSubmission";
+import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
 import {
   generateValidQuantities,
   getOrderingRuleDisplay,
@@ -144,9 +145,17 @@ type CartDrawerProps = {
    * tappable and the drawer behaves the same as before.
    */
   onLineProductClick?: (product: import("../types").MlccProduct) => void;
+  /**
+   * Background pre-validate cache (task #47, 2026-06-02). When the
+   * user taps Validate, useSubmission checks this cache first; on a
+   * hit, the state machine skips straight to validateDone instead of
+   * running the full sync+trigger+poll pipeline. Optional — without
+   * it, the drawer falls back to the foreground-only flow.
+   */
+  preValidate?: BackgroundPreValidate;
 };
 
-export function CartDrawer({ cart, onClose, onLineProductClick }: CartDrawerProps) {
+export function CartDrawer({ cart, onClose, onLineProductClick, preValidate }: CartDrawerProps) {
   const {
     items,
     groupedByAda,
@@ -157,7 +166,9 @@ export function CartDrawer({ cart, onClose, onLineProductClick }: CartDrawerProp
     removeItem,
     updateQuantity,
   } = cart;
-  const submission = useSubmission();
+  // Wire pre-validate cache into useSubmission so startValidate can
+  // short-circuit on a fresh cached result (task #47, 2026-06-02).
+  const submission = useSubmission(preValidate);
   const { state, startValidate, startSubmit, invalidateValidation, reset } = submission;
 
   // Compound "is the flow doing something async right now" flag. Used to

@@ -100,7 +100,27 @@ export type SubmissionState =
 const POLL_INTERVAL_MS = 2500;
 const MAX_POLL_MS = 5 * 60 * 1000; // 5 minutes per phase
 
-export function useSubmission(): {
+/**
+ * Optional hook into a background pre-validate cache (task #47, 2026-06-02).
+ * When provided, startValidate checks the cache first; on a hit the
+ * state machine jumps straight to validateDone without re-running the
+ * full sync+trigger+poll pipeline. Cache miss falls through to the
+ * normal flow.
+ */
+export type BackgroundPreValidateCache = {
+  getCachedResult: (
+    items: CartItem[],
+  ) => {
+    cartId: string;
+    validateResult: ValidateResult | null;
+    finalStatus: "succeeded";
+  } | null;
+  invalidateCache: () => void;
+};
+
+export function useSubmission(
+  preValidateCache?: BackgroundPreValidateCache,
+): {
   state: SubmissionState;
   startValidate: (items: CartItem[]) => Promise<void>;
   startSubmit: () => Promise<void>;
@@ -261,6 +281,29 @@ export function useSubmission(): {
       }
       cancelledRef.current = false;
 
+      /*
+        Pre-validate cache check (task #47, 2026-06-02). If a
+        background pre-validate completed for THIS exact cart, jump
+        straight to validateDone without re-running the full pipeline.
+        The cartId is reused too — Submit will skip the cart sync.
+        Cache is invalidated on consume so the same result isn't shown
+        repeatedly if the user clicks Re-validate.
+      */
+      if (preValidateCache) {
+        const cached = preValidateCache.getCachedResult(items);
+        if (cached) {
+          setState({
+            kind: "validateDone",
+            runId: "background-prevalidate",
+            finalStatus: cached.finalStatus,
+            cartId: cached.cartId,
+            validateResult: cached.validateResult,
+          });
+          preValidateCache.invalidateCache();
+          return;
+        }
+      }
+
       // Phase 1.a: sync
       setState({
         kind: "validateSyncing",
@@ -330,7 +373,7 @@ export function useSubmission(): {
         });
       }
     },
-    [state.kind, syncCart, triggerRun, pollUntilTerminal],
+    [state.kind, syncCart, triggerRun, pollUntilTerminal, preValidateCache],
   );
 
   const startSubmit = useCallback(async () => {
