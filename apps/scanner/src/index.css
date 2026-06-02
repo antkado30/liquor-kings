@@ -1860,3 +1860,231 @@ select {
   cursor: not-allowed;
   text-decoration: none;
 }
+
+/*
+  Orders pages (task #41, 2026-06-02). New routes /orders and
+  /orders/:id. Shared page-shell + page-header pattern for routed
+  sub-pages so the look stays consistent if we add more later.
+*/
+.page-shell {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 16px 32px;
+  min-height: 100vh;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0 16px;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.page-header__back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 1.4rem;
+  text-decoration: none;
+}
+
+.orders-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(108, 99, 255, 0.08);
+  border: 1px solid rgba(108, 99, 255, 0.20);
+  margin-bottom: 16px;
+}
+
+.orders-summary__metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.orders-summary__metric strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.orders-summary__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.orders-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.orders-day-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.orders-day-header {
+  margin: 0 0 4px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.orders-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.orders-row:active {
+  background: rgba(108, 99, 255, 0.10);
+}
+
+.orders-row__left {
+  flex: 1;
+  min-width: 0;
+}
+
+.orders-row__ada {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.orders-row__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.order-detail-summary {
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(108, 99, 255, 0.08);
+  border: 1px solid rgba(108, 99, 255, 0.20);
+  margin-bottom: 14px;
+}
+
+.order-detail-summary__ada {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.order-detail-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+  margin: 0;
+}
+
+.order-detail-meta dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.order-detail-meta dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.order-detail-totals {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 18px;
+}
+
+.order-detail-totals > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.order-detail-totals strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.order-detail-totals__net {
+  grid-column: span 2;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.order-detail-totals__net strong {
+  font-size: 1.25rem;
+  color: #c4b5fd;
+}
+
+.order-detail-section-title {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.order-detail-lines {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.order-detail-line {
+  display: flex;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.order-detail-line__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.order-detail-line__name {
+  font-weight: 600;
+}
+
+.order-detail-line__total {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #c4b5fd;
+}

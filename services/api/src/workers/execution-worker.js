@@ -15,6 +15,7 @@ import {
   attachFreshSession,
   releaseSession,
 } from "./rpa-session-manager.js";
+import { persistMiloOrderConfirmations } from "../services/milo-order-confirmations.service.js";
 import {
   FAILURE_TYPE,
   classifyFailureType,
@@ -1556,6 +1557,52 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         },
       ),
     );
+
+    /*
+      Persist Stage 5 confirmations to public.milo_order_confirmations
+      (task #41, 2026-06-02). Best-effort — never fail the run on a
+      persistence error. ONLY for real submissions (dry_run produces
+      no real confirmation numbers; we'd just be writing dummy rows).
+      The service handles dedup via the (execution_run_id, ada_number)
+      unique partial index, so a worker retry would noop instead of
+      duplicating.
+    */
+    if (stage5Mode === "submit" && checkedOut?.submitted === true) {
+      try {
+        const persistResult = await persistMiloOrderConfirmations({
+          supabase: workerSupabase,
+          storeId,
+          executionRunId: run.id,
+          checkedOut,
+          sessionAdaOrders: session?.adaOrders,
+        });
+        stepEvidence.push(
+          buildWorkerStepEvidence(
+            "milo_confirmations_persisted",
+            persistResult.error
+              ? `Confirmation persist completed with note: ${persistResult.error}`
+              : `Persisted ${persistResult.persisted} confirmation row(s) to milo_order_confirmations`,
+            {
+              persisted: persistResult.persisted,
+              skipped: persistResult.skipped,
+              error: persistResult.error,
+            },
+          ),
+        );
+      } catch (persistErr) {
+        const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+        console.warn(
+          `[worker] milo_order_confirmations persist threw (continuing): ${msg}`,
+        );
+        stepEvidence.push(
+          buildWorkerStepEvidence(
+            "milo_confirmations_persist_failed",
+            "Confirmation persist threw — run still succeeds, evidence has the raw data",
+            { error: msg },
+          ),
+        );
+      }
+    }
 
     await finalizeRun({
       apiBaseUrl,

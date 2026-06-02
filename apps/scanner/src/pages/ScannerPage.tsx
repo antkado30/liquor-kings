@@ -291,6 +291,20 @@ export function ScannerPage() {
             </span>
             {cart.totalItems > 0 ? <span className="cart-badge">{cart.totalItems}</span> : null}
           </button>
+          {/*
+            Orders icon — opens the new /orders page (task #41,
+            2026-06-02). Surfaces MILO confirmation history that used
+            to be locked away in execution_runs.evidence jsonb.
+          */}
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => navigate("/orders")}
+            aria-label="View order history"
+            title="Order history"
+          >
+            <span aria-hidden>📋</span>
+          </button>
           <button
             type="button"
             className="icon-btn"

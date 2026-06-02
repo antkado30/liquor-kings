@@ -20,6 +20,7 @@ import nrsImportRouter from "./routes/nrs-import.routes.js";
 import nrsReviewRouter from "./routes/nrs-review.routes.js";
 import assistantRouter from "./routes/assistant.routes.js";
 import catalogVisionRouter from "./routes/catalog-vision.routes.js";
+import ordersRouter from "./routes/orders.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -86,6 +87,13 @@ app.use("/assistant", assistantRouter);
  * money via the Anthropic API.
  */
 app.use("/catalog", resolveAuthenticatedStore, catalogVisionRouter);
+/**
+ * Orders: GET /orders, GET /orders/:id, GET /orders/summary/recent
+ * MILO order confirmations persisted by the Stage 5 worker.
+ * Task #41 (2026-06-02) — replaces the buried-in-evidence model with
+ * a queryable table.
+ */
+app.use("/orders", resolveAuthenticatedStore, ordersRouter);
 
 /**
  * Operator admin SPA (built apps/admin). Same origin as session + API under /operator-review/*.
