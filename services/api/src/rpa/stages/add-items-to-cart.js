@@ -24,7 +24,18 @@ function isFullCaseOnlySize(sizeMl) {
 // inner stages either complete or fire their own typed errors.
 // Happy-path warm-session Stage 3 still finishes in ~10-20s.
 const DEFAULT_TIMEOUT_MS = 240_000;
-const DEFAULT_PER_ITEM_TIMEOUT_MS = 8_000;
+/*
+  Bumped 8_000 → 18_000 on 2026-06-01 after Tony's Tito's 750ml
+  false-OOS flake (waitedMs: 8024 — exactly the previous cap).
+  On a transient slow-MILO moment, an 8s wait gives up before MILO's
+  quick-add list renders the new row, and Stage 3 mis-reports the
+  item as "did not appear" → inferredOos shows it as out of stock to
+  the user. 18s absorbs the slow-day worst case (we've observed up to
+  ~12s on real-world flakes) while still letting genuinely missing
+  items fall through after a sane timeout. Total Stage 3 budget is
+  240s so we can spend 18s × ~12 items and still leave headroom.
+*/
+const DEFAULT_PER_ITEM_TIMEOUT_MS = 18_000;
 const CART_NAV_TIMEOUT_MS = 15_000;
 const ADD_BY_CODE_NAV_TIMEOUT_MS = 20_000;
 // Bound for the post-add /milo/cart content read. page.evaluate has NO

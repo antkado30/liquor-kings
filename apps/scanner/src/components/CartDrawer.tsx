@@ -69,7 +69,40 @@ function computeInferredOos(
       if (typeof code === "string" && code) adaActiveCodes.add(code);
     }
   }
-  return cartItems.filter((line) => !adaActiveCodes.has(line.product.code));
+  /*
+    Exclude items already in items_rejected (2026-06-01 fix for #61).
+    Tony's Tito's 750ml false-OOS flake: Stage 3 timed out waiting for
+    MILO's quick-add list to render → reported the item in
+    items_rejected ("did not appear in quick add list"). Without this
+    filter, the item ALSO appeared in inferredOos with the misleading
+    "out of stock" label. Real cause is a Stage 3 timeout, not stock.
+    The rejected list now owns the user-facing message for those rows.
+  */
+  const rejectedCodes = new Set<string>();
+  const rejectedList = Array.isArray(result.items_rejected)
+    ? result.items_rejected
+    : [];
+  for (const it of rejectedList) {
+    const code = (it as { code?: unknown })?.code;
+    if (typeof code === "string" && code) rejectedCodes.add(code);
+  }
+  return cartItems.filter(
+    (line) =>
+      !adaActiveCodes.has(line.product.code) &&
+      !rejectedCodes.has(line.product.code),
+  );
+}
+
+/*
+  Recognize Stage 3 timeout rejections so the UI shows a recoverable
+  "try re-validate" message instead of the hard "MLCC rejected this"
+  language we use for genuine rule violations. The reason string is
+  produced by add-items-to-cart.js (services/api/src/rpa/stages/) and
+  is stable enough to pattern-match.
+*/
+function isStage3TimeoutRejection(reason: unknown): boolean {
+  if (typeof reason !== "string") return false;
+  return /quick add list|did not appear/i.test(reason);
 }
 
 /**
@@ -874,29 +907,76 @@ function ValidateResultPanel({
       */}
       {rejected.length > 0 ? (
         <>
-          <div style={{ marginTop: 12, fontWeight: 600 }}>
-            Rejected by MLCC ({rejected.length} item{rejected.length === 1 ? "" : "s"}):
-          </div>
-          <ul className="drawer-validation-errors">
-            {rejected.map((item, i) => {
-              const it = item as {
-                code?: string;
-                productName?: string;
-                quantity?: number;
-                reason?: string;
-              };
-              return (
-                <li key={i}>
-                  {it.productName ?? it.code ?? "Unknown item"}
-                  {it.quantity ? ` × ${it.quantity}` : ""}
-                  {it.reason ? ` — ${it.reason}` : ""}
-                </li>
-              );
-            })}
-          </ul>
-          <p className="muted small" style={{ marginTop: 6 }}>
-            Remove these from your cart and re-validate to clear.
-          </p>
+          {/*
+            Split the rejected list into "timed out" vs "hard rejected"
+            (2026-06-01 fix for #61). Tony's Tito's 750ml flake was
+            ALWAYS a Stage 3 timeout — MILO was slow rendering the
+            quick-add row, we gave up after 8s, the line ended up in
+            items_rejected with a misleading "did not appear" reason.
+            Treating that as a hard rejection scares the user; treating
+            it as a transient flake lets them re-validate and move on.
+            The 8s wait was bumped to 18s in the worker too — this UI
+            split is the user-facing complement.
+          */}
+          {(() => {
+            const rejectedTyped = rejected as Array<{
+              code?: string;
+              productName?: string;
+              quantity?: number;
+              reason?: string;
+            }>;
+            const timedOut = rejectedTyped.filter((r) =>
+              isStage3TimeoutRejection(r.reason),
+            );
+            const hard = rejectedTyped.filter(
+              (r) => !isStage3TimeoutRejection(r.reason),
+            );
+            return (
+              <>
+                {timedOut.length > 0 ? (
+                  <>
+                    <div style={{ marginTop: 12, fontWeight: 600 }}>
+                      MLCC didn&apos;t finish adding ({timedOut.length} item
+                      {timedOut.length === 1 ? "" : "s"}):
+                    </div>
+                    <ul className="banner-content-list">
+                      {timedOut.map((it, i) => (
+                        <li key={`to-${i}`}>
+                          {it.productName ?? it.code ?? "Unknown item"}
+                          {it.quantity ? ` × ${it.quantity}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="muted small" style={{ marginTop: 6 }}>
+                      MLCC was slow responding for these. Tap{" "}
+                      <strong>Re-validate against MLCC</strong> — it usually
+                      goes through the second time.
+                    </p>
+                  </>
+                ) : null}
+                {hard.length > 0 ? (
+                  <>
+                    <div style={{ marginTop: 12, fontWeight: 600 }}>
+                      Rejected by MLCC ({hard.length} item
+                      {hard.length === 1 ? "" : "s"}):
+                    </div>
+                    <ul className="drawer-validation-errors">
+                      {hard.map((it, i) => (
+                        <li key={`h-${i}`}>
+                          {it.productName ?? it.code ?? "Unknown item"}
+                          {it.quantity ? ` × ${it.quantity}` : ""}
+                          {it.reason ? ` — ${it.reason}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="muted small" style={{ marginTop: 6 }}>
+                      Remove these from your cart and re-validate to clear.
+                    </p>
+                  </>
+                ) : null}
+              </>
+            );
+          })()}
         </>
       ) : null}
       {/*
