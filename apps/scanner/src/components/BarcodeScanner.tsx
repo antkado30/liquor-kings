@@ -15,6 +15,13 @@ type BarcodeScannerProps = {
    * call + result UI. Without this prop, the button is hidden.
    */
   onPhotoCapture?: (jpegDataUri: string) => void | Promise<void>;
+  /**
+   * Home simplification 2026-06-02: when true, hides the manual MLCC
+   * code input AND the trouble-hint panel. The parent provides its
+   * own unified search bar instead (handles both name + code lookup).
+   * The camera + aim rectangle remain.
+   */
+  hideManualInput?: boolean;
 };
 
 const COOLDOWN_MS = 2000;
@@ -213,7 +220,7 @@ async function applyAutofocusEnhancements(
   }
 }
 
-export function BarcodeScanner({ onScan, active, onPhotoCapture }: BarcodeScannerProps) {
+export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput = false }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectorRef = useRef<NativeBarcodeDetector | null>(null);
@@ -574,7 +581,24 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture }: BarcodeScanne
             "Type code instead" button focuses the manual input so
             the next tap puts the cursor where it needs to be.
           */}
-          {showTroubleHint ? (
+          {/*
+            Home simplification 2026-06-02 (Tony's request): the verbose
+            trouble panel + separate manual input have been replaced by
+            a single compact "Take a photo" button that's always visible
+            below the camera (when onPhotoCapture is wired and
+            hideManualInput is on). Parent provides a unified search bar
+            for both name search AND code entry.
+          */}
+          {hideManualInput && onPhotoCapture ? (
+            <button
+              type="button"
+              className="scanner-photo-compact-btn"
+              onClick={handlePhotoTap}
+              aria-label="Take a photo to identify the bottle"
+            >
+              📷 Take a photo of the bottle
+            </button>
+          ) : showTroubleHint ? (
             <div className="scanner-trouble" role="status">
               <strong>Can&apos;t read the barcode?</strong>
               <p className="muted small">
@@ -583,14 +607,6 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture }: BarcodeScanne
               </p>
               <div className="scanner-trouble-actions">
                 {onPhotoCapture ? (
-                  /*
-                    Task #37 fallback: Claude vision identifies the
-                    bottle from a photo. Captures the current video
-                    frame and hands it to the parent's onPhotoCapture
-                    callback. Primary CTA — most users would rather
-                    take a photo than type a code. Falls back to manual
-                    entry if vision can't find the bottle either.
-                  */
                   <button
                     type="button"
                     className="btn primary"
@@ -603,7 +619,6 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture }: BarcodeScanne
                   type="button"
                   className="btn secondary"
                   onClick={() => {
-                    // Scroll/focus the manual entry input.
                     const el = document.querySelector<HTMLInputElement>(".scanner-manual-input");
                     el?.focus();
                     el?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -619,21 +634,23 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture }: BarcodeScanne
       {engine === "unsupported" ? (
         <p className="scanner-fallback-title">Camera not available on this browser — enter codes manually</p>
       ) : null}
-      <div className="scanner-manual">
-        <label className="muted small">Enter code manually</label>
-        <div className="scanner-manual-row">
-          <input
-            className="scanner-manual-input"
-            value={manualCode}
-            onChange={(e) => setManualCode(e.target.value)}
-            placeholder="MLCC code"
-            enterKeyHint="done"
-          />
-          <button type="button" className="btn secondary" onClick={submitManual}>
-            Use code
-          </button>
+      {hideManualInput ? null : (
+        <div className="scanner-manual">
+          <label className="muted small">Enter code manually</label>
+          <div className="scanner-manual-row">
+            <input
+              className="scanner-manual-input"
+              value={manualCode}
+              onChange={(e) => setManualCode(e.target.value)}
+              placeholder="MLCC code"
+              enterKeyHint="done"
+            />
+            <button type="button" className="btn secondary" onClick={submitManual}>
+              Use code
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 }

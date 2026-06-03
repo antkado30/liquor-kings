@@ -48,7 +48,9 @@ export function ScannerPage() {
   */
   const preValidate = useBackgroundPreValidate(cart.items);
 
-  const [scannerActive, setScannerActive] = useState(true);
+  // Camera is ALWAYS on (home simplification 2026-06-02). The previous
+  // "Camera scanner on" toggle added zero value — every user wanted the
+  // camera. Removed.
   /**
    * True from the moment a code is scanned/typed until the lookup resolves
    * (or fails). Lets us show a loading indicator so a slow network doesn't
@@ -80,19 +82,11 @@ export function ScannerPage() {
   /** When set, a search result tap writes `upc_mappings` for this scanned UPC. */
   const [upcBeingMapped, setUpcBeingMapped] = useState<string | null>(null);
   const [upcMappingExpectedQuery, setUpcMappingExpectedQuery] = useState<string | null>(null);
-  const [priceBookAge, setPriceBookAge] = useState<{
-    status: "aging" | "stale";
-    daysSinceUpdate: number;
-  } | null>(null);
-  /**
-   * Latest price book date (YYYY-MM-DD) from /price-book/status.
-   * Captured separately from `priceBookAge` because ProductCard's
-   * freshness heuristic (task #44) needs the absolute date even when
-   * the cart-wide age banner is hidden (status=fresh). Null until the
-   * status endpoint responds.
-   */
+  // Price-book staleness was previously rendered as a banner here;
+  // smart cards now handle that surfacing (task #63). We still need
+  // the latest book date for ProductCard's per-product freshness
+  // check (#44), so that state stays.
   const [latestPriceBookDate, setLatestPriceBookDate] = useState<string | null>(null);
-  const [dismissPriceBookBanner, setDismissPriceBookBanner] = useState(false);
   const [networkWarn, setNetworkWarn] = useState(false);
   /*
     Vision identification state (task #37, 2026-06-01). When the user
@@ -112,9 +106,6 @@ export function ScannerPage() {
   useEffect(() => {
     void (async () => {
       const s = await getPriceBookStatus();
-      if (s.ok && (s.status === "aging" || s.status === "stale") && s.daysSinceUpdate != null) {
-        setPriceBookAge({ status: s.status, daysSinceUpdate: s.daysSinceUpdate });
-      }
       // Always capture the latest date if the endpoint returned one,
       // even when status=fresh. ProductCard needs it for per-product
       // freshness checks (task #44 discontinuation detection).
@@ -334,34 +325,14 @@ export function ScannerPage() {
         </div>
       ) : null}
 
-      {priceBookAge && !dismissPriceBookBanner ? (
-        <div
-          className={`price-book-age-banner ${
-            priceBookAge.status === "stale" ? "price-book-age-banner--stale" : "price-book-age-banner--aging"
-          }`}
-        >
-          <span>
-            {priceBookAge.status === "stale"
-              ? `Prices are ${priceBookAge.daysSinceUpdate} days old. Update price book before ordering.`
-              : `Prices last updated ${priceBookAge.daysSinceUpdate} days ago. Refresh soon.`}
-          </span>
-          <button
-            type="button"
-            className="price-book-age-banner__close"
-            aria-label="Dismiss"
-            onClick={() => setDismissPriceBookBanner(true)}
-          >
-            ×
-          </button>
-        </div>
-      ) : null}
-
       {/*
-        Scanner-home smart cards (task #63, 2026-06-02): price changes,
-        reorder suggestions, price-book staleness. Tap a card to open
-        the ProductCard for that bottle (one-tap-add for reorders).
-        Sits above the camera toggle since it's the highest-attention
-        actionable content on the screen.
+        Home simplification 2026-06-02 (Tony's request after seeing the
+        cluttered home in PWA): removed the "Prices are 21 days old"
+        banner (smart cards handles that) AND the "Camera scanner on"
+        checkbox toggle (camera is always on now — it's the primary
+        action). Search bar moves up; BarcodeScanner's own manual-entry
+        input gets hidden by passing hideManualInput. Smart cards stay
+        above the camera as the highest-attention slot.
       */}
       <SmartCards
         onTapProduct={(code) => {
@@ -371,20 +342,12 @@ export function ScannerPage() {
         }}
       />
 
-      <div className="scanner-toggle-row">
-        <label className="toggle">
-          <input type="checkbox" checked={scannerActive} onChange={(e) => setScannerActive(e.target.checked)} />
-          <span>Camera scanner on</span>
-        </label>
-      </div>
-
-      {scannerActive ? (
-        <BarcodeScanner
-          active={scannerActive}
-          onScan={handleScan}
-          onPhotoCapture={visionBusy ? undefined : handlePhotoCapture}
-        />
-      ) : null}
+      <BarcodeScanner
+        active={true}
+        onScan={handleScan}
+        onPhotoCapture={visionBusy ? undefined : handlePhotoCapture}
+        hideManualInput={true}
+      />
 
       {upcBeingMapped ? (
         <div className="upc-mapping-banner" role="status" aria-live="polite">

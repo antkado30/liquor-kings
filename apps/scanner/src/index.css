@@ -2239,3 +2239,30 @@ select {
 .smart-card__dismiss:active {
   color: var(--text);
 }
+
+/*
+  Compact "Take a photo of the bottle" button under the camera
+  (home simplification 2026-06-02). Replaces the verbose 8-second
+  trouble panel + redundant manual entry input. Always visible,
+  one tap, takes a photo and runs AI vision identification.
+*/
+.scanner-photo-compact-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(108, 99, 255, 0.40);
+  background: rgba(108, 99, 255, 0.10);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.scanner-photo-compact-btn:active {
+  background: rgba(108, 99, 255, 0.22);
+}
