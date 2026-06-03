@@ -48,7 +48,7 @@ const MAX_LIMIT = 60;
  *   { ok, products: MlccProduct[], nextCursor: string | null, total: number | null }
  */
 router.get("/browse", async (req, res) => {
-  const storeId = req.resolvedStore?.id;
+  const storeId = req.store_id;
   if (!storeId) {
     return res
       .status(403)
@@ -209,7 +209,7 @@ router.get("/browse", async (req, res) => {
  * underlying tables are indexed and each query returns < 100 rows.
  */
 router.get("/browse/facets", async (req, res) => {
-  const storeId = req.resolvedStore?.id;
+  const storeId = req.store_id;
   if (!storeId) {
     return res
       .status(403)

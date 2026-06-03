@@ -246,7 +246,7 @@ function dowName(dow) {
  * Returns: { ok, cards: [...] }
  */
 router.get("/smart-cards", async (req, res) => {
-  const storeId = req.resolvedStore?.id;
+  const storeId = req.store_id;
   if (!storeId) {
     return res
       .status(403)

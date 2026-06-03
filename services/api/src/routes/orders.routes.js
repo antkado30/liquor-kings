@@ -30,7 +30,7 @@ const DEFAULT_LIMIT = 25;
  *   { ok: true, orders: [...], nextCursor: string | null }
  */
 router.get("/", async (req, res) => {
-  const storeId = req.resolvedStore?.id;
+  const storeId = req.store_id;
   if (!storeId) {
     return res
       .status(403)
@@ -93,7 +93,7 @@ router.get("/", async (req, res) => {
  * store's order via a guessed UUID.
  */
 router.get("/:id", async (req, res) => {
-  const storeId = req.resolvedStore?.id;
+  const storeId = req.store_id;
   if (!storeId) {
     return res
       .status(403)
@@ -127,7 +127,7 @@ router.get("/:id", async (req, res) => {
  * orders, $X in the last month" stat. Cheap because it's bounded.
  */
 router.get("/summary/recent", async (req, res) => {
-  const storeId = req.resolvedStore?.id;
+  const storeId = req.store_id;
   if (!storeId) {
     return res
       .status(403)
