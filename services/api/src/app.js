@@ -23,6 +23,7 @@ import catalogVisionRouter from "./routes/catalog-vision.routes.js";
 import ordersRouter from "./routes/orders.routes.js";
 import tagsRouter from "./routes/tags.routes.js";
 import homeRouter from "./routes/home.routes.js";
+import browseRouter from "./routes/browse.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -109,6 +110,12 @@ app.use("/tags", resolveAuthenticatedStore, tagsRouter);
  * actionable cards on the scanner's main screen. Task #63 (2026-06-02).
  */
 app.use("/home", resolveAuthenticatedStore, homeRouter);
+/**
+ * Browse: GET /catalog/browse, GET /catalog/browse/facets
+ * Amazon-style filtering + sorting over mlcc_items (task #64,
+ * 2026-06-03). Mounted under /catalog alongside the vision endpoint.
+ */
+app.use("/catalog", resolveAuthenticatedStore, browseRouter);
 
 /**
  * Operator admin SPA (built apps/admin). Same origin as session + API under /operator-review/*.

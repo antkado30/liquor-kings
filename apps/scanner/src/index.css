@@ -2266,3 +2266,222 @@ select {
 .scanner-photo-compact-btn:active {
   background: rgba(108, 99, 255, 0.22);
 }
+
+/*
+  Browse page (task #64, 2026-06-03). Sticky filter chip row at top,
+  grid of mini product cards below. Picker bottom-sheet for chip
+  values + sort options.
+*/
+.browse-shell {
+  padding-bottom: 80px; /* room for the floating toast */
+}
+
+.browse-search {
+  width: 100%;
+  margin-bottom: 10px;
+  min-height: var(--touch);
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.browse-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 0 8px;
+  margin: 0 -16px 12px;
+  padding-left: 16px;
+  padding-right: 16px;
+  scrollbar-width: none;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 5;
+}
+
+.browse-chips::-webkit-scrollbar { display: none; }
+
+.browse-chip {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.browse-chip--active {
+  border-color: var(--accent);
+  background: rgba(108, 99, 255, 0.14);
+}
+
+.browse-chip--sort {
+  border-style: dashed;
+}
+
+.browse-chip--clear {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.40);
+  color: #fecaca;
+}
+
+.browse-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+@media (min-width: 480px) {
+  .browse-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (min-width: 720px) {
+  .browse-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
+.browse-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  min-height: 96px;
+}
+
+.browse-card:active {
+  background: rgba(108, 99, 255, 0.10);
+}
+
+.browse-card__name {
+  font-weight: 600;
+  font-size: 0.92rem;
+  line-height: 1.2;
+  /* Clamp to 2 lines */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.browse-card__meta {
+  font-size: 0.78rem;
+}
+
+.browse-card__bottom {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.browse-card__price {
+  font-weight: 700;
+  color: #c4b5fd;
+  font-variant-numeric: tabular-nums;
+}
+
+.browse-card__new {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(34, 197, 94, 0.18);
+  color: #bbf7d0;
+}
+
+/* Bottom-sheet picker for chip values + sort. */
+.browse-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 90;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.browse-picker {
+  width: 100%;
+  max-width: 600px;
+  max-height: 80vh;
+  background: var(--surface);
+  border-radius: 18px 18px 0 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.browse-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.browse-picker__header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.browse-picker__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.browse-picker__row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 10px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font-size: 0.95rem;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.browse-picker__row--active {
+  color: #c4b5fd;
+  font-weight: 600;
+}
+
+.browse-picker__row:active {
+  background: rgba(108, 99, 255, 0.10);
+}
+
+/* Sticky toast at the bottom — also a button to open cart. */
+.browse-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  max-width: 92vw;
+  padding: 12px 18px;
+  background: rgba(34, 197, 94, 0.18);
+  border: 1px solid rgba(34, 197, 94, 0.40);
+  color: #bbf7d0;
+  border-radius: 999px;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 70;
+}

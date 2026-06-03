@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthGate } from "./components/AuthGate";
 import { CartProvider } from "./hooks/useCart";
+import { BrowsePage } from "./pages/BrowsePage";
 import { CartPage } from "./pages/CartPage";
 import { OrderDetailPage } from "./pages/OrderDetailPage";
 import { OrdersPage } from "./pages/OrdersPage";
@@ -20,6 +21,7 @@ export default function App() {
             <Route path="/cart" element={<CartPage />} />
             <Route path="/orders" element={<OrdersPage />} />
             <Route path="/orders/:id" element={<OrderDetailPage />} />
+            <Route path="/browse" element={<BrowsePage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

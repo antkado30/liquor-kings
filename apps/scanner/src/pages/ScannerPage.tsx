@@ -297,6 +297,20 @@ export function ScannerPage() {
           >
             <span aria-hidden>📋</span>
           </button>
+          {/*
+            Browse icon — Amazon-style catalog browse (task #64,
+            2026-06-03). Filter by category, ADA, size, sort by
+            price/newest, etc.
+          */}
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => navigate("/browse")}
+            aria-label="Browse all bottles"
+            title="Browse"
+          >
+            <span aria-hidden>🔎</span>
+          </button>
           <button
             type="button"
             className="icon-btn"
