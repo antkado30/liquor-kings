@@ -22,6 +22,7 @@ import assistantRouter from "./routes/assistant.routes.js";
 import catalogVisionRouter from "./routes/catalog-vision.routes.js";
 import ordersRouter from "./routes/orders.routes.js";
 import tagsRouter from "./routes/tags.routes.js";
+import homeRouter from "./routes/home.routes.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -102,6 +103,12 @@ app.use("/orders", resolveAuthenticatedStore, ordersRouter);
  * server-side via bwip-js (real Code 128).
  */
 app.use("/tags", resolveAuthenticatedStore, tagsRouter);
+/**
+ * Scanner home smart cards: GET /home/smart-cards — surfaces price
+ * changes, reorder suggestions, and price-book staleness as
+ * actionable cards on the scanner's main screen. Task #63 (2026-06-02).
+ */
+app.use("/home", resolveAuthenticatedStore, homeRouter);
 
 /**
  * Operator admin SPA (built apps/admin). Same origin as session + API under /operator-review/*.

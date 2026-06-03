@@ -2149,3 +2149,93 @@ select {
   flex-direction: column;
   gap: 4px;
 }
+
+/*
+  Scanner home smart cards (task #63, 2026-06-02). Actionable cards
+  surfaced above the camera scanner toggle — price changes, reorder
+  suggestions, price-book staleness. Each card is tappable when it
+  carries a productCode (opens ProductCard). × button on each
+  dismisses (state persisted to localStorage).
+*/
+.smart-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.smart-card {
+  position: relative;
+  display: flex;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.smart-card--price_change {
+  border-left: 3px solid #fbbf24;
+}
+
+.smart-card--reorder_suggestion {
+  border-left: 3px solid #6c63ff;
+}
+
+.smart-card--price_book_stale {
+  border-left: 3px solid #f87171;
+}
+
+.smart-card__body-btn {
+  flex: 1;
+  text-align: left;
+  padding: 12px 14px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.smart-card__body-btn:disabled {
+  cursor: default;
+}
+
+.smart-card__body-btn:active:not(:disabled) {
+  background: rgba(108, 99, 255, 0.06);
+}
+
+.smart-card__kind-pill {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.smart-card__title {
+  font-weight: 600;
+  font-size: 0.98rem;
+}
+
+.smart-card__body {
+  font-size: 0.86rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.smart-card__dismiss {
+  flex: 0 0 auto;
+  width: 38px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.4rem;
+  cursor: pointer;
+  align-self: stretch;
+}
+
+.smart-card__dismiss:active {
+  color: var(--text);
+}

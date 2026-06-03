@@ -14,6 +14,7 @@ import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
 import { AssistantPanel } from "../components/AssistantPanel";
 import { ProductCard } from "../components/ProductCard";
+import { SmartCards } from "../components/SmartCards";
 import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
 import { VisionCandidatePicker } from "../components/VisionCandidatePicker";
 import {
@@ -354,6 +355,21 @@ export function ScannerPage() {
           </button>
         </div>
       ) : null}
+
+      {/*
+        Scanner-home smart cards (task #63, 2026-06-02): price changes,
+        reorder suggestions, price-book staleness. Tap a card to open
+        the ProductCard for that bottle (one-tap-add for reorders).
+        Sits above the camera toggle since it's the highest-attention
+        actionable content on the screen.
+      */}
+      <SmartCards
+        onTapProduct={(code) => {
+          void getProductByCode(code).then((p) => {
+            if (p) void openFamily(p);
+          });
+        }}
+      />
 
       <div className="scanner-toggle-row">
         <label className="toggle">
