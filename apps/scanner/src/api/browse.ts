@@ -3,6 +3,7 @@
  */
 import { fetchWithRetry } from "./catalog";
 import { getAuthBearer, handleAuthFailure } from "../lib/supabase";
+import { getCurrentStoreId } from "../lib/currentStore";
 import type { MlccProduct } from "../types";
 
 const BASE = "/catalog/browse";
@@ -37,9 +38,9 @@ export type BrowseFacets = {
 
 async function authHeaders(): Promise<Record<string, string>> {
   const bearer = await getAuthBearer();
-  const storeId = import.meta.env.VITE_SCANNER_STORE_ID as string | undefined;
+  const storeId = getCurrentStoreId();
   if (!bearer) throw new Error("Not signed in");
-  if (!storeId) throw new Error("VITE_SCANNER_STORE_ID env var not set");
+  if (!storeId) throw new Error("No active store");
   return {
     Authorization: `Bearer ${bearer}`,
     "X-Store-Id": storeId,

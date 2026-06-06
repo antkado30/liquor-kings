@@ -4,6 +4,7 @@
  * new tab/window which triggers the browser print dialog.
  */
 import { getAuthBearer } from "../lib/supabase";
+import { getCurrentStoreId } from "../lib/currentStore";
 
 const BASE = "/tags";
 
@@ -22,7 +23,7 @@ export type PrintTagsResult =
  */
 export async function fetchTagsHtml(codes: string[]): Promise<PrintTagsResult> {
   const bearer = await getAuthBearer();
-  const storeId = import.meta.env.VITE_SCANNER_STORE_ID as string | undefined;
+  const storeId = getCurrentStoreId();
   if (!bearer || !storeId) {
     return { ok: false, error: "Scanner is not signed in" };
   }

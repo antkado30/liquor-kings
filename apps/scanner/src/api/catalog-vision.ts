@@ -9,6 +9,7 @@
  */
 import { fetchWithRetry } from "./catalog";
 import { getAuthBearer, handleAuthFailure } from "../lib/supabase";
+import { getCurrentStoreId } from "../lib/currentStore";
 import type { MlccProduct } from "../types";
 
 const ENDPOINT = "/catalog/identify-from-image";
@@ -39,7 +40,7 @@ export type IdentifyFromImageResult =
  */
 export async function identifyFromImage(image: string): Promise<IdentifyFromImageResult> {
   const bearer = await getAuthBearer();
-  const storeId = import.meta.env.VITE_SCANNER_STORE_ID as string | undefined;
+  const storeId = getCurrentStoreId();
   if (!bearer || !storeId) {
     return {
       ok: false,

@@ -13,6 +13,7 @@
  */
 import { fetchWithRetry } from "./catalog";
 import { getAuthBearer, handleAuthFailure } from "../lib/supabase";
+import { getCurrentStoreId } from "../lib/currentStore";
 
 export const CART_API_BASE = "/cart";
 
@@ -24,10 +25,15 @@ type AuthHeaders = {
 /**
  * Async — must be awaited at every call site. Throws if there's no current
  * session (callers should not reach this if AuthGate is doing its job).
+ *
+ * Store id is resolved at RUNTIME from the user's store_users membership
+ * (task #85, 2026-06-06). Previously read VITE_SCANNER_STORE_ID at build
+ * time which 403'd every API call for any user whose membership store_id
+ * didn't match the build-time value (i.e. every new SaaS signup).
  */
 export async function getAuthHeaders(): Promise<AuthHeaders> {
   const bearer = await getAuthBearer();
-  const storeId = import.meta.env.VITE_SCANNER_STORE_ID as string | undefined;
+  const storeId = getCurrentStoreId();
   if (!bearer) {
     throw new Error(
       "Scanner is not signed in. Sign in via the login screen before making API calls.",
@@ -35,7 +41,7 @@ export async function getAuthHeaders(): Promise<AuthHeaders> {
   }
   if (!storeId) {
     throw new Error(
-      "Scanner is missing VITE_SCANNER_STORE_ID. Set it in apps/scanner/.env.",
+      "Scanner is not linked to a store yet. Sign out and back in if this persists.",
     );
   }
   return {
@@ -45,8 +51,9 @@ export async function getAuthHeaders(): Promise<AuthHeaders> {
 }
 
 export function getStoreId(): string {
-  const storeId = import.meta.env.VITE_SCANNER_STORE_ID as string | undefined;
-  if (!storeId) throw new Error("VITE_SCANNER_STORE_ID env var not set");
+  const storeId = getCurrentStoreId();
+  if (!storeId)
+    throw new Error("No active store. Sign in or complete signup first.");
   return storeId;
 }
 

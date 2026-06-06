@@ -9,12 +9,13 @@
  */
 import { fetchWithRetry } from "./catalog";
 import { getAuthBearer, handleAuthFailure } from "../lib/supabase";
+import { getCurrentStoreId } from "../lib/currentStore";
 
 const EXECUTION_API_BASE = "/execution-runs";
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const bearer = await getAuthBearer();
-  const storeId = import.meta.env.VITE_SCANNER_STORE_ID as string | undefined;
+  const storeId = getCurrentStoreId();
   if (!bearer) {
     throw new Error(
       "Scanner is not signed in. Sign in via the login screen before triggering RPA runs.",
@@ -22,7 +23,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   }
   if (!storeId) {
     throw new Error(
-      "Scanner is missing VITE_SCANNER_STORE_ID. Set it in apps/scanner/.env.",
+      "Scanner is not linked to a store yet. Sign out and back in if this persists.",
     );
   }
   return {
@@ -32,8 +33,9 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 function getStoreId(): string {
-  const storeId = import.meta.env.VITE_SCANNER_STORE_ID as string | undefined;
-  if (!storeId) throw new Error("VITE_SCANNER_STORE_ID env var not set");
+  const storeId = getCurrentStoreId();
+  if (!storeId)
+    throw new Error("No active store. Sign in or complete signup first.");
   return storeId;
 }
 

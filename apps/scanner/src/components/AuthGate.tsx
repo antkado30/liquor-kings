@@ -20,6 +20,11 @@ import {
 } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { scannerMisconfigured, supabase } from "../lib/supabase";
+import {
+  clearCurrentStoreId,
+  resolveCurrentStoreIdFromSession,
+  setCurrentStoreId,
+} from "../lib/currentStore";
 import { OnboardingActivation } from "./OnboardingActivation";
 
 type AuthGateProps = {
@@ -89,15 +94,36 @@ export function AuthGate({ children }: AuthGateProps) {
     }
 
     // Initial session check on mount.
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data }) => {
       setSession(data.session);
+      // If we already have a session (returning user, persisted via
+      // localStorage), resolve their store_id from store_users so the
+      // scanner uses the right tenant on first paint. Without this,
+      // the first API call after refresh sends the env-fallback store
+      // id and 403s on multi-tenant accounts.
+      if (data.session) {
+        await resolveCurrentStoreIdFromSession();
+      }
       setLoading(false);
     });
 
     // Subscribe to auth changes (sign-in, sign-out, token refresh).
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next);
-    });
+    const { data: sub } = supabase.auth.onAuthStateChange(
+      async (event, next) => {
+        setSession(next);
+        if (event === "SIGNED_OUT" || !next) {
+          clearCurrentStoreId();
+        } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+          // SIGNED_IN fires for fresh logins; we re-resolve in case the
+          // user just switched accounts in the same browser session.
+          // TOKEN_REFRESHED keeps the cached id but doesn't need a
+          // round-trip — guard against unnecessary work.
+          if (event === "SIGNED_IN") {
+            await resolveCurrentStoreIdFromSession();
+          }
+        }
+      },
+    );
 
     return () => {
       sub.subscription.unsubscribe();
@@ -171,6 +197,13 @@ export function AuthGate({ children }: AuthGateProps) {
         );
         return;
       }
+      // Seed the runtime store id IMMEDIATELY from the signup response.
+      // The auth-state listener will also call resolveCurrentStoreIdFromSession
+      // on SIGNED_IN, but that race is annoying — by setting it here we
+      // guarantee every API call after signup uses the new store, with
+      // zero round-trips and zero possibility of a stale env-fallback
+      // value bleeding through.
+      if (body.store_id) setCurrentStoreId(body.store_id);
       // Activation gate — verify MLCC creds via RPA probe before scanner.
       setPendingActivationStoreName(storeName.trim() || "your store");
       setPendingActivationStoreId(body.store_id ?? null);
