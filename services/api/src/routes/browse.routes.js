@@ -181,7 +181,19 @@ router.get("/browse", async (req, res) => {
   }
   const rows = Array.isArray(data) ? data : [];
   const hasMore = rows.length > limit;
-  const products = hasMore ? rows.slice(0, limit) : rows;
+  const sliced = hasMore ? rows.slice(0, limit) : rows;
+
+  /*
+    Alias snake_case → camelCase for fields the scanner client expects in
+    that shape. mlcc_items stores image_url (added in 20260603020000),
+    but the MlccProduct TS type uses `imageUrl`. We spread the original
+    row so all other fields stay snake_case (matches the type's mixed
+    convention) and add the camelCase image alias on top.
+  */
+  const products = sliced.map((row) => ({
+    ...row,
+    imageUrl: row.image_url ?? null,
+  }));
 
   let nextCursor = null;
   if (hasMore && products.length > 0) {

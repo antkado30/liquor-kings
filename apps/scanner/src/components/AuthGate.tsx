@@ -20,6 +20,7 @@ import {
 } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { scannerMisconfigured, supabase } from "../lib/supabase";
+import { OnboardingActivation } from "./OnboardingActivation";
 
 type AuthGateProps = {
   children: ReactNode;
@@ -32,6 +33,51 @@ export function AuthGate({ children }: AuthGateProps) {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Mode toggle (task #78, 2026-06-06): "login" = existing dad/staff flow;
+  // "signup" = a new store owner creating their LK account from scratch.
+  // The signup mode opens up the full multi-store onboarding form.
+  // Initial default: respect URL hash so /scanner#signup lands on signup
+  // tab. Marketing CTAs link to /scanner#signup so the flow is seamless.
+  const [mode, setMode] = useState<"login" | "signup">(() => {
+    if (typeof window !== "undefined" && window.location.hash === "#signup") {
+      return "signup";
+    }
+    return "login";
+  });
+  // Signup form state.
+  const [storeName, setStoreName] = useState("");
+  const [liquorLicense, setLiquorLicense] = useState("");
+  const [mlccUsername, setMlccUsername] = useState("");
+  const [mlccPassword, setMlccPassword] = useState("");
+  const [addressLine1, setAddressLine1] = useState("");
+  const [city, setCity] = useState("");
+  const [stateAbbr, setStateAbbr] = useState("MI");
+  const [postalCode, setPostalCode] = useState("");
+  /*
+   * Activation gate (task #84, 2026-06-06). When `pendingActivation`
+   * is true we render OnboardingActivation INSTEAD of children — the
+   * user just signed up and we want to verify their MLCC creds work
+   * via a real RPA probe before they touch the scanner.
+   *
+   * Set true on successful signup. Existing-user login leaves it
+   * false. After verification completes (succeed OR user skips),
+   * onComplete fires and we drop into the scanner.
+   *
+   * State is in-memory only — a refresh sends the user straight to
+   * the scanner (where their first Validate will surface real errors
+   * if creds are wrong). Persistent activation status is a follow-up.
+   */
+  const [pendingActivation, setPendingActivation] = useState(false);
+  const [pendingActivationStoreName, setPendingActivationStoreName] =
+    useState<string>("");
+  /*
+   * Brand-new-signup store_id. Returned by /auth/signup and held only
+   * for the activation flow. We can't rely on VITE_SCANNER_STORE_ID
+   * (build-time, baked-in for dad's store) — the activation RPA needs
+   * to hit the *new* user's just-created store.
+   */
+  const [pendingActivationStoreId, setPendingActivationStoreId] =
+    useState<string | null>(null);
 
   useEffect(() => {
     // Misconfigured build (missing Supabase env vars) — skip auth entirely
@@ -72,6 +118,72 @@ export function AuthGate({ children }: AuthGateProps) {
     }
   }
 
+  /*
+   * Sign-up handler (task #78). Posts to /auth/signup which provisions:
+   *   1. Supabase Auth user
+   *   2. stores row with encrypted MLCC creds
+   *   3. store_users link row
+   * On success: immediately signs the user in with the same email +
+   * password they just created. Drops them straight into their scanner.
+   */
+  async function handleSignUp(e: FormEvent) {
+    e.preventDefault();
+    setErrorMsg(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          store_name: storeName.trim(),
+          liquor_license: liquorLicense.trim(),
+          mlcc_username: mlccUsername.trim(),
+          mlcc_password: mlccPassword,
+          address_line1: addressLine1.trim() || undefined,
+          city: city.trim() || undefined,
+          state: stateAbbr.trim() || undefined,
+          postal_code: postalCode.trim() || undefined,
+        }),
+      });
+      const body = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        details?: string;
+        store_id?: string;
+      };
+      if (!res.ok || body.ok !== true) {
+        const msg = humanizeSignupError(body.error);
+        setErrorMsg(msg);
+        setSubmitting(false);
+        return;
+      }
+      // Auto-sign-in to land in the scanner immediately.
+      const { error: signInErr } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      setSubmitting(false);
+      if (signInErr) {
+        setErrorMsg(
+          `Account created but couldn't sign in: ${signInErr.message}. Switch to Sign in tab.`,
+        );
+        return;
+      }
+      // Activation gate — verify MLCC creds via RPA probe before scanner.
+      setPendingActivationStoreName(storeName.trim() || "your store");
+      setPendingActivationStoreId(body.store_id ?? null);
+      setPendingActivation(true);
+      // Auth state change subscription will flip session; with
+      // pendingActivation=true the render path will show the
+      // OnboardingActivation modal instead of children.
+    } catch (err) {
+      setSubmitting(false);
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   if (loading) {
     return (
       <div style={loadingStyle}>
@@ -100,15 +212,80 @@ export function AuthGate({ children }: AuthGateProps) {
   if (!session) {
     return (
       <div style={shellStyle}>
-        <form onSubmit={handleSignIn} style={cardStyle}>
-          <h1 style={titleStyle}>Liquor Kings Scanner</h1>
-          <p style={subtitleStyle}>Sign in to start scanning.</p>
+        <form
+          onSubmit={mode === "login" ? handleSignIn : handleSignUp}
+          style={cardStyle}
+        >
+          <h1 style={titleStyle}>Liquor Kings</h1>
+          <p style={subtitleStyle}>
+            {mode === "login"
+              ? "Sign in to start scanning."
+              : "Sign your store up for Liquor Kings."}
+          </p>
+
+          {/* Mode toggle — tabs */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("login");
+                setErrorMsg(null);
+              }}
+              style={{
+                ...tabStyle,
+                ...(mode === "login" ? tabActiveStyle : {}),
+              }}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("signup");
+                setErrorMsg(null);
+              }}
+              style={{
+                ...tabStyle,
+                ...(mode === "signup" ? tabActiveStyle : {}),
+              }}
+            >
+              Sign up
+            </button>
+          </div>
+
+          {mode === "signup" ? (
+            <>
+              <label style={labelStyle}>
+                <span style={labelTextStyle}>Store name</span>
+                <input
+                  type="text"
+                  required
+                  value={storeName}
+                  onChange={(e) => setStoreName(e.target.value)}
+                  style={inputStyle}
+                  placeholder="Your store name"
+                />
+              </label>
+              <label style={labelStyle}>
+                <span style={labelTextStyle}>Liquor license number</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  required
+                  value={liquorLicense}
+                  onChange={(e) => setLiquorLicense(e.target.value)}
+                  style={inputStyle}
+                  placeholder="1234567"
+                />
+              </label>
+            </>
+          ) : null}
 
           <label style={labelStyle}>
             <span style={labelTextStyle}>Email</span>
             <input
               type="email"
-              autoComplete="username"
+              autoComplete={mode === "login" ? "username" : "email"}
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -121,25 +298,165 @@ export function AuthGate({ children }: AuthGateProps) {
             <span style={labelTextStyle}>Password</span>
             <input
               type="password"
-              autoComplete="current-password"
+              autoComplete={
+                mode === "login" ? "current-password" : "new-password"
+              }
               required
+              minLength={mode === "signup" ? 8 : undefined}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               style={inputStyle}
+              placeholder={mode === "signup" ? "Minimum 8 characters" : ""}
             />
           </label>
+
+          {mode === "signup" ? (
+            <>
+              <p
+                style={{
+                  ...subtitleStyle,
+                  fontSize: 12,
+                  marginTop: 12,
+                  marginBottom: 6,
+                }}
+              >
+                MLCC (michigan.gov MILO) credentials — same login you use for
+                lara.michigan.gov to place orders. We encrypt and only use them
+                to place orders on your behalf.
+              </p>
+              <label style={labelStyle}>
+                <span style={labelTextStyle}>MLCC username</span>
+                <input
+                  type="text"
+                  required
+                  value={mlccUsername}
+                  onChange={(e) => setMlccUsername(e.target.value)}
+                  style={inputStyle}
+                  autoComplete="off"
+                />
+              </label>
+              <label style={labelStyle}>
+                <span style={labelTextStyle}>MLCC password</span>
+                <input
+                  type="password"
+                  required
+                  value={mlccPassword}
+                  onChange={(e) => setMlccPassword(e.target.value)}
+                  style={inputStyle}
+                  autoComplete="off"
+                />
+              </label>
+              {/* Address — optional but useful for billing later */}
+              <details style={{ marginTop: 8 }}>
+                <summary
+                  style={{
+                    cursor: "pointer",
+                    fontSize: 12,
+                    opacity: 0.75,
+                    marginBottom: 8,
+                  }}
+                >
+                  Store address (optional)
+                </summary>
+                <label style={labelStyle}>
+                  <span style={labelTextStyle}>Street</span>
+                  <input
+                    type="text"
+                    value={addressLine1}
+                    onChange={(e) => setAddressLine1(e.target.value)}
+                    style={inputStyle}
+                  />
+                </label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <label style={{ ...labelStyle, flex: 2 }}>
+                    <span style={labelTextStyle}>City</span>
+                    <input
+                      type="text"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      style={inputStyle}
+                    />
+                  </label>
+                  <label style={{ ...labelStyle, flex: 1 }}>
+                    <span style={labelTextStyle}>State</span>
+                    <input
+                      type="text"
+                      maxLength={2}
+                      value={stateAbbr}
+                      onChange={(e) =>
+                        setStateAbbr(e.target.value.toUpperCase())
+                      }
+                      style={inputStyle}
+                    />
+                  </label>
+                  <label style={{ ...labelStyle, flex: 1 }}>
+                    <span style={labelTextStyle}>ZIP</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={10}
+                      value={postalCode}
+                      onChange={(e) => setPostalCode(e.target.value)}
+                      style={inputStyle}
+                    />
+                  </label>
+                </div>
+              </details>
+            </>
+          ) : null}
 
           {errorMsg && <div style={errorStyle}>{errorMsg}</div>}
 
           <button type="submit" disabled={submitting} style={buttonStyle}>
-            {submitting ? "Signing in…" : "Sign in"}
+            {submitting
+              ? mode === "login"
+                ? "Signing in…"
+                : "Creating account…"
+              : mode === "login"
+                ? "Sign in"
+                : "Create account"}
           </button>
         </form>
       </div>
     );
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      {pendingActivation ? (
+        <OnboardingActivation
+          storeName={pendingActivationStoreName}
+          storeId={pendingActivationStoreId}
+          onComplete={() => {
+            setPendingActivation(false);
+            setPendingActivationStoreId(null);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function humanizeSignupError(code?: string): string {
+  switch (code) {
+    case "invalid_email":
+      return "That email looks invalid.";
+    case "password_too_short_min_8":
+      return "Password must be at least 8 characters.";
+    case "store_name_required":
+      return "Store name is required.";
+    case "liquor_license_invalid":
+      return "Liquor license must be 5–10 digits.";
+    case "mlcc_credentials_required":
+      return "MLCC username and password are required.";
+    case "email_in_use":
+      return "An account already exists with that email. Try signing in.";
+    case "credential_encryption_failed":
+      return "We couldn't securely save your MLCC credentials. Please try again.";
+    default:
+      return code ? `Sign-up failed: ${code}` : "Sign-up failed.";
+  }
 }
 
 // Inline styles to avoid adding a CSS dependency for the gate alone. The
@@ -226,4 +543,22 @@ const buttonStyle = {
   fontWeight: 600,
   cursor: "pointer",
   marginTop: 4,
+} as const;
+
+const tabStyle = {
+  flex: 1,
+  background: "transparent",
+  color: "rgba(255,255,255,0.6)",
+  border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: 6,
+  padding: "8px 10px",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+} as const;
+
+const tabActiveStyle = {
+  background: "rgba(58, 130, 247, 0.18)",
+  color: "#fff",
+  borderColor: "rgba(58, 130, 247, 0.6)",
 } as const;

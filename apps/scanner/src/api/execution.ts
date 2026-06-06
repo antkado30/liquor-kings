@@ -172,17 +172,33 @@ export type GetRunSummaryResult =
 
 export async function getRunSummary(args: {
   runId: string;
+  /**
+   * Onboarding activation override (task #84). When set, sends this
+   * value as X-Store-Id instead of the build-time scanner store id.
+   * Required for polling activation runs of brand-new signups whose
+   * store doesn't match VITE_SCANNER_STORE_ID.
+   */
+  overrideStoreId?: string;
 }): Promise<GetRunSummaryResult> {
   const url = `${EXECUTION_API_BASE}/${encodeURIComponent(args.runId)}/summary`;
   let res: Response;
+  let headers: Record<string, string>;
+  if (args.overrideStoreId) {
+    const bearer = await getAuthBearer();
+    if (!bearer) return { ok: false, error: "no_session" };
+    headers = {
+      Authorization: `Bearer ${bearer}`,
+      "X-Store-Id": args.overrideStoreId,
+    };
+  } else {
+    headers = await getAuthHeaders();
+  }
   try {
     res = await fetchWithRetry(
       url,
       {
         method: "GET",
-        headers: {
-          ...(await getAuthHeaders()),
-        },
+        headers,
       },
       { maxRetries: 2, baseDelayMs: 500, timeoutMs: 8000 },
     );
@@ -204,6 +220,78 @@ export async function getRunSummary(args: {
     return { ok: false, error: err };
   }
   return { ok: true, summary: raw.data as RunSummary };
+}
+
+/**
+ * Trigger a cart_reset_only execution run (task #57, 2026-06-04).
+ * Logs in to MILO and clears the cart server-side via RPA. Poll with
+ * getRunSummary({ runId }) until isTerminalStatus(status) is true.
+ *
+ * @param overrideStoreId — Optional. When provided, used instead of
+ *   the build-time VITE_SCANNER_STORE_ID. Required for the onboarding
+ *   activation flow (task #84, 2026-06-06): brand-new signups need to
+ *   probe THEIR newly-created store, not the build-time store.
+ *   IMPORTANT: when overrideStoreId is set we also skip sending the
+ *   X-Store-Id header — `resolveAuthenticatedStore` middleware would
+ *   reject the call as "Not a member of specified store" if the
+ *   header pointed at the wrong store (the build-time one).
+ */
+export async function triggerMlccCartReset(
+  overrideStoreId?: string,
+): Promise<TriggerRpaRunResult> {
+  const storeId = overrideStoreId ?? getStoreId();
+  const url = `${EXECUTION_API_BASE}/cart-reset/${encodeURIComponent(storeId)}`;
+  // Build headers. For the override path we must NOT send X-Store-Id
+  // because the scanner's build-time VITE_SCANNER_STORE_ID points at a
+  // different store and the middleware compares header → membership.
+  const baseHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (overrideStoreId) {
+    const bearer = await getAuthBearer();
+    if (!bearer) return { ok: false, error: "no_session" };
+    baseHeaders.Authorization = `Bearer ${bearer}`;
+    baseHeaders["X-Store-Id"] = overrideStoreId;
+  } else {
+    Object.assign(baseHeaders, await getAuthHeaders());
+  }
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      url,
+      {
+        method: "POST",
+        headers: baseHeaders,
+        body: "{}",
+      },
+      { maxRetries: 2, baseDelayMs: 500, timeoutMs: 15_000 },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
+  }
+  let raw: Record<string, unknown>;
+  try {
+    raw = (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
+  if (!res.ok || raw.success !== true) {
+    const err =
+      typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`;
+    return { ok: false, error: err };
+  }
+  const data = raw.data as Record<string, unknown> | undefined;
+  if (!data || typeof data.id !== "string") {
+    return { ok: false, error: "invalid_response_shape" };
+  }
+  return {
+    ok: true,
+    runId: data.id,
+    status: (data.status as RunStatus) ?? "queued",
+  };
 }
 
 export function isTerminalStatus(status: RunStatus): boolean {

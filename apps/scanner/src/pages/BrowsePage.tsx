@@ -231,6 +231,7 @@ export function BrowsePage() {
             className="browse-card"
             onClick={() => void openProduct(p)}
           >
+            <BrowseCardImage product={p} />
             <div className="browse-card__name">{p.name}</div>
             <div className="browse-card__meta muted small">
               {p.bottle_size_label ?? `${p.bottle_size_ml ?? "?"} mL`}
@@ -459,4 +460,105 @@ function ToastClearer({
     return () => clearTimeout(t);
   }, [toast, onClear]);
   return null;
+}
+
+/**
+ * Category placeholder colors. Tony's spec: every browse card must
+ * show *something* visual, never a blank box. When image_url is NULL
+ * (which is the vast majority of the ~13k SKUs until backfill runs),
+ * we render a category-tinted bottle silhouette so the grid still
+ * scans cleanly as a "wall of bottles."
+ *
+ * The pin-point-accuracy rule from Tony — "we cannot have random
+ * pictures to random bottles like imagine putting a fifth of Tito's
+ * picture on a pint of Hennessy code" — means we ONLY render the
+ * real <img> when the row has a verified image_url set by the
+ * backfill script. We never substitute "any image from this
+ * category" as a stand-in for a specific SKU.
+ */
+const CATEGORY_TINTS: Record<string, string> = {
+  Vodka: "#cfe2ff",
+  Whiskey: "#e2b48a",
+  Bourbon: "#d6a06b",
+  Scotch: "#c5985a",
+  Tequila: "#dfe8b0",
+  Rum: "#d8bfa0",
+  Gin: "#dde6df",
+  Liqueur: "#e8cce0",
+  Cordials: "#e8cce0",
+  Brandy: "#d6b89a",
+  Cognac: "#d6b89a",
+  Mezcal: "#d8d0a8",
+  Wine: "#e1bcc8",
+  Cocktail: "#cfe2ff",
+};
+
+function tintForCategory(category: string | null | undefined): string {
+  if (!category) return "#d8dee5";
+  // Match case-insensitively against the tints map. The catalog uses
+  // varying casing ("Tequila", "TEQUILA", "Whiskey/Bourbon") so we look
+  // for the first key whose lowercased name appears in the category.
+  const lc = category.toLowerCase();
+  for (const [key, color] of Object.entries(CATEGORY_TINTS)) {
+    if (lc.includes(key.toLowerCase())) return color;
+  }
+  return "#d8dee5";
+}
+
+/**
+ * Bottle silhouette SVG used when image_url is null. Inline so we
+ * don't ship a separate asset request per card; the browser will
+ * dedupe identical inline data in memory.
+ *
+ * Aspect roughly matches a 750mL bottle (tall and narrow) so the
+ * placeholder column stays consistent with future real photos.
+ */
+function PlaceholderBottle({ tint }: { tint: string }) {
+  return (
+    <svg
+      viewBox="0 0 60 120"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      style={{ width: "auto", height: "100%", display: "block" }}
+    >
+      {/* Neck */}
+      <rect x="25" y="6" width="10" height="22" rx="2" fill={tint} stroke="#888" strokeWidth="0.6" />
+      {/* Shoulder */}
+      <path
+        d="M25 28 Q18 32 18 44 L18 110 Q18 116 24 116 L36 116 Q42 116 42 110 L42 44 Q42 32 35 28 Z"
+        fill={tint}
+        stroke="#888"
+        strokeWidth="0.6"
+      />
+      {/* Label band */}
+      <rect x="20" y="62" width="20" height="28" fill="#fff" opacity="0.85" stroke="#888" strokeWidth="0.4" />
+    </svg>
+  );
+}
+
+/**
+ * Browse card image slot. Renders the real product image if the
+ * catalog row has image_url, otherwise a category-tinted bottle
+ * silhouette. Sets `loading="lazy"` so Tony's iPhone doesn't try to
+ * pull every image at once when the grid first paints.
+ */
+function BrowseCardImage({ product }: { product: MlccProduct }) {
+  const [errored, setErrored] = useState(false);
+  const url = product.imageUrl;
+  const showImage = !!url && !errored;
+  return (
+    <div className="browse-card__img">
+      {showImage ? (
+        <img
+          src={url ?? undefined}
+          alt={product.name}
+          loading="lazy"
+          decoding="async"
+          onError={() => setErrored(true)}
+        />
+      ) : (
+        <PlaceholderBottle tint={tintForCategory(product.category)} />
+      )}
+    </div>
+  );
 }
