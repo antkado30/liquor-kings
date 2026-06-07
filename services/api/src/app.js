@@ -24,6 +24,11 @@ import ordersRouter from "./routes/orders.routes.js";
 import tagsRouter from "./routes/tags.routes.js";
 import homeRouter from "./routes/home.routes.js";
 import browseRouter from "./routes/browse.routes.js";
+import orderTemplatesRouter, { runSchedulerHandler as orderTemplatesRunSchedulerHandler } from "./routes/order-templates.routes.js";
+import authRouter from "./routes/auth.routes.js";
+import { landingPageHtml } from "./lib/landing-page.js";
+import { termsPageHtml } from "./lib/terms-page.js";
+import { privacyPageHtml } from "./lib/privacy-page.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -116,6 +121,23 @@ app.use("/home", resolveAuthenticatedStore, homeRouter);
  * 2026-06-03). Mounted under /catalog alongside the vision endpoint.
  */
 app.use("/catalog", resolveAuthenticatedStore, browseRouter);
+/**
+ * App-level registration for the order-templates cron endpoint so it
+ * bypasses resolveAuthenticatedStore — cron-job.org sends X-Cron-Token,
+ * not Authorization: Bearer. Mirrors the same pattern used for
+ * /price-book/upc/:upc above. Must be registered BEFORE the
+ * /order-templates router mount so Express matches it first.
+ */
+app.post("/order-templates/run-scheduler", orderTemplatesRunSchedulerHandler);
+app.use("/order-templates", resolveAuthenticatedStore, orderTemplatesRouter);
+
+/*
+ * Public auth routes (task #78). NOT behind resolveAuthenticatedStore
+ * because new sign-ups don't have a session bearer yet — they're
+ * literally creating one. The signup handler does its own validation
+ * + rate-limit logic.
+ */
+app.use("/auth", authRouter);
 
 /**
  * Operator admin SPA (built apps/admin). Same origin as session + API under /operator-review/*.
@@ -221,6 +243,41 @@ if (scannerDistReady) {
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", message: "Liquor Kings API running" });
+});
+
+/*
+ * Public marketing landing page (task #79, 2026-06-06). Static HTML
+ * served from a module so apex `liquor-kings.fly.dev` shows the
+ * product pitch instead of dropping straight into a login screen.
+ *
+ * GET / → landing
+ * GET /signup → redirect to scanner with signup tab focused
+ */
+app.get("/", (req, res) => {
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.set("Cache-Control", "public, max-age=300");
+  res.send(landingPageHtml());
+});
+app.get("/signup", (req, res) => {
+  res.redirect(302, "/scanner#signup");
+});
+
+/*
+ * Static legal pages (task #87, 2026-06-06). Served at /terms and
+ * /privacy by Express directly — no React, no auth, no DB. The
+ * footer of the landing page and (eventually) every signed-in screen
+ * link here. Cache 5 minutes so we can roll updates without a long
+ * stale window.
+ */
+app.get(["/terms", "/terms/"], (req, res) => {
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.set("Cache-Control", "public, max-age=300");
+  res.send(termsPageHtml());
+});
+app.get(["/privacy", "/privacy/"], (req, res) => {
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.set("Cache-Control", "public, max-age=300");
+  res.send(privacyPageHtml());
 });
 
 app.get(["/operator-review", "/operator-review/"], (req, res) => {

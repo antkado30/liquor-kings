@@ -91,9 +91,11 @@
   "Update MLCC credentials" button inside the activation failure
   modal. PATCH /auth/me/mlcc-credentials re-encrypts with AES-256-GCM
   and stamps mlcc_credentials_updated_at. (#86, 2026-06-06)
-- ⏳ **ToS + Privacy policy pages.** V1 launch-blocker. Generic
-  templates or hand-rolled for LK. **Next up.**
-- ⏳ **Custom domain liquorkings.com** pointed at Fly.
+- ✅ **ToS + Privacy policy pages.** Plain-English drafts tailored to
+  LK + Michigan MLCC context. Served at /terms and /privacy with
+  brand-matching styling. Footer links on landing page. **Get a
+  lawyer to review before broad public launch.** (#87, 2026-06-06)
+- ⏳ **Custom domain liquorkings.com** pointed at Fly. **Next up.**
 - ⏳ **Persistent activation state** (`stores.mlcc_credentials_last_verified_at`)
   so refresh-mid-activation doesn't drop user into a broken state.
 - ⏳ **Real Sentry DSN setup** (replace placeholder).
