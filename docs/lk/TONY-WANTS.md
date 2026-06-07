@@ -95,7 +95,10 @@
   LK + Michigan MLCC context. Served at /terms and /privacy with
   brand-matching styling. Footer links on landing page. **Get a
   lawyer to review before broad public launch.** (#87, 2026-06-06)
-- ⏳ **Custom domain liquorkings.com** pointed at Fly. **Next up.**
+- ⏳ **Custom domain liquorkings.com** pointed at Fly. **Step-by-step
+  runbook at [docs/lk/runbooks/CUSTOM-DOMAIN-LIQUORKINGS.md](runbooks/CUSTOM-DOMAIN-LIQUORKINGS.md).**
+  Mostly DNS work — needs Tony to register/own the domain. ~5–15 min
+  hands-on, then cert provisioning runs in background.
 - ⏳ **Persistent activation state** (`stores.mlcc_credentials_last_verified_at`)
   so refresh-mid-activation doesn't drop user into a broken state.
 - ⏳ **Real Sentry DSN setup** (replace placeholder).
