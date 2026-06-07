@@ -547,6 +547,15 @@ export function ScannerPage() {
         <CartDrawer
           cart={cart}
           preValidate={preValidate}
+          /*
+           * Plumb store identity into CartDrawer (task #89, 2026-06-07)
+           * so the pre-submit verification modal can render
+           * "Sending to MILO for Colony Party Store (430342)" at the
+           * top of the confirm card. Catches the rare "wrong store"
+           * mistake as part of the integrity-doctrine check.
+           */
+          storeName={storeMeta?.store_name ?? null}
+          storeLicense={storeMeta?.liquor_license ?? null}
           onClose={() => setShowCart(false)}
           onSubmit={() => {
             setShowCart(false);

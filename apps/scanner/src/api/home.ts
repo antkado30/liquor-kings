@@ -21,6 +21,10 @@ export type SmartCard = {
 };
 
 export type StoreVerificationMeta = {
+  /** Store display name — for the pre-submit verification modal (#89). */
+  store_name?: string | null;
+  /** Liquor license # — for the pre-submit verification modal (#89). */
+  liquor_license?: string | null;
   mlcc_credentials_last_verified_at: string | null;
 };
 

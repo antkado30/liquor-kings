@@ -42,6 +42,7 @@ import {
 import { cartLineId, type CartContextValue } from "../hooks/useCart";
 import { useSubmission } from "../hooks/useSubmission";
 import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
+import { SubmitConfirmationModal } from "./SubmitConfirmationModal";
 import {
   generateValidQuantities,
   getOrderingRuleDisplay,
@@ -192,9 +193,24 @@ type CartDrawerProps = {
    * it, the drawer falls back to the foreground-only flow.
    */
   preValidate?: BackgroundPreValidate;
+  /**
+   * Store identity for the pre-submit verification modal (task #89,
+   * 2026-06-07). Optional — when missing, the modal still renders
+   * with a generic "Your store" header. Source: /home/smart-cards
+   * store_meta.store_name / liquor_license, surfaced via ScannerPage.
+   */
+  storeName?: string | null;
+  storeLicense?: string | null;
 };
 
-export function CartDrawer({ cart, onClose, onLineProductClick, preValidate }: CartDrawerProps) {
+export function CartDrawer({
+  cart,
+  onClose,
+  onLineProductClick,
+  preValidate,
+  storeName,
+  storeLicense,
+}: CartDrawerProps) {
   const {
     items,
     groupedByAda,
@@ -1324,44 +1340,41 @@ export function CartDrawer({ cart, onClose, onLineProductClick, preValidate }: C
         </div>
       ) : null}
 
-      {/* ─── Submit-confirm modal (server-side gates still apply) ─────────── */}
+      {/* ─── Pre-submit verification modal (task #89, 2026-06-07) ─────────────
+        *
+        * Discipline #3 of the LK Integrity Doctrine in action — pre-commit
+        * verification with the FULL cart in plain English. Tony locked this
+        * pattern on 2026-06-07: no opt-out, ever. The yes/no popup that used
+        * to live here was insufficient — it added a tap but didn't catch
+        * integrity bugs. The line-by-line summary catches them because the
+        * user sees the actual order in their own language and can stop if
+        * anything looks wrong (wrong UPC mapping, phantom cart from a
+        * background pre-validate, vision picker picking the wrong bottle).
+        */}
       {confirmSubmit ? (
-        <div
-          className="confirm-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Confirm submit order"
-          onClick={() => setConfirmSubmit(false)}
-        >
-          <div className="confirm-card" onClick={(e) => e.stopPropagation()}>
-            <h2 className="confirm-title">Submit this order to MILO?</h2>
-            <p className="confirm-body">
-              {items.length} item{items.length === 1 ? "" : "s"} ·{" "}
-              {money(totalCost)}. MLCC already confirmed the cart is ready —
-              this submits the order to MILO for real. Final review:
-              this is your last chance to cancel.
-            </p>
-            <div className="confirm-actions">
-              <button
-                type="button"
-                className="btn secondary"
-                onClick={() => setConfirmSubmit(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn primary"
-                onClick={() => {
-                  setConfirmSubmit(false);
-                  void startSubmit();
-                }}
-              >
-                Submit
-              </button>
-            </div>
-          </div>
-        </div>
+        <SubmitConfirmationModal
+          items={items}
+          subtotal={totalCost}
+          /*
+           * validateResult only exists on a subset of SubmissionState
+           * variants (validateDone, plus the in-flight submit states
+           * that carry it forward). Type-narrow conservatively — if
+           * we don't have it, the modal falls back to subtotal-only.
+           * In practice this is null only when Submit is somehow
+           * clicked without a successful Validate, which the UI
+           * already gates against.
+           */
+          orderSummary={
+            "validateResult" in state ? state.validateResult?.order_summary ?? null : null
+          }
+          storeName={storeName ?? null}
+          storeLicense={storeLicense ?? null}
+          onCancel={() => setConfirmSubmit(false)}
+          onConfirm={() => {
+            setConfirmSubmit(false);
+            void startSubmit();
+          }}
+        />
       ) : null}
     </div>
   );

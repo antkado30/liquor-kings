@@ -62,6 +62,14 @@ Trustworthy + Proud-of. The doctrine is the moat. Read the doc.
 ## Product & vision wants
 
 ### Shipped ✅
+
+- ✅ **Pre-submit verification modal** (discipline #3 in action). Tap
+  Submit → full line-by-line summary: store name, license #, every
+  bottle with name + size + qty + unit price + line total, MLCC's
+  authoritative subtotal/tax/total, "this can't be unsent" warning,
+  Cancel / Confirm buttons. **No opt-out, ever.** Kills integrity
+  surfaces #1 (UPC mapping), #4 (phantom cart), #5 (vision picker).
+  (#89, 2026-06-07)
 - ✅ **Phone-first SaaS for Michigan liquor stores** integrating MLCC's
   MILO ordering portal via RPA.
 - ✅ **Multi-store sign-up flow.** Landing page → signup form →

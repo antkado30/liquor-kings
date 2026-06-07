@@ -280,13 +280,28 @@ router.get("/smart-cards", async (req, res) => {
 async function loadStoreVerificationMeta(supabase, storeId) {
   const { data, error } = await supabase
     .from("stores")
-    .select("mlcc_credentials_last_verified_at")
+    .select("store_name, liquor_license, mlcc_credentials_last_verified_at")
     .eq("id", storeId)
     .single();
   if (error || !data) {
-    return { mlcc_credentials_last_verified_at: null };
+    return {
+      store_name: null,
+      liquor_license: null,
+      mlcc_credentials_last_verified_at: null,
+    };
   }
   return {
+    /*
+     * Surface the store's name + license # to the scanner so the
+     * pre-submit verification modal (task #89, 2026-06-06) can show
+     * the user "you're about to send this to Colony Party Store
+     * (430342)" — catches the rare-but-catastrophic "wrong store"
+     * mistake as part of the integrity-doctrine check. RLS guarantees
+     * the caller is a member of this store, so leaking the name is
+     * a no-op privacy-wise.
+     */
+    store_name: data.store_name ?? null,
+    liquor_license: data.liquor_license ?? null,
     mlcc_credentials_last_verified_at:
       data.mlcc_credentials_last_verified_at ?? null,
   };
