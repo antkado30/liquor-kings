@@ -52,9 +52,11 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   spinner on every tab switch.
 - ✅ **Sync auth token** (2026-06-07) — JWT read from an in-memory session
   mirror instead of awaiting `getSession()` before every API call.
-- ⏳ **Code-split the bundle** — all pages + the ZXing scanner lib ship in
-  one ~930 KB JS bundle. Lazy-load routes + load ZXing only on the scan
-  screen. Cuts cold-load / first-open time.
+- ✅ **Code-split the bundle** (2026-06-07) — the 7 non-home pages + the
+  Assistant/Analytics overlays are now lazy-loaded into their own small
+  chunks (Browse 15KB, Templates 10KB, etc.), prefetched on idle so first
+  taps stay instant. ZXing was already its own dynamic chunk. Home bundle
+  shrank; other screens no longer block first paint.
 - ⏳ **Backend speed** — API in Fly ORD, DB in us-east-1; parallelize the
   sequential queries in `/browse` and `/home/smart-cards`, confirm indexes.
 - 💡 Co-locate API + DB region (bigger move, later).

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   confirmUpcMapping,
@@ -12,9 +12,16 @@ import { signOut } from "../lib/supabase";
 import { Sentry } from "../lib/sentry";
 import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
-import { AssistantPanel } from "../components/AssistantPanel";
 import { ProductCard } from "../components/ProductCard";
-import { AnalyticsDashboard } from "../components/AnalyticsDashboard";
+// Heavy, on-demand overlays — lazy-loaded so they're not in the home bundle.
+const AssistantPanel = lazy(() =>
+  import("../components/AssistantPanel").then((m) => ({ default: m.AssistantPanel })),
+);
+const AnalyticsDashboard = lazy(() =>
+  import("../components/AnalyticsDashboard").then((m) => ({
+    default: m.AnalyticsDashboard,
+  })),
+);
 import { ScheduledTemplateBanner } from "../components/ScheduledTemplateBanner";
 import { SmartCards } from "../components/SmartCards";
 import { VerifyMlccBanner } from "../components/VerifyMlccBanner";
@@ -589,10 +596,14 @@ export function ScannerPage() {
       ) : null}
 
       {showAssistant ? (
-        <AssistantPanel cart={cart} onClose={() => setShowAssistant(false)} />
+        <Suspense fallback={null}>
+          <AssistantPanel cart={cart} onClose={() => setShowAssistant(false)} />
+        </Suspense>
       ) : null}
       {showDashboard ? (
-        <AnalyticsDashboard onClose={() => setShowDashboard(false)} />
+        <Suspense fallback={null}>
+          <AnalyticsDashboard onClose={() => setShowDashboard(false)} />
+        </Suspense>
       ) : null}
 
       {confirmSignOut ? (
