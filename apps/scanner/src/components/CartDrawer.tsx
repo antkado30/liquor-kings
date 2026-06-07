@@ -357,10 +357,12 @@ export function CartDrawer({
     if (state.kind === "validateDone") invalidateValidation();
     updateQuantity(code, qty);
   };
-  const handleClearCart = () => {
-    if (state.kind !== "idle") reset();
-    clearCart();
-  };
+  // handleClearCart used to be a separate "Clear scanner cart" button;
+  // Tony's 2026-06-07 redesign combined it into "Clear cart" which
+  // goes through the MLCC reset flow (which calls clearCart() locally
+  // on success too). Kept here for reference / future use.
+  void clearCart; // mark referenced
+  void reset; // mark referenced
 
   /*
    * "Reset MLCC cart" handler (task #57, 2026-06-04). Fires the
@@ -957,7 +959,7 @@ export function CartDrawer({
                 }}
                 style={{ marginBottom: 6 }}
               >
-                💾 Save as template
+                Save as template
               </button>
             ) : null}
             {templates.length > 0 ? (
@@ -968,7 +970,7 @@ export function CartDrawer({
                 onClick={() => setShowTemplatePicker(true)}
                 style={{ marginBottom: 8 }}
               >
-                📋 Load saved template
+                Load saved template
                 {templates.length > 1 ? ` (${templates.length})` : ""}
               </button>
             ) : null}
@@ -1002,17 +1004,14 @@ export function CartDrawer({
                 Template error: {templateError}
               </p>
             ) : null}
-            <button type="button" className="btn secondary btn-block" disabled={isBusy} onClick={handleClearCart}>
-              Clear scanner cart
-            </button>
-            <p className="muted small" style={{ marginTop: 4, marginBottom: 8, textAlign: "center" }}>
-              MLCC&apos;s cart resets automatically on your next validate.
-            </p>
             {/*
-              "Reset MLCC cart" (task #57) — actually runs RPA against
-              MILO and clicks Clear Cart. Use when you want a clean MILO
-              state without going through validate. Costs an RPA run
-              (~30-60s cold, ~10-15s with warm session).
+              Single "Clear cart" button (2026-06-07, Tony's call).
+              Tony was right that two buttons was confusing — the
+              scanner cart and MILO cart are conceptually one thing to
+              the user. handleMlccReset opens a confirm modal first,
+              then runs the RPA clear, and clearCart() (local) is
+              called on success. One button, one mental model, with a
+              proper "are you sure" gate.
             */}
             <button
               type="button"
@@ -1022,8 +1021,8 @@ export function CartDrawer({
               style={{ marginBottom: 8 }}
             >
               {mlccResetState.kind === "running"
-                ? "MLCC syncing in background…"
-                : "Reset MLCC cart"}
+                ? "Clearing cart…"
+                : "Clear cart"}
             </button>
             {mlccResetState.kind === "running" ? (
               <p className="muted small" style={{ marginTop: 0, marginBottom: 8, textAlign: "center" }}>
@@ -1320,13 +1319,12 @@ export function CartDrawer({
           onClick={() => setMlccResetState({ kind: "idle" })}
         >
           <div className="confirm-card" onClick={(e) => e.stopPropagation()}>
-            <h2 className="confirm-title">Reset MLCC cart?</h2>
+            <h2 className="confirm-title">Clear cart?</h2>
             <p className="confirm-body">
-              This runs a real Playwright session against MILO, opens
-              your cart, and clicks Clear Cart. Takes 30-60 seconds.
-              Use it when MILO still shows items after you cleared
-              locally — like the Tito&apos;s + Ciroc stuck-in-MILO bug
-              from 5/30.
+              This empties both your scanner cart AND your MILO cart.
+              Runs a real session against MILO and clicks Clear Cart
+              there — takes about 30-60 seconds. Once it&apos;s done
+              the cart is empty on both sides. Can&apos;t be undone.
             </p>
             <div className="confirm-actions">
               <button
@@ -1341,7 +1339,7 @@ export function CartDrawer({
                 className="btn primary"
                 onClick={() => void confirmMlccReset()}
               >
-                Reset MLCC cart
+                Clear cart
               </button>
             </div>
           </div>
