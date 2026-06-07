@@ -26,6 +26,17 @@
 
 ---
 
+## The Integrity Doctrine (the bar)
+
+**See [INTEGRITY-DOCTRINE.md](INTEGRITY-DOCTRINE.md) — the permanent
+standard Tony set 2026-06-06:**
+
+> **"No leaks, no breaks, no nothing. Bugs can't survive."**
+
+This isn't a vibe — it's 12 named operational disciplines that govern
+every code/product decision LK ships. "Perfect" = Predictable +
+Trustworthy + Proud-of. The doctrine is the moat. Read the doc.
+
 ## How Tony wants me to work with him (permanent operating rules)
 
 - ✅ **"Keep pushing" mode is default.** Don't ask permission for next
