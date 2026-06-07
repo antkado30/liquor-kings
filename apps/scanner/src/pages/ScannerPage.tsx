@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   confirmUpcMapping,
   getPriceBookStatus,
@@ -73,6 +73,26 @@ export function ScannerPage() {
   const [showCart, setShowCart] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
+  /*
+   * Auto-open Dashboard / Assistant overlays when the user navigates
+   * to / with a query param (task #90, 2026-06-07). The More page
+   * uses this — `?view=dashboard` and `?view=assistant`. After the
+   * overlay opens we strip the query string so a back-button press
+   * doesn't keep re-opening it.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const view = searchParams.get("view");
+    if (view === "dashboard") {
+      setShowDashboard(true);
+      searchParams.delete("view");
+      setSearchParams(searchParams, { replace: true });
+    } else if (view === "assistant") {
+      setShowAssistant(true);
+      searchParams.delete("view");
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
   /*
    * Persistent activation state (task #88). storeMeta comes back
    * with the smart-cards fetch — undefined while loading, then an
@@ -284,85 +304,30 @@ export function ScannerPage() {
 
   return (
     <div className="page scanner-page">
+      {/*
+        Header redesign (task #90, 2026-06-07). Per Tony, all the
+        scattered top icons (chat, dashboard, orders, browse, settings,
+        sign-out) moved to the bottom tab bar / More page. The ONE icon
+        that stays here is Cart, because Tony explicitly wants to peek
+        at the cart from the scan page without bouncing to a separate
+        screen. Bottom tab Cart navigates to /cart (full page); top-right
+        cart icon opens the inline drawer (quick peek + adjust).
+      */}
       <header className="top-bar">
         <h1 className="top-bar-title">Liquor Kings</h1>
         <div className="top-bar-actions">
           <button
             type="button"
-            className="icon-btn"
-            onClick={() => setShowAssistant(true)}
-            aria-label="Open assistant"
+            className="icon-btn cart-btn"
+            onClick={() => setShowCart(true)}
+            aria-label="Open cart drawer"
           >
-            <span className="assistant-glyph" aria-hidden>
-              💬
-            </span>
-          </button>
-          {/*
-            Analytics dashboard button (task #77, 2026-06-06). Sits
-            between assistant chat and cart so dad can glance at
-            "how's the business" with one tap.
-          */}
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={() => setShowDashboard(true)}
-            aria-label="Open analytics dashboard"
-          >
-            <span aria-hidden>📊</span>
-          </button>
-          <button type="button" className="icon-btn cart-btn" onClick={() => setShowCart(true)} aria-label="Open cart">
             <span className="cart-glyph" aria-hidden>
               🛒
             </span>
-            {cart.totalItems > 0 ? <span className="cart-badge">{cart.totalItems}</span> : null}
-          </button>
-          {/*
-            Orders icon — opens the new /orders page (task #41,
-            2026-06-02). Surfaces MILO confirmation history that used
-            to be locked away in execution_runs.evidence jsonb.
-          */}
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={() => navigate("/orders")}
-            aria-label="View order history"
-            title="Order history"
-          >
-            <span aria-hidden>📋</span>
-          </button>
-          {/*
-            Browse icon — Amazon-style catalog browse (task #64,
-            2026-06-03). Filter by category, ADA, size, sort by
-            price/newest, etc.
-          */}
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={() => navigate("/browse")}
-            aria-label="Browse all bottles"
-            title="Browse"
-          >
-            <span aria-hidden>🔎</span>
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={() => navigate("/settings")}
-            aria-label="Settings"
-            title="Settings"
-          >
-            <span aria-hidden>⚙️</span>
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={() => setConfirmSignOut(true)}
-            aria-label="Sign out"
-            title="Sign out"
-          >
-            <span className="signout-glyph" aria-hidden>
-              ⎋
-            </span>
+            {cart.totalItems > 0 ? (
+              <span className="cart-badge">{cart.totalItems}</span>
+            ) : null}
           </button>
         </div>
       </header>

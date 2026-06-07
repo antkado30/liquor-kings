@@ -128,6 +128,22 @@ Trustworthy + Proud-of. The doctrine is the moat. Read the doc.
 - ⏳ **cron-job.org setup** for daily price-book freshness ping.
 
 ### Future / V2 / post-launch
+- 💡 **Inventory management.** Par levels, on-hand quantity, reorder
+  points, low-stock alerts. Tony confirmed 2026-06-07 this is the
+  NEXT real feature after the tab bar redesign. Promotes to its own
+  bottom tab once built.
+- 💡 **Quantity anomaly detection.** Warn the user before submit if
+  any SKU quantity exceeds 3x the store's historical average. Cheap
+  to build, doctrine-compliant trust-builder. Surfaced inside the
+  pre-submit verification modal.
+- 💡 **First-order pre-flight checklist.** For brand-new signups,
+  one-time guided walkthrough before their first real MLCC order:
+  "verify creds connected ✓, verify product mapping ✓, dry-run
+  validate ✓, confirm store name ✓, then submit." Onboarding polish.
+- 💡 **Per-store reporting expansion.** Order velocity, ADA spending
+  breakdown, seasonal patterns, biggest-mover trends. Founder Console
+  has this for Tony's view; customer-facing per-store version is its
+  own feature for the dashboard tab.
 - 💡 **POS register integrations.** Tony explicitly called this out as
   a future direction.
 - 💡 **Prepare the acquisition narrative.** Who could buy LK, why they

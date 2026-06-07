@@ -1869,7 +1869,9 @@ select {
 .page-shell {
   max-width: 720px;
   margin: 0 auto;
-  padding: 16px 16px 32px;
+  /* Bottom padding reserves room for the fixed BottomTabBar (#90).
+     Without this content sits under the tab bar and gets clipped. */
+  padding: 16px 16px 110px;
   min-height: 100vh;
 }
 
