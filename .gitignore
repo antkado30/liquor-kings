@@ -16,6 +16,14 @@ supabase/.branches/
 tmp/
 *.tmp
 
+# Local debug logs and stray files that have accumulated in the repo root.
+# actions.jsonl is written by some tooling; run_type was a one-off scratch
+# file; supabase/snippets/ is Supabase Studio's local snippet cache.
+actions.jsonl
+services/api/actions.jsonl
+run_type
+supabase/snippets/
+
 # Staging and environment variants
 .env.staging
 .env.production

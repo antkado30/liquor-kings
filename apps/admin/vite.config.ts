@@ -15,6 +15,13 @@ export default defineConfig({
         target: process.env.VITE_PROXY_TARGET ?? "http://127.0.0.1:4000",
         changeOrigin: true,
       },
+      // Admin endpoints (NRS import + ambiguous review queue). Local dev
+      // doesn't set LK_ADMIN_TOKEN so the API allows unauthenticated calls;
+      // in prod the admin SPA is same-origin with the API so no proxy needed.
+      "/admin": {
+        target: process.env.VITE_PROXY_TARGET ?? "http://127.0.0.1:4000",
+        changeOrigin: true,
+      },
     },
   },
 });

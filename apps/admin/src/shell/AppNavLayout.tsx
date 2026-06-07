@@ -9,6 +9,12 @@ export function AppNavLayout() {
       <nav className="admin-nav" aria-label="Admin">
         <div className="admin-nav-title">Operator</div>
         <NavLink
+          to="/founder"
+          className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}
+        >
+          🏰 Founder
+        </NavLink>
+        <NavLink
           to="/overview"
           end
           className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}
@@ -40,6 +46,18 @@ export function AppNavLayout() {
             Run detail
           </span>
         )}
+        <NavLink
+          to="/catalog-review"
+          className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}
+        >
+          Catalog review
+        </NavLink>
+        <NavLink
+          to="/catalog-images"
+          className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}
+        >
+          Catalog images
+        </NavLink>
         <NavLink
           to="/diagnostics"
           className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}

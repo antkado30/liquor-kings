@@ -522,7 +522,11 @@ export function ProductCard({
         ProductCard stays in place.
       */}
       {previewHtml ? (
-        <TagPrintPreview html={previewHtml} onClose={() => setPreviewHtml(null)} />
+        <TagPrintPreview
+          html={previewHtml}
+          mlccCode={selectedProduct.code}
+          onClose={() => setPreviewHtml(null)}
+        />
       ) : null}
     </div>
   );

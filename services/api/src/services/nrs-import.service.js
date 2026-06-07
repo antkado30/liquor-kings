@@ -657,6 +657,12 @@ export async function runNrsImport(supabase, csvText, options = {}) {
       failed: 0,
       writeErrors: [],
     },
+    ambiguousReview: {
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+      writeErrors: [],
+    },
     needsReview: 0,
     sampleAutoConfirmedTier2: [],
     sampleAmbiguous: [],
@@ -757,6 +763,11 @@ export async function runNrsImport(supabase, csvText, options = {}) {
   }
 
   const tier2InsertRows = [];
+  /**
+   * Tier 2 ambiguous matches persisted for operator review.
+   * Schema: nrs_ambiguous_review (one row per UPC, upserted on UPC conflict).
+   */
+  const tier2ReviewRows = [];
   for (const row of tier2Candidates) {
     const result = matchByNameAndSize(row, mlccBySize);
     if (result.tier === 1) {
@@ -790,6 +801,15 @@ export async function runNrsImport(supabase, csvText, options = {}) {
           topThree: result.topThree,
         });
       }
+      // Persist for operator review (upsert on UPC, so re-imports refresh).
+      tier2ReviewRows.push({
+        upc: row.upc,
+        nrs_name: row.name,
+        size_ml: extractSizeFromName(row.name),
+        top_candidates: result.topThree,
+        status: "pending",
+        updated_at: new Date().toISOString(),
+      });
     } else {
       report.matching.tier3NoMatch += 1;
       if (report.sampleSkipped.length < 15) {
@@ -825,6 +845,57 @@ export async function runNrsImport(supabase, csvText, options = {}) {
           chunkIndex: i / CHUNK,
           ...err,
         });
+      }
+    }
+  }
+
+  // Persist Tier 2 ambiguous matches to the operator review queue.
+  // Upsert on UPC so re-imports refresh stale candidate sets without dups.
+  // 50-row chunks + per-row fallback to survive Kong socket-close drops
+  // (same pattern as the upc_mappings tier 2 write above).
+  if (tier2ReviewRows.length > 0) {
+    const REVIEW_CHUNK = 50;
+    for (let i = 0; i < tier2ReviewRows.length; i += REVIEW_CHUNK) {
+      const chunk = tier2ReviewRows.slice(i, i + REVIEW_CHUNK);
+      if (dryRun) {
+        report.ambiguousReview.attempted += chunk.length;
+        report.ambiguousReview.succeeded += chunk.length;
+        continue;
+      }
+      report.ambiguousReview.attempted += chunk.length;
+      const { error: chunkErr } = await supabase
+        .from("nrs_ambiguous_review")
+        .upsert(chunk, { onConflict: "upc" });
+      if (!chunkErr) {
+        report.ambiguousReview.succeeded += chunk.length;
+        continue;
+      }
+      // Chunk failed — fall back to per-row writes so one bad row can't kill the rest.
+      for (const single of chunk) {
+        try {
+          const { error: rowErr } = await supabase
+            .from("nrs_ambiguous_review")
+            .upsert([single], { onConflict: "upc" });
+          if (rowErr) {
+            report.ambiguousReview.failed += 1;
+            report.ambiguousReview.writeErrors.push({
+              phase: "tier2_review",
+              chunkIndex: i / REVIEW_CHUNK,
+              upc: single.upc,
+              message: rowErr.message,
+            });
+          } else {
+            report.ambiguousReview.succeeded += 1;
+          }
+        } catch (e) {
+          report.ambiguousReview.failed += 1;
+          report.ambiguousReview.writeErrors.push({
+            phase: "tier2_review",
+            chunkIndex: i / REVIEW_CHUNK,
+            upc: single.upc,
+            message: e instanceof Error ? e.message : String(e),
+          });
+        }
       }
     }
   }

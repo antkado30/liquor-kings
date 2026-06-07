@@ -46,7 +46,91 @@
 
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
-import { lookupUpcFromUpcitemdb } from "../src/lib/upcitemdb.js";
+import {
+  extractBottleSizeMl,
+  lookupUpcFromUpcitemdb,
+} from "../src/lib/upcitemdb.js";
+
+/*
+ * Tony's pin-point rule:
+ *   "we cannot have random pictures to random bottles like imagine
+ *    putting a fifth of Tito's picture on a pint of Hennessy code"
+ *
+ * Prod only has nrs_import_name_size_match mappings — name+size NRS
+ * matches that *can* be wrong. So we verify at write-time: for each
+ * UPCitemdb hit, require (a) significant token overlap between the
+ * MLCC product name and the UPCitemdb product title, and (b) the
+ * UPCitemdb size (when parseable) matches MLCC's bottle_size_ml within
+ * a tolerance. If either fails, we skip — silhouette stays, no image
+ * is written.
+ */
+const NAME_SIMILARITY_THRESHOLD = 0.6; // 60% of MLCC tokens must appear in UPC title
+const SIZE_TOLERANCE_ML = 50; // 750 vs 720 etc. count as same
+
+const STOPWORDS = new Set([
+  "ml", "l", "ltr", "liter", "litre", "oz", "floz", "fl",
+  "the", "of", "and", "with", "a", "an", "&",
+  "pack", "bottle", "bottles", "btl", "case",
+]);
+
+function normalizeTokens(s) {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t && !STOPWORDS.has(t));
+}
+
+/**
+ * Fraction of MLCC name tokens that appear in the UPCitemdb title.
+ * Containment is the right metric here — UPC titles often have extra
+ * marketing words ("Premium," "Limited Release") that we don't want
+ * to penalize, but every brand+variant token from MLCC should appear.
+ */
+function nameContainment(mlccName, upcTitle) {
+  const mlccTokens = normalizeTokens(mlccName);
+  if (mlccTokens.length === 0) return 0;
+  const upcSet = new Set(normalizeTokens(upcTitle));
+  let hits = 0;
+  for (const t of mlccTokens) {
+    if (upcSet.has(t)) hits += 1;
+  }
+  return hits / mlccTokens.length;
+}
+
+/**
+ * Decide whether a UPCitemdb hit's image is safe to write for a given
+ * MLCC item. Returns { ok: true } when verified, or
+ * { ok: false, reason } when rejected.
+ */
+function verifyMatch({ mlccItem, upcProduct }) {
+  const upcTitle = upcProduct?.name ?? "";
+  const sim = nameContainment(mlccItem.name, upcTitle);
+  if (sim < NAME_SIMILARITY_THRESHOLD) {
+    return {
+      ok: false,
+      reason: `name mismatch (${sim.toFixed(2)} < ${NAME_SIMILARITY_THRESHOLD}) "${upcTitle.slice(0, 50)}"`,
+    };
+  }
+
+  // Size check — only enforce when both sides have a parseable size.
+  // Many UPC entries omit size; in that case we don't penalize.
+  const upcSizeMl =
+    extractBottleSizeMl(upcProduct?.rawSize) ??
+    extractBottleSizeMl(upcTitle);
+  if (
+    upcSizeMl != null &&
+    mlccItem.bottle_size_ml != null &&
+    Math.abs(upcSizeMl - mlccItem.bottle_size_ml) > SIZE_TOLERANCE_ML
+  ) {
+    return {
+      ok: false,
+      reason: `size mismatch (UPC ${upcSizeMl} mL vs MLCC ${mlccItem.bottle_size_ml} mL)`,
+    };
+  }
+
+  return { ok: true, sim };
+}
 
 const argv = Object.fromEntries(
   process.argv.slice(2).map((a) => {
@@ -59,7 +143,16 @@ const DRY_RUN = argv["dry-run"] === "true";
 const LIMIT = Number.parseInt(argv.limit ?? "50", 10) || 50;
 const SINGLE_CODE =
   typeof argv.code === "string" && argv.code !== "true" ? argv.code : null;
-const ACCEPTED_CONFIDENCE = (argv.confidence ?? "user_confirmed,manual_admin")
+/*
+ * Default confidence list now includes nrs_import_name_size_match —
+ * prod's ONLY mapping source as of 2026-06-03. Tony's pin-point rule
+ * is enforced by verifyMatch() at write-time, not by the confidence
+ * filter, so we can safely cast a wider net here.
+ */
+const ACCEPTED_CONFIDENCE = (
+  argv.confidence ??
+  "user_confirmed,manual_admin,bulk_seed,nrs_import_name_size_match"
+)
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -95,21 +188,29 @@ async function loadCandidates() {
       .select("upc, mlcc_code, confidence_source")
       .eq("mlcc_code", SINGLE_CODE)
       .limit(5);
-    return maps ?? [];
+    return await hydrateWithMlccItem(maps ?? []);
   }
 
   // First grab a pool of mlcc_items missing images.
   const { data: missing, error: missingErr } = await supabase
     .from("mlcc_items")
-    .select("code")
+    .select("code, name, bottle_size_ml, brand_family")
     .is("image_url", null)
     .eq("is_active", true)
     .limit(LIMIT * 4); // overfetch — many won't have a mapping
   if (missingErr) throw missingErr;
-  const codes = [...new Set((missing ?? []).map((r) => r.code))];
-  if (codes.length === 0) return [];
+  const items = missing ?? [];
+  if (items.length === 0) return [];
 
-  // Now find which of those codes have a high-confidence UPC mapping.
+  // Build a code → MlccItem lookup. Code is not unique (same code can
+  // appear under multiple ADAs) but the metadata we care about
+  // (name/size/brand) is the same across ADA copies, so first-wins.
+  const itemByCode = new Map();
+  for (const it of items) {
+    if (!itemByCode.has(it.code)) itemByCode.set(it.code, it);
+  }
+  const codes = [...itemByCode.keys()];
+
   const { data: maps, error: mapsErr } = await supabase
     .from("upc_mappings")
     .select("upc, mlcc_code, confidence_source")
@@ -117,7 +218,30 @@ async function loadCandidates() {
     .in("confidence_source", ACCEPTED_CONFIDENCE)
     .limit(LIMIT);
   if (mapsErr) throw mapsErr;
-  return maps ?? [];
+
+  return (maps ?? [])
+    .map((m) => ({ ...m, mlccItem: itemByCode.get(m.mlcc_code) ?? null }))
+    .filter((m) => m.mlccItem != null);
+}
+
+/**
+ * Attach mlcc_items metadata to a mapping list. Used by the
+ * --code single-code path that doesn't share the bulk loader.
+ */
+async function hydrateWithMlccItem(mappings) {
+  if (mappings.length === 0) return [];
+  const codes = [...new Set(mappings.map((m) => m.mlcc_code))];
+  const { data: items } = await supabase
+    .from("mlcc_items")
+    .select("code, name, bottle_size_ml, brand_family")
+    .in("code", codes);
+  const byCode = new Map();
+  for (const it of items ?? []) {
+    if (!byCode.has(it.code)) byCode.set(it.code, it);
+  }
+  return mappings
+    .map((m) => ({ ...m, mlccItem: byCode.get(m.mlcc_code) ?? null }))
+    .filter((m) => m.mlccItem != null);
 }
 
 async function updateAllCodeRows(code, imageUrl) {
@@ -158,11 +282,12 @@ async function main() {
 
   let hits = 0;
   let misses = 0;
+  let rejected = 0;
   let rateLimited = 0;
   let written = 0;
 
   for (const mapping of candidates) {
-    const { upc, mlcc_code: code } = mapping;
+    const { upc, mlcc_code: code, mlccItem } = mapping;
     process.stdout.write(`  ${code} (UPC ${upc}) ... `);
     let res;
     try {
@@ -193,14 +318,25 @@ async function main() {
       continue;
     }
 
+    // PIN-POINT VERIFICATION — name + size match. Skip on mismatch.
+    const check = verifyMatch({ mlccItem, upcProduct: res.product });
+    if (!check.ok) {
+      rejected += 1;
+      console.log(`✗ rejected — ${check.reason}`);
+      await sleep(1100);
+      continue;
+    }
+
     hits += 1;
     if (DRY_RUN) {
-      console.log(`would set image_url = ${imageUrl.slice(0, 60)}…`);
+      console.log(
+        `would set image_url (sim=${check.sim.toFixed(2)}) = ${imageUrl.slice(0, 60)}…`,
+      );
     } else {
       const ok = await updateAllCodeRows(code, imageUrl);
       if (ok) {
         written += 1;
-        console.log(`✓ set`);
+        console.log(`✓ set (sim=${check.sim.toFixed(2)})`);
       } else {
         console.log("write failed");
       }
@@ -210,7 +346,8 @@ async function main() {
   }
 
   console.log(
-    `[backfill] done. hits=${hits} misses=${misses} rate_limited=${rateLimited} written=${written}`,
+    `[backfill] done. hits=${hits} rejected=${rejected} misses=${misses} ` +
+      `rate_limited=${rateLimited} written=${written}`,
   );
 }
 

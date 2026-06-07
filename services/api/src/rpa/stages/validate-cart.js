@@ -703,7 +703,73 @@ export async function validateCartOnMilo(session, options = {}) {
       bottleSizeMl: Number.isFinite(Number(item.bottleSizeMl)) ? Number(item.bottleSizeMl) : null,
       quantity: Number.isFinite(Number(item.quantity)) ? Number(item.quantity) : null,
       adaName: item.adaName || "",
+      // Tag origin so the scanner can show a specific message. Items
+      // parsed from MILO's dedicated "Out of stock items" section get
+      // `oos_section`. Validate-time demotions (added in Stage 3,
+      // missing from Stage 4's parse) get `validate_demoted` below.
+      reason: "oos_section",
     }));
+
+    /*
+     * Validate-time demotion detection (task #53, 2026-06-04).
+     *
+     * Tony's bug: MILO sometimes accepts an item in Stage 3 (it lands
+     * in the active cart and the verifier reports "added"), but by the
+     * time Stage 4 hits the validate button MILO silently demotes it
+     * — the item just disappears from both the active ADA tables AND
+     * the OOS section. Old workaround was client-side `inferredOos`
+     * which couldn't tell stock-out from Stage 3 timeout flakes.
+     *
+     * Fix: compare Stage 3's verified itemsAdded against the union of
+     * codes Stage 4 now sees in any ada_order or any OOS row. Anything
+     * Stage 3 verified that Stage 4 can no longer find is a "validate
+     * demoted" item — push it into outOfStockItems with the tagged
+     * reason so the scanner gets one structured list to render.
+     */
+    const stage3VerifiedCodes = new Set(
+      Array.isArray(session?.itemsAdded)
+        ? session.itemsAdded
+            .map((it) => String(it?.code ?? "").trim())
+            .filter(Boolean)
+        : [],
+    );
+    const stage4SeenCodes = new Set();
+    for (const ada of adaOrders) {
+      for (const it of ada.items || []) {
+        const c = String(it?.code ?? "").trim();
+        if (c) stage4SeenCodes.add(c);
+      }
+    }
+    for (const oos of outOfStockItems) {
+      const c = String(oos?.code ?? "").trim();
+      if (c) stage4SeenCodes.add(c);
+    }
+    // Quick lookup of Stage 3's recorded quantity/name per code for nice
+    // rendering on the scanner side.
+    const stage3ItemByCode = new Map(
+      Array.isArray(session?.itemsAdded)
+        ? session.itemsAdded.map((it) => [
+            String(it?.code ?? "").trim(),
+            it,
+          ])
+        : [],
+    );
+    for (const code of stage3VerifiedCodes) {
+      if (stage4SeenCodes.has(code)) continue;
+      const stage3Item = stage3ItemByCode.get(code) ?? {};
+      outOfStockItems.push({
+        code,
+        name: stage3Item.name ?? stage3Item.productName ?? "",
+        bottleSizeMl: Number.isFinite(Number(stage3Item.bottleSizeMl))
+          ? Number(stage3Item.bottleSizeMl)
+          : null,
+        quantity: Number.isFinite(Number(stage3Item.quantity))
+          ? Number(stage3Item.quantity)
+          : null,
+        adaName: "",
+        reason: "validate_demoted",
+      });
+    }
 
     const orderSummary = {
       grossTotal: Number.isFinite(Number(parsed.orderSummary?.grossTotal)) ? Number(parsed.orderSummary.grossTotal) : null,

@@ -999,3 +999,161 @@ pre,
     grid-template-columns: 1fr;
   }
 }
+
+/* ===== NRS catalog review queue ===== */
+.nrs-review-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 16px;
+}
+.nrs-review-header h1 {
+  margin: 0 0 6px;
+}
+.nrs-review-header p {
+  margin: 0 0 16px;
+}
+.nrs-review-header kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  margin: 0 2px;
+  background: #e5e7eb;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8em;
+}
+.nrs-review-current {
+  padding: 20px;
+}
+.nrs-review-row-meta {
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.nrs-review-upc {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95em;
+  margin-top: 2px;
+}
+.nrs-review-nrsname {
+  font-size: 1.15em;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.nrs-review-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nrs-review-candidate {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #ffffff;
+  /* Override the global button { color: #fff } default — otherwise the
+     name text is white-on-white. The .muted class on meta still wins for
+     that span; the key badge has its own color set. */
+  color: #111827;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+.nrs-review-candidate-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.nrs-review-candidate-attrs {
+  display: block;
+}
+.nrs-review-candidate-price {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.nrs-review-search-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed #d1d5db;
+}
+.nrs-review-search-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.nrs-review-search-input {
+  flex: 1;
+  padding: 8px 10px;
+  font-size: 0.95em;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+}
+.nrs-review-search-input:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: -1px;
+  border-color: #3b82f6;
+}
+.nrs-review-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.nrs-review-search-results li {
+  list-style: none;
+}
+.nrs-review-candidate:hover:not(:disabled) {
+  background: #eff6ff;
+  border-color: #3b82f6;
+}
+.nrs-review-candidate:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.nrs-review-candidate-key {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #111827;
+  color: #fff;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+}
+.nrs-review-candidate-name {
+  font-weight: 600;
+}
+.nrs-review-candidate-meta {
+  white-space: nowrap;
+}
+.nrs-review-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+.nrs-review-footer {
+  margin-top: 14px;
+  text-align: center;
+}
+.nrs-review-empty {
+  padding: 32px;
+  text-align: center;
+}

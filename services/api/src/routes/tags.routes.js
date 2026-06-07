@@ -32,6 +32,7 @@
 
 import express from "express";
 import bwipjs from "bwip-js";
+import PDFDocument from "pdfkit";
 import supabaseDefault from "../config/supabase.js";
 
 const router = express.Router();
@@ -372,6 +373,207 @@ router.get("/render", async (req, res) => {
   const html = PAGE_SHELL(tagsHtml, { embedded });
   res.set("Content-Type", "text/html; charset=utf-8");
   return res.send(html);
+});
+
+/* ─── Universal PDF tag renderer (task #76, 2026-06-04 evening) ───── */
+
+/**
+ * Render a single tag as a PDF page so the scanner can share it via
+ * the iOS share sheet to ANY installed printer app — AirPrint for
+ * die-cut, Brother iPrint&Label for continuous DK-2205, future apps
+ * for future printers. Bypasses the AirPrint die-cut-only limitation
+ * Tony hit on the QL-810W.
+ *
+ * Page sized 62mm × 100mm to match the most common LK tag spec. The
+ * Brother app will scale to fit whatever media is loaded.
+ *
+ * Returns a Buffer containing the full PDF.
+ */
+async function renderTagPdfBuffer(product) {
+  // 62 × 100 mm in PDF points (1 mm = 2.834645669 pt)
+  const widthPt = 62 * 2.834645669;
+  const heightPt = 100 * 2.834645669;
+
+  const doc = new PDFDocument({
+    size: [widthPt, heightPt],
+    margins: { top: 8, bottom: 8, left: 8, right: 8 },
+    info: {
+      Title: `${product.name} ${product.code} tag`,
+      Author: "Liquor Kings",
+    },
+  });
+
+  // Accumulate into a buffer. PDFKit streams, so we collect chunks.
+  const chunks = [];
+  return await new Promise((resolve, reject) => {
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+    composeTagPage(doc, product, widthPt, heightPt).catch(reject);
+  });
+}
+
+/**
+ * Lay out one tag on a PDFKit page. Tony's spec from the existing
+ * HTML renderer:
+ *   - brand name (compact, top-left)
+ *   - HUGE shelf price (dominates the tag)
+ *   - small left rail: short date stamp (MM/DD/YY)
+ *   - bottom: Code 128 barcode + small ADA + code suffix
+ */
+async function composeTagPage(doc, product, widthPt, heightPt) {
+  const PAD = 10;
+  const innerW = widthPt - PAD * 2;
+
+  // Brand name at the top
+  const brand = String(product.name || "").toUpperCase();
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(9)
+    .text(brand, PAD, PAD, {
+      width: innerW,
+      align: "left",
+      ellipsis: true,
+      lineBreak: false,
+    });
+
+  // Date stamp at upper-left rail (rotated -90 so it reads up the side).
+  // BUG FIX 2026-06-06: previously used raw `new Date()` which is UTC
+  // on the Fly container. Stamp would print tomorrow's date for any
+  // tag rendered after 8pm Eastern (= midnight UTC). Tony hit this
+  // on the 06/06/26 Sobieski tag printed at ~11pm 06/05 Eastern.
+  // Use Intl.DateTimeFormat with America/New_York for store-local date.
+  const easternParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const partMap = Object.fromEntries(
+    easternParts.map((p) => [p.type, p.value]),
+  );
+  const mm = partMap.month;
+  const dd = partMap.day;
+  const yy = String(partMap.year).slice(-2);
+  doc.save();
+  doc.rotate(-90, { origin: [PAD + 4, heightPt / 2] });
+  doc
+    .font("Helvetica")
+    .fontSize(7)
+    .text(`${mm}/${dd}/${yy}`, PAD - 30, heightPt / 2 - 4, {
+      width: 50,
+      align: "center",
+      lineBreak: false,
+    });
+  doc.restore();
+
+  // Compute shelf price string. min_shelf_price is the legal floor;
+  // fall back to licensee_price if missing.
+  const rawPrice =
+    product.min_shelf_price != null
+      ? Number(product.min_shelf_price)
+      : Number(product.licensee_price);
+  const priceStr = Number.isFinite(rawPrice)
+    ? `$${rawPrice.toFixed(2)}`
+    : "—";
+
+  // Huge price in the middle. Use a size that fits the widest digit
+  // string for our typical SKUs ($X.XX → $XXX.XX). 96pt accommodates
+  // up to "$999.99" within the 62mm width with a comfortable margin.
+  const priceY = heightPt * 0.32;
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(96)
+    .text(priceStr, PAD, priceY, {
+      width: innerW,
+      align: "center",
+      lineBreak: false,
+    });
+
+  // Bottom-section barcode + ADA + code suffix.
+  // bwip-js outputs PNG directly when given { png: true } — embed.
+  const barcodeY = heightPt * 0.74;
+  try {
+    const png = await bwipjs.toBuffer({
+      bcid: "code128",
+      text: String(product.code),
+      scale: 2,
+      height: 12,
+      includetext: false,
+      backgroundcolor: "FFFFFF",
+      paddingwidth: 0,
+      paddingheight: 0,
+    });
+    // Center the barcode horizontally.
+    const barcodeWidth = innerW * 0.7;
+    const barcodeX = (widthPt - barcodeWidth) / 2;
+    doc.image(png, barcodeX, barcodeY, {
+      width: barcodeWidth,
+      height: 30,
+    });
+  } catch (err) {
+    console.warn(`[tags-pdf] barcode render failed: ${err?.message}`);
+    // Continue without barcode rather than failing the whole render —
+    // user can still see brand + price.
+  }
+
+  // ADA number (left) and code suffix (right) under the barcode.
+  const ada = String(product.ada_number || "").trim();
+  const code = String(product.code || "").trim();
+  const codeSuffix = code.length > 4 ? code.slice(-4) : code;
+  doc
+    .font("Helvetica")
+    .fontSize(8)
+    .text(ada, PAD, barcodeY + 32, {
+      width: innerW / 2,
+      align: "left",
+      lineBreak: false,
+    });
+  doc.text(codeSuffix, PAD + innerW / 2, barcodeY + 32, {
+    width: innerW / 2,
+    align: "right",
+    lineBreak: false,
+  });
+
+  doc.end();
+}
+
+/**
+ * GET /tags/render.pdf?code=N
+ *
+ * Returns a single-tag PDF (application/pdf) so the scanner client
+ * can share it via the iOS share sheet to any printer app (AirPrint,
+ * Brother iPrint&Label, etc.). Bypasses the AirPrint die-cut-only
+ * limitation Tony hit on the QL-810W with DK-2205 continuous tape.
+ */
+router.get("/render.pdf", async (req, res) => {
+  const single = String(req.query.code ?? "").trim();
+  if (!single) {
+    return res
+      .status(400)
+      .json({ ok: false, error: "?code=<mlcc_code> required" });
+  }
+  const products = await fetchTagProducts(supabaseDefault, [single]);
+  if (products.length === 0) {
+    return res
+      .status(404)
+      .json({ ok: false, error: "product not found in catalog" });
+  }
+  try {
+    const pdf = await renderTagPdfBuffer(products[0]);
+    res.set("Content-Type", "application/pdf");
+    res.set(
+      "Content-Disposition",
+      `inline; filename="lk-tag-${single}.pdf"`,
+    );
+    res.set("Cache-Control", "private, max-age=60");
+    return res.send(pdf);
+  } catch (err) {
+    console.error(`[tags-pdf] render failed: ${err?.message}`);
+    return res
+      .status(500)
+      .json({ ok: false, error: err?.message ?? "render_failed" });
+  }
 });
 
 export default router;

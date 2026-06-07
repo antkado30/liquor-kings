@@ -63,10 +63,16 @@ kill_timeout = "5m"
   processes = ["app"]
 
   [[http_service.checks]]
-    grace_period = "30s"
-    interval = "30s"
+    # Tuned 2026-05-27 to make rolling deploys finalize faster. The Express
+    # API typically reports "Server running on port 8080" within 2-4s of
+    # boot (see app boot logs), so a 10s grace + 5s interval gets the
+    # first passing check in well under 30s. The previous 30s/30s combo
+    # was making `fly deploy` hang for minutes per machine waiting for
+    # the first scheduled check to even run.
+    grace_period = "10s"
+    interval = "5s"
     method = "GET"
-    timeout = "10s"
+    timeout = "5s"
     path = "/health"
 
 # Resource sizing is per-process. The API serves HTTP and is cheap; the

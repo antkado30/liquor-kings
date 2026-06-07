@@ -445,6 +445,17 @@ async function waitForAddAllConfirmation(page, codeInput, qtyInput, timeoutMs = 
  *   { cleared: false, itemCountBefore: 0 } — cart already empty
  *   { cleared: true, itemCountBefore: N }  — N items removed
  */
+/*
+ * Exported as `clearMiloCart` (task #57, 2026-06-04) so the standalone
+ * "Reset MLCC cart" run type can reuse the same Playwright cart-clear
+ * primitive. Keeping the original function name + signature for the
+ * Stage 3 pre-flight call site below; new callers should use the
+ * exported alias.
+ */
+export async function clearMiloCart(page, outputDir = "/tmp", artifacts = []) {
+  return clearCartIfPopulated(page, outputDir, artifacts);
+}
+
 async function clearCartIfPopulated(page, outputDir, stage3Artifacts) {
   // Step 1: locate cart link from current page (typically /milo/products)
   const cartNav = await (async () => {

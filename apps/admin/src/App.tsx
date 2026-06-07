@@ -1,5 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { CatalogImagesPage } from "./pages/CatalogImagesPage";
+import { FounderConsolePage } from "./pages/FounderConsolePage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { NrsReviewPage } from "./pages/NrsReviewPage";
 import { OperatorOverviewPage } from "./pages/OperatorOverviewPage";
 import { PilotOpsPage } from "./pages/PilotOpsPage";
 import { ReviewLayout } from "./review/ReviewLayout";
@@ -22,9 +25,12 @@ function AuthenticatedRoutes() {
         <Route path="/" element={<Navigate to="/overview" replace />} />
         <Route element={<ReviewLayout remountKey={remountKey} />}>
           <Route path="overview" element={<OperatorOverviewPage />} />
+          <Route path="founder" element={<FounderConsolePage />} />
           <Route path="pilot-ops" element={<PilotOpsPage />} />
           <Route path="review" element={<ReviewQueueView />} />
           <Route path="review/:runId" element={<ReviewRunDetailView />} />
+          <Route path="catalog-review" element={<NrsReviewPage />} />
+          <Route path="catalog-images" element={<CatalogImagesPage />} />
           <Route path="diagnostics" element={<DiagnosticsPage />} />
         </Route>
       </Routes>

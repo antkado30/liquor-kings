@@ -28,6 +28,17 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { validateCart, type CartValidationResult } from "../api/cart";
+import {
+  getRunSummary,
+  isTerminalStatus,
+  triggerMlccCartReset,
+} from "../api/execution";
+import {
+  createOrderTemplate,
+  listOrderTemplates,
+  loadOrderTemplate,
+  type OrderTemplate,
+} from "../api/orderTemplates";
 import { cartLineId, type CartContextValue } from "../hooks/useCart";
 import { useSubmission } from "../hooks/useSubmission";
 import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
@@ -51,8 +62,12 @@ function money(n: number): string {
  *      (otherwise we'd surface "MLCC says ready for checkout" + a list
  *      of OOS items in the same banner, which is incoherent).
  *
- * Until the real Stage 3/4 OOS detection ships (task #53), this is the
- * single source of truth for "are there OOS items?"
+ * NOTE 2026-06-04 (#53 ships): the server now emits structured
+ * `out_of_stock_items` with `reason: "oos_section" | "validate_demoted"`
+ * directly. Use `getServerOosCodes` for the new authoritative source.
+ * This function is retained as a *consistency check* — if the server
+ * misses a demotion (parser regression, MILO UI change), the client
+ * falls back to inferred and logs a divergence warning in dev.
  */
 function computeInferredOos(
   cartItems: CartContextValue["items"],
@@ -92,6 +107,30 @@ function computeInferredOos(
       !adaActiveCodes.has(line.product.code) &&
       !rejectedCodes.has(line.product.code),
   );
+}
+
+/**
+ * Cart items the SERVER tagged as OOS via Stage 4's structured
+ * out_of_stock_items list (task #53, 2026-06-04). Includes both:
+ *   - oos_section: MILO put it in its dedicated OOS table
+ *   - validate_demoted: Stage 3 saw it in cart, Stage 4 lost track
+ *     after the validate click
+ * Server-authoritative — the inferredOos computation is now a backstop
+ * for the case where the server parser regresses.
+ */
+function getServerOosCodes(
+  result: import("../api/execution").ValidateResult | null,
+): Set<string> {
+  if (!result) return new Set();
+  const list = Array.isArray(result.out_of_stock_items)
+    ? result.out_of_stock_items
+    : [];
+  const codes = new Set<string>();
+  for (const it of list) {
+    const code = (it as { code?: unknown })?.code;
+    if (typeof code === "string" && code) codes.add(code);
+  }
+  return codes;
 }
 
 /*
@@ -185,23 +224,49 @@ export function CartDrawer({ cart, onClose, onLineProductClick, preValidate }: C
   // validateDone state, or when MILO showed all cart items as active.
   // Used to gate Submit so we never offer "submit a cart that has
   // likely-OOS items in it".
+  //
+  // 2026-06-04 #53: server now emits structured out_of_stock_items
+  // covering both oos_section and validate_demoted cases. Treat that as
+  // authoritative. We still compute inferredOos as a backstop — if the
+  // server misses an item (parser regression / MILO UI change), we
+  // catch it client-side and warn in dev so the divergence is visible.
+  const serverOosCodes =
+    state.kind === "validateDone"
+      ? getServerOosCodes(state.validateResult)
+      : new Set<string>();
   const inferredOos =
     state.kind === "validateDone"
       ? computeInferredOos(items, state.validateResult)
       : [];
 
   // Has MLCC actually said this cart is OK? Only true when the last
-  // validate ended succeeded AND MILO said canCheckout=true AND we
-  // didn't infer any OOS items. The inferredOos gate prevents the
-  // 2026-05-30 bug where MILO would return canCheckout=true for the
-  // items it DID accept while silently dropping the OOS row — leaving
-  // the user with a "ready for checkout" green banner that hid the
-  // problem.
+  // validate ended succeeded AND MILO said canCheckout=true AND
+  // there are no server-tagged OOS items AND no client-inferred OOS
+  // items (the inferred check is a backstop against a server parser
+  // regression — see getServerOosCodes comment above).
   const mlccValidatePassed =
     state.kind === "validateDone" &&
     state.finalStatus === "succeeded" &&
     state.validateResult?.can_checkout === true &&
+    serverOosCodes.size === 0 &&
     inferredOos.length === 0;
+
+  // Dev-only divergence warning: if the server says "no OOS" but the
+  // client-side inferred-from-absence check finds some, that's a sign
+  // the Stage 4 parser missed a demotion. Surfaces in browser console
+  // so we catch parser regressions in real-world use.
+  useEffect(() => {
+    if (import.meta.env.DEV && state.kind === "validateDone") {
+      if (serverOosCodes.size === 0 && inferredOos.length > 0) {
+        console.warn(
+          "[#53] Server reported no OOS but client inferred",
+          inferredOos.length,
+          "demoted items:",
+          inferredOos.map((line) => line.product.code),
+        );
+      }
+    }
+  }, [state.kind, serverOosCodes.size, inferredOos.length]);
 
   const [isCheckingValidation, setIsCheckingValidation] = useState(false);
   const [validationResult, setValidationResult] = useState<CartValidationResult | null>(null);
@@ -271,6 +336,203 @@ export function CartDrawer({ cart, onClose, onLineProductClick, preValidate }: C
   const handleClearCart = () => {
     if (state.kind !== "idle") reset();
     clearCart();
+  };
+
+  /*
+   * "Reset MLCC cart" handler (task #57, 2026-06-04). Fires the
+   * cart_reset_only execution run that logs into MILO and clicks Clear
+   * Cart server-side. Polls until terminal. Resolves the lie where
+   * the local "Clear scanner cart" left MILO holding items.
+   *
+   * On success we ALSO clear the local cart, since after MILO is empty
+   * there's no reason to keep local lines around.
+   */
+  const [mlccResetState, setMlccResetState] = useState<
+    | { kind: "idle" }
+    | { kind: "confirm" }
+    | { kind: "running"; runId: string }
+    | { kind: "done"; cleared: boolean; itemCount: number }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+
+  const handleMlccReset = async () => {
+    setMlccResetState({ kind: "confirm" });
+  };
+
+  /*
+   * Order template state (task #72, 2026-06-04 afternoon).
+   *
+   * Dad rebuilds his Thursday MLCC order from scratch every week even
+   * though 80% of it is the same staples. Templates let him save the
+   * weekly base order once and load it back as a starting point.
+   *
+   * UI states:
+   *   templatesState.kind === "idle"       → buttons visible if user has any
+   *   templatesState.kind === "loading"    → fetching list
+   *   templatesState.kind === "loaded"     → list ready
+   *   templatesState.kind === "saving"     → save modal open
+   *   templatesState.kind === "loadingOne" → loading a specific template
+   */
+  const [templates, setTemplates] = useState<OrderTemplate[]>([]);
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState("");
+  /*
+   * Scheduling state (task #75). null = no schedule (manual loads only).
+   * 0-6 = day-of-week. Default is "no schedule" so users opt in.
+   */
+  const [saveTemplateDow, setSaveTemplateDow] = useState<number | null>(null);
+  const [saveTemplateBusy, setSaveTemplateBusy] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const [templateLoading, setTemplateLoading] = useState<string | null>(null);
+  const [templateLoadResult, setTemplateLoadResult] = useState<{
+    name: string;
+    addedCount: number;
+    missingCount: number;
+  } | null>(null);
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+
+  // One-shot template fetch when the drawer opens.
+  useEffect(() => {
+    if (templatesLoaded) return;
+    let cancelled = false;
+    void listOrderTemplates().then((r) => {
+      if (cancelled) return;
+      if (r.ok) setTemplates(r.data);
+      setTemplatesLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [templatesLoaded]);
+
+  const handleSaveTemplate = async () => {
+    const name = saveTemplateName.trim();
+    if (!name || items.length === 0) return;
+    setSaveTemplateBusy(true);
+    setTemplateError(null);
+    const itemsPayload = items.map((line) => ({
+      mlcc_code: line.product.code,
+      quantity: line.quantity,
+      name: line.product.name,
+      bottle_size_ml: line.product.bottle_size_ml ?? undefined,
+    }));
+    const r = await createOrderTemplate({
+      name,
+      items: itemsPayload,
+      schedule_dow: saveTemplateDow,
+    });
+    setSaveTemplateBusy(false);
+    if (!r.ok) {
+      setTemplateError(r.error);
+      return;
+    }
+    setTemplates((cur) => [r.data, ...cur]);
+    setShowSaveTemplate(false);
+    setSaveTemplateName("");
+    setSaveTemplateDow(null);
+  };
+
+  const handleLoadTemplate = async (templateId: string) => {
+    setTemplateLoading(templateId);
+    setTemplateError(null);
+    const r = await loadOrderTemplate(templateId);
+    setTemplateLoading(null);
+    setShowTemplatePicker(false);
+    if (!r.ok) {
+      setTemplateError(r.error);
+      return;
+    }
+    // Push each hydrated item into the cart. addItem merges duplicates,
+    // so loading a template on top of an existing cart adds-quantity
+    // instead of duplicating lines.
+    for (const it of r.data.items) {
+      cart.addItem(it.product, it.quantity);
+    }
+    setTemplateLoadResult({
+      name: r.data.template.name,
+      addedCount: r.data.items.length,
+      missingCount: r.data.missingCodes.length,
+    });
+    // Auto-dismiss the success badge after 3s.
+    setTimeout(() => {
+      setTemplateLoadResult((cur) => (cur ? null : cur));
+    }, 3000);
+  };
+
+  /*
+   * Instant-feel version (task #71, 2026-06-04 afternoon).
+   *
+   * Old flow blocked the UI for 30-60s while the RPA cleared MILO. Tony
+   * called it out — "should take an instant." MILO's site genuinely IS
+   * slow, but the local cart can clear in 1ms. So:
+   *   - Tap → confirm → IMMEDIATELY clear local cart + show "MLCC
+   *     syncing" badge → user can keep working
+   *   - RPA fires in background, polls silently
+   *   - On success: badge auto-dismisses after 2s
+   *   - On error: badge turns red with the message and stays until
+   *     user dismisses (we still want them to know if it failed)
+   *
+   * The `running` state intentionally no longer disables the rest of
+   * the UI — only the Reset button itself is disabled while a sync is
+   * in flight, to prevent double-firing.
+   */
+  const confirmMlccReset = async () => {
+    // Step 1: clear local IMMEDIATELY. User sees empty cart in <100ms.
+    if (state.kind !== "idle") reset();
+    clearCart();
+    setMlccResetState({ kind: "running", runId: "" });
+
+    // Step 2: kick off the RPA run.
+    const trigger = await triggerMlccCartReset();
+    if (!trigger.ok) {
+      setMlccResetState({ kind: "error", message: trigger.error });
+      return;
+    }
+    setMlccResetState({ kind: "running", runId: trigger.runId });
+
+    // Step 3: poll quietly in the background. User can ignore us.
+    const start = Date.now();
+    const MAX_POLL_MS = 180_000;
+    while (Date.now() - start < MAX_POLL_MS) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const summary = await getRunSummary({ runId: trigger.runId });
+      if (!summary.ok) continue;
+      if (isTerminalStatus(summary.summary.status)) {
+        if (summary.summary.status === "succeeded") {
+          const evidence = (summary.summary as unknown as {
+            evidence?: Array<{
+              kind?: string;
+              attributes?: { cleared?: boolean; itemCountBefore?: number };
+            }>;
+          }).evidence;
+          const summaryEntry = (evidence ?? []).find(
+            (e) => e?.kind === "cart_reset_summary",
+          );
+          const cleared = !!summaryEntry?.attributes?.cleared;
+          const itemCount = summaryEntry?.attributes?.itemCountBefore ?? 0;
+          setMlccResetState({ kind: "done", cleared, itemCount });
+          // Auto-dismiss the success badge after 2s so it doesn't clutter.
+          setTimeout(() => {
+            setMlccResetState((cur) =>
+              cur.kind === "done" ? { kind: "idle" } : cur,
+            );
+          }, 2000);
+        } else {
+          // Errors stick around until the user dismisses (they're real).
+          setMlccResetState({
+            kind: "error",
+            message: `MLCC sync failed (status: ${summary.summary.status}). MILO may still have items — tap Reset to retry.`,
+          });
+        }
+        return;
+      }
+    }
+    setMlccResetState({
+      kind: "error",
+      message:
+        "MLCC sync is taking longer than 3 minutes. Check Orders, or tap Reset to retry.",
+    });
   };
 
   const hasDefinitiveValidationFailure =
@@ -622,6 +884,7 @@ export function CartDrawer({ cart, onClose, onLineProductClick, preValidate }: C
             */
             canCheckout={
               (state.validateResult?.can_checkout ?? null) === true &&
+              serverOosCodes.size === 0 &&
               inferredOos.length === 0
             }
             cartItems={items}
@@ -648,12 +911,119 @@ export function CartDrawer({ cart, onClose, onLineProductClick, preValidate }: C
               True MILO clear is task #56 (deferred — it costs an RPA
               run and most users don't actually need it between orders).
             */}
+            {/*
+              Order template controls (task #72). Shown above the
+              Clear / Reset buttons so the "save this for next week"
+              prompt sits next to the cart contents, not buried with
+              destructive actions.
+            */}
+            {items.length > 0 ? (
+              <button
+                type="button"
+                className="btn secondary btn-block"
+                disabled={isBusy}
+                onClick={() => {
+                  // Pre-fill name with day-of-week (e.g. "Thursday order")
+                  // — matches dad's actual weekly pattern.
+                  const day = new Date().toLocaleDateString("en-US", {
+                    weekday: "long",
+                  });
+                  setSaveTemplateName(`${day} order`);
+                  setShowSaveTemplate(true);
+                }}
+                style={{ marginBottom: 6 }}
+              >
+                💾 Save as template
+              </button>
+            ) : null}
+            {templates.length > 0 ? (
+              <button
+                type="button"
+                className="btn secondary btn-block"
+                disabled={isBusy || templateLoading !== null}
+                onClick={() => setShowTemplatePicker(true)}
+                style={{ marginBottom: 8 }}
+              >
+                📋 Load saved template
+                {templates.length > 1 ? ` (${templates.length})` : ""}
+              </button>
+            ) : null}
+            {templateLoadResult ? (
+              <p
+                className="muted small"
+                style={{
+                  marginTop: 0,
+                  marginBottom: 8,
+                  textAlign: "center",
+                  color: "#bbf7d0",
+                }}
+              >
+                ✓ Loaded &quot;{templateLoadResult.name}&quot; — added{" "}
+                {templateLoadResult.addedCount} items
+                {templateLoadResult.missingCount > 0
+                  ? `, skipped ${templateLoadResult.missingCount} no longer in MLCC catalog`
+                  : ""}
+              </p>
+            ) : null}
+            {templateError ? (
+              <p
+                className="muted small"
+                style={{
+                  marginTop: 0,
+                  marginBottom: 8,
+                  textAlign: "center",
+                  color: "#fca5a5",
+                }}
+              >
+                Template error: {templateError}
+              </p>
+            ) : null}
             <button type="button" className="btn secondary btn-block" disabled={isBusy} onClick={handleClearCart}>
               Clear scanner cart
             </button>
             <p className="muted small" style={{ marginTop: 4, marginBottom: 8, textAlign: "center" }}>
               MLCC&apos;s cart resets automatically on your next validate.
             </p>
+            {/*
+              "Reset MLCC cart" (task #57) — actually runs RPA against
+              MILO and clicks Clear Cart. Use when you want a clean MILO
+              state without going through validate. Costs an RPA run
+              (~30-60s cold, ~10-15s with warm session).
+            */}
+            <button
+              type="button"
+              className="btn secondary btn-block"
+              disabled={mlccResetState.kind === "running"}
+              onClick={() => void handleMlccReset()}
+              style={{ marginBottom: 8 }}
+            >
+              {mlccResetState.kind === "running"
+                ? "MLCC syncing in background…"
+                : "Reset MLCC cart"}
+            </button>
+            {mlccResetState.kind === "running" ? (
+              <p className="muted small" style={{ marginTop: 0, marginBottom: 8, textAlign: "center" }}>
+                Your cart is already empty. We&apos;re finishing up on MILO&apos;s
+                side — keep working, this will finish on its own.
+              </p>
+            ) : null}
+            {mlccResetState.kind === "done" ? (
+              <p className="muted small" style={{ marginTop: 0, marginBottom: 8, textAlign: "center", color: "#bbf7d0" }}>
+                ✓ MLCC cart {mlccResetState.cleared ? `emptied (${mlccResetState.itemCount} item${mlccResetState.itemCount === 1 ? "" : "s"})` : "was already empty"}
+              </p>
+            ) : null}
+            {mlccResetState.kind === "error" ? (
+              <div style={{ marginTop: 0, marginBottom: 8, padding: "8px 12px", borderRadius: 6, background: "rgba(239,68,68,0.12)", color: "#fca5a5", fontSize: 13 }}>
+                {mlccResetState.message}
+                <button
+                  type="button"
+                  onClick={() => setMlccResetState({ kind: "idle" })}
+                  style={{ marginLeft: 8, background: "none", border: "none", color: "inherit", textDecoration: "underline", cursor: "pointer" }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
               className="btn secondary btn-block"
@@ -730,6 +1100,229 @@ export function CartDrawer({ cart, onClose, onLineProductClick, preValidate }: C
           </>
         ) : null}
       </div>
+
+      {/* ─── Save template modal (task #72) ─────────── */}
+      {showSaveTemplate ? (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Save cart as template"
+          onClick={() => !saveTemplateBusy && setShowSaveTemplate(false)}
+        >
+          <div className="confirm-card" onClick={(e) => e.stopPropagation()}>
+            <h2 className="confirm-title">Save as template?</h2>
+            <p className="confirm-body">
+              Save these {items.length} items as a reusable template you can
+              load back into your cart next time.
+            </p>
+            <input
+              type="text"
+              className="search-bar-input"
+              placeholder="Template name (e.g. Thursday order)"
+              value={saveTemplateName}
+              onChange={(e) => setSaveTemplateName(e.target.value)}
+              maxLength={80}
+              autoFocus
+              style={{ width: "100%", marginBottom: 12 }}
+            />
+            {/*
+              Schedule picker (task #75). Optional — null means "manual
+              load only." When set, the daily cron marks this template
+              "ready to review" every matching day, and a banner shows
+              up on the scanner home.
+            */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 13, marginBottom: 6, opacity: 0.8 }}>
+                Auto-prepare this template every:
+              </div>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className={`browse-chip${saveTemplateDow === null ? " browse-chip--active" : ""}`}
+                  onClick={() => setSaveTemplateDow(null)}
+                >
+                  Never (manual)
+                </button>
+                {[
+                  { dow: 0, label: "Sun" },
+                  { dow: 1, label: "Mon" },
+                  { dow: 2, label: "Tue" },
+                  { dow: 3, label: "Wed" },
+                  { dow: 4, label: "Thu" },
+                  { dow: 5, label: "Fri" },
+                  { dow: 6, label: "Sat" },
+                ].map((d) => (
+                  <button
+                    key={d.dow}
+                    type="button"
+                    className={`browse-chip${saveTemplateDow === d.dow ? " browse-chip--active" : ""}`}
+                    onClick={() => setSaveTemplateDow(d.dow)}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+              {saveTemplateDow !== null ? (
+                <p className="muted small" style={{ marginTop: 6, marginBottom: 0 }}>
+                  Each{" "}
+                  {[
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                  ][saveTemplateDow]}{" "}
+                  morning, you&apos;ll see a &quot;ready to review&quot; banner
+                  on the scanner home with this template loaded.
+                </p>
+              ) : null}
+            </div>
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => setShowSaveTemplate(false)}
+                disabled={saveTemplateBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => void handleSaveTemplate()}
+                disabled={saveTemplateBusy || !saveTemplateName.trim()}
+              >
+                {saveTemplateBusy ? "Saving…" : "Save template"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ─── Load template picker (task #72) ─────────── */}
+      {showTemplatePicker ? (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pick template to load"
+          onClick={() => setShowTemplatePicker(false)}
+        >
+          <div
+            className="confirm-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 480, maxHeight: "70vh", overflow: "auto" }}
+          >
+            <h2 className="confirm-title">Load saved template</h2>
+            <p className="confirm-body" style={{ marginBottom: 12 }}>
+              Items from the template will be added to your current cart.
+              {items.length > 0
+                ? " Existing cart items stay; quantities of overlapping codes add together."
+                : ""}
+            </p>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+              {templates.map((tpl) => (
+                <li
+                  key={tpl.id}
+                  style={{
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 8,
+                    padding: 12,
+                    background: "rgba(255,255,255,0.02)",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                    <strong style={{ fontSize: 15 }}>{tpl.name}</strong>
+                    <span className="muted small">
+                      {tpl.items.length} item{tpl.items.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="muted small" style={{ marginBottom: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {tpl.last_loaded_at ? (
+                      <span>Last used {new Date(tpl.last_loaded_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                    ) : null}
+                    {tpl.schedule_dow !== null ? (
+                      <span style={{ color: "#c4b5fd" }}>
+                        📅 Auto every{" "}
+                        {[
+                          "Sun",
+                          "Mon",
+                          "Tue",
+                          "Wed",
+                          "Thu",
+                          "Fri",
+                          "Sat",
+                        ][tpl.schedule_dow]}
+                      </span>
+                    ) : null}
+                    {tpl.needs_review ? (
+                      <span style={{ color: "#bbf7d0" }}>● Ready to review</span>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={() => void handleLoadTemplate(tpl.id)}
+                    disabled={templateLoading !== null}
+                    style={{ width: "100%" }}
+                  >
+                    {templateLoading === tpl.id ? "Loading…" : "Load into cart"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="btn secondary btn-block"
+              style={{ marginTop: 12 }}
+              onClick={() => setShowTemplatePicker(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ─── MLCC reset confirm modal (task #57) ─────────── */}
+      {mlccResetState.kind === "confirm" ? (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm MLCC cart reset"
+          onClick={() => setMlccResetState({ kind: "idle" })}
+        >
+          <div className="confirm-card" onClick={(e) => e.stopPropagation()}>
+            <h2 className="confirm-title">Reset MLCC cart?</h2>
+            <p className="confirm-body">
+              This runs a real Playwright session against MILO, opens
+              your cart, and clicks Clear Cart. Takes 30-60 seconds.
+              Use it when MILO still shows items after you cleared
+              locally — like the Tito&apos;s + Ciroc stuck-in-MILO bug
+              from 5/30.
+            </p>
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => setMlccResetState({ kind: "idle" })}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => void confirmMlccReset()}
+              >
+                Reset MLCC cart
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* ─── Submit-confirm modal (server-side gates still apply) ─────────── */}
       {confirmSubmit ? (
@@ -840,7 +1433,17 @@ function ValidateResultPanel({
   // Inferred OOS — uses the shared helper so the panel and the parent
   // CartDrawer see the same list (parent uses it to gate Submit; we
   // use it here to render the "Likely out of stock" block).
-  const inferredOos = computeInferredOos(cartItems, result);
+  //
+  // 2026-06-04 #53: after server-side validate_demoted detection,
+  // anything Stage 4 lost track of already shows up in the `oos` list
+  // above. Filter those codes out here so the same item doesn't
+  // render twice. The inferred block stays visible ONLY when the
+  // server missed something — a parser-regression alarm bell rather
+  // than the primary signal.
+  const serverOosCodeSet = getServerOosCodes(result);
+  const inferredOos = computeInferredOos(cartItems, result).filter(
+    (line) => !serverOosCodeSet.has(line.product.code),
+  );
 
   // Per-ADA liter progress (only shown when at least one ADA is under).
   const adaProgress = adaBreakdown
@@ -900,7 +1503,24 @@ function ValidateResultPanel({
               <li key={i}>
                 {item.productName ?? item.code ?? "Unknown item"}
                 {item.quantity ? ` × ${item.quantity}` : ""}
-                {item.reason ? ` — ${item.reason}` : ""}
+                {/*
+                  Reason-tagged messages from #53 (2026-06-04):
+                    - "oos_section": MILO put it in its dedicated OOS
+                      section after the add. The cleanest signal.
+                    - "validate_demoted": MILO accepted the add but
+                      silently dropped the item by the time we hit
+                      Validate. Less clear-cut — may be stock, may be
+                      a transient MILO state.
+                  Anything else falls back to the raw reason string
+                  for forward-compat.
+                */}
+                {item.reason === "oos_section"
+                  ? " — marked out-of-stock by MILO"
+                  : item.reason === "validate_demoted"
+                    ? " — dropped during MILO validate (likely out of stock)"
+                    : item.reason
+                      ? ` — ${item.reason}`
+                      : ""}
               </li>
             ))}
           </ul>

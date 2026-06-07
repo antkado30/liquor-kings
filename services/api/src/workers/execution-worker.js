@@ -7,7 +7,7 @@ import { buildMlccPreflightReport } from "./mlcc-adapter.js";
 import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
 import { loginToMilo } from "../rpa/stages/login.js";
 import { navigateToProducts } from "../rpa/stages/navigate-to-products.js";
-import { addItemsToCart } from "../rpa/stages/add-items-to-cart.js";
+import { addItemsToCart, clearMiloCart } from "../rpa/stages/add-items-to-cart.js";
 import { validateCartOnMilo } from "../rpa/stages/validate-cart.js";
 import { checkoutOnMilo } from "../rpa/stages/checkout.js";
 import {
@@ -703,9 +703,14 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
   // validate_only is the scanner's "Validate against MLCC" button — runs
   // Stages 1-4 and stops; Stage 5 is never invoked. (Phase 1 Week 1 of
   // the V1 roadmap, 2026-05-30.)
-  const acceptedRunTypes = new Set(["rpa_run", "validate_only"]);
+  const acceptedRunTypes = new Set([
+    "rpa_run",
+    "validate_only",
+    "cart_reset_only",
+  ]);
   const runType = payload?.metadata?.run_type ?? null;
   const isValidateOnly = runType === "validate_only";
+  const isCartResetOnly = runType === "cart_reset_only";
   if (!acceptedRunTypes.has(runType)) {
     await finalizeRun({
       apiBaseUrl,
@@ -738,11 +743,18 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     };
   }
 
+  /*
+   * Payload shape guard. cart_reset_only intentionally has no cart/items
+   * payload — its payload_snapshot is just { metadata, items: [] } — so
+   * we skip this check for that run type. The cart-reset branch below
+   * loads everything it needs (creds, license) from storeId directly.
+   */
   if (
-    !payload ||
-    !payload.cart ||
-    !payload.store ||
-    !Array.isArray(payload.items)
+    !isCartResetOnly &&
+    (!payload ||
+      !payload.cart ||
+      !payload.store ||
+      !Array.isArray(payload.items))
   ) {
     const failure = summarizeFailure(
       "Execution payload missing required fields",
@@ -1271,6 +1283,112 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         }
       }
     } // end if (!sessionWasReused) — Stages 1+2 either ran or were skipped
+
+    /*
+     * cart_reset_only branch (task #57, 2026-06-04).
+     *
+     * Session is logged in and at /milo/products. Skip Stages 3-5
+     * entirely; just clear the MILO cart and finalize. This is the
+     * "Reset MLCC cart" scanner button — fixes the lie where the old
+     * local-only clear left items lingering in MILO.
+     *
+     * We still release the session to the manager (or close it)
+     * through the existing finally — no special teardown.
+     */
+    if (isCartResetOnly) {
+      await heartbeatRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        workerId,
+        progressStage: "rpa_cart_reset",
+        progressMessage: "Clearing MILO cart...",
+      });
+      stepEvidence.push(
+        buildWorkerStepEvidence(
+          "rpa_cart_reset_started",
+          "Cart-reset clearMiloCart starting",
+          { current_url: session?.page?.url?.() ?? null },
+        ),
+      );
+
+      let clearResult;
+      try {
+        clearResult = await clearMiloCart(session.page);
+      } catch (clearError) {
+        const failure = summarizeFailure(
+          clearError?.message ?? "Cart-reset clearMiloCart failed",
+          clearError?.code ?? FAILURE_TYPE.UNKNOWN,
+          { stage: "cart_reset" },
+        );
+        await finalizeRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          status: "failed",
+          workerNotes: "Cart reset clearMiloCart threw",
+          errorMessage: failure.message,
+          failureType: failure.failureType,
+          failureDetails: failure.details,
+          evidence: [
+            ...stepEvidence,
+            buildNoSubmitAttestationEvidence("cart_reset", "cart_reset_only"),
+          ],
+        });
+        return {
+          success: false,
+          claimed: true,
+          failed: true,
+          runId: run.id,
+          stage: "cart_reset",
+          error: clearError?.code ?? FAILURE_TYPE.UNKNOWN,
+        };
+      }
+
+      stepEvidence.push(
+        buildWorkerStepEvidence(
+          "rpa_cart_reset_complete",
+          "Cart-reset clearMiloCart completed",
+          {
+            cleared: !!clearResult?.cleared,
+            item_count_before: clearResult?.itemCountBefore ?? 0,
+            skipped: !!clearResult?.skipped,
+            reason: clearResult?.reason ?? null,
+          },
+        ),
+      );
+
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "succeeded",
+        workerNotes: "Cart reset succeeded",
+        errorMessage: null,
+        evidence: [
+          ...stepEvidence,
+          buildEvidenceEntry({
+            kind: "cart_reset_summary",
+            stage: "cart_reset",
+            message: clearResult?.cleared
+              ? `Cleared ${clearResult.itemCountBefore} item(s) from MILO cart`
+              : clearResult?.skipped
+                ? `Cart-reset skipped: ${clearResult.reason}`
+                : "MILO cart was already empty",
+            attributes: clearResult ?? {},
+          }),
+          buildNoSubmitAttestationEvidence("cart_reset", "cart_reset_only"),
+        ],
+      });
+
+      return {
+        success: true,
+        claimed: true,
+        runId: run.id,
+        runType: "cart_reset_only",
+        clearResult,
+      };
+    }
 
     await heartbeatRun({
       apiBaseUrl,

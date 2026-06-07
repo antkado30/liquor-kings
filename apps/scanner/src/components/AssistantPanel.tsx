@@ -1,16 +1,63 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { askAssistant } from "../api/assistant";
+import type { CartContextValue } from "../hooks/useCart";
 
 type Message = { id: number; role: "user" | "assistant"; text: string };
 
-const SUGGESTIONS = [
-  "What's the 9 liter rule?",
-  "How much does code 100009 cost?",
-  "Can I order 8 bottles of a 750ml?",
-];
+/**
+ * Compute context-aware suggestions for the assistant (task #74,
+ * 2026-06-04). Static "what's the 9L rule" got stale fast — these
+ * change based on what's happening in the app right now.
+ *
+ * Rules:
+ *   - If cart has items: surface a question about it ("Will this cart
+ *     pass MLCC validate?", "What's my best ADA balance?")
+ *   - If cart is empty: surface inventory / order-history questions
+ *   - Time-of-day awareness for the "what's selling today?" angle
+ *   - Always fall back to a few evergreen MLCC questions so we never
+ *     show an empty list
+ */
+function buildContextualSuggestions(
+  cart: CartContextValue,
+): string[] {
+  const out: string[] = [];
+  const hasItems = cart.items.length > 0;
+  const distinctSkus = new Set(cart.items.map((it) => it.product.code)).size;
+  const hour = new Date().getHours();
+  const morning = hour >= 6 && hour < 12;
+  const evening = hour >= 17 && hour < 22;
+
+  if (hasItems) {
+    out.push("Will my current cart pass MLCC validation?");
+    if (distinctSkus >= 3) {
+      out.push("Which distributor in my cart has the smallest subtotal?");
+    }
+    out.push("Are any of my cart items new MLCC arrivals?");
+  } else {
+    if (morning) {
+      out.push("What price changes happened in the last 7 days?");
+      out.push("What did I order last week?");
+    } else if (evening) {
+      out.push("Summarize today's orders");
+      out.push("What's selling on my shelf this week?");
+    } else {
+      out.push("What price changes happened in the last 7 days?");
+      out.push("What new MLCC arrivals came out this week?");
+    }
+  }
+
+  // Always-available MLCC compliance questions — dad's actual day-to-day.
+  out.push("What's the 9 liter rule?");
+  out.push("Can I order 8 bottles of a 750ml?");
+
+  // De-dupe + cap at 5 so the panel doesn't get overrun.
+  return [...new Set(out)].slice(0, 5);
+}
 
 type AssistantPanelProps = {
   onClose: () => void;
+  /** Cart state to drive contextual suggestions. Optional for back-compat. */
+  cart?: CartContextValue;
 };
 
 /**
@@ -19,13 +66,29 @@ type AssistantPanelProps = {
  * independent call to POST /assistant/ask; the conversation is kept
  * client-side for display.
  */
-export function AssistantPanel({ onClose }: AssistantPanelProps) {
+export function AssistantPanel({ onClose, cart }: AssistantPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isAsking, setIsAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const nextIdRef = useRef(1);
+
+  // Dynamic suggestions — recomputed when the cart context changes.
+  // Frozen for the empty-state view at first paint so they don't shuffle
+  // mid-read if the user lingers.
+  const suggestions = useMemo(
+    () =>
+      cart
+        ? buildContextualSuggestions(cart)
+        : [
+            "What's the 9 liter rule?",
+            "How much does code 100009 cost?",
+            "Can I order 8 bottles of a 750ml?",
+          ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cart?.items.length],
+  );
 
   // Keep the message list scrolled to the latest message.
   useEffect(() => {
@@ -89,7 +152,7 @@ export function AssistantPanel({ onClose }: AssistantPanelProps) {
                 Ask anything about your catalog, pricing, MLCC rules, or orders.
               </p>
               <div className="assistant-suggestions">
-                {SUGGESTIONS.map((s) => (
+                {suggestions.map((s) => (
                   <button
                     key={s}
                     type="button"

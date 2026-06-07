@@ -356,4 +356,450 @@ router.get("/telemetry", async (req, res) => {
   }
 });
 
+/* ============================================================
+ * Catalog image curation (task #69, 2026-06-04).
+ *
+ * Tony's self-serve admin tool for setting mlcc_items.image_url
+ * one SKU at a time. Replaces the dead-end programmatic backfill
+ * (UPCitemdb sparse + rate-limited; see project_upcitemdb_unviable).
+ *
+ * Endpoints:
+ *   GET  /admin/catalog/uncovered  — paginated SKUs missing images,
+ *                                    on-shelf rows first.
+ *   PUT  /admin/catalog/:code/image — set image_url for all rows with
+ *                                     that MLCC code. Body: { image_url }.
+ *   DELETE /admin/catalog/:code/image — clear image_url back to null
+ *                                       (in case of a bad paste).
+ * ============================================================ */
+
+const IMAGE_URL_MAX_LEN = 2000;
+
+function isValidImageUrl(u) {
+  if (typeof u !== "string") return false;
+  const t = u.trim();
+  if (!t || t.length > IMAGE_URL_MAX_LEN) return false;
+  try {
+    const parsed = new URL(t);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * GET /admin/catalog/uncovered
+ *
+ * Lists active mlcc_items with image_url IS NULL. Rows whose `code`
+ * appears in any `bottles` row (i.e. on someone's shelf — the
+ * "actually scanned" pool) are returned first so curating effort
+ * goes where it matters. Within each bucket, we order by name ASC
+ * for predictable scroll.
+ *
+ * Query params:
+ *   - limit:  1..100, default 30
+ *   - offset: default 0
+ *   - q:      optional ILIKE search on name
+ *   - on_shelf_only=true: restrict to SKUs in bottles table
+ *
+ * Response:
+ *   { ok, total, on_shelf_total, rows: [{ code, name, bottle_size_ml,
+ *     bottle_size_label, ada_name, category, on_shelf }] }
+ */
+router.get("/catalog/uncovered", async (req, res) => {
+  if (!assertAdminToken(req, res)) return;
+  try {
+    let limit = Number.parseInt(String(req.query.limit ?? "30"), 10);
+    let offset = Number.parseInt(String(req.query.offset ?? "0"), 10);
+    if (!Number.isFinite(limit) || limit < 1) limit = 30;
+    if (limit > 100) limit = 100;
+    if (!Number.isFinite(offset) || offset < 0) offset = 0;
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const onShelfOnly =
+      String(req.query.on_shelf_only ?? "").toLowerCase() === "true";
+
+    // First gather all on-shelf MLCC codes (from bottles across all stores).
+    // For LK's V1 scale this is fine — bottles has ~hundreds of rows.
+    const { data: shelfRows, error: shelfErr } = await supabase
+      .from("bottles")
+      .select("mlcc_code")
+      .eq("is_active", true);
+    if (shelfErr) {
+      return res.status(500).json({ ok: false, error: shelfErr.message });
+    }
+    const onShelfCodes = new Set(
+      (shelfRows ?? [])
+        .map((r) => String(r?.mlcc_code ?? "").trim())
+        .filter(Boolean),
+    );
+
+    // Two queries: on-shelf first, then off-shelf (or only on-shelf if filtered).
+    const baseSelect = (q1) => {
+      let s = supabase
+        .from("mlcc_items")
+        .select(
+          "code, name, bottle_size_ml, bottle_size_label, ada_name, category",
+          { count: "exact" },
+        )
+        .is("image_url", null)
+        .eq("is_active", true);
+      if (q) s = s.ilike("name", `%${q}%`);
+      return q1 ? s : s;
+    };
+
+    let rows = [];
+    let total = 0;
+    let onShelfTotal = 0;
+
+    if (onShelfOnly) {
+      const codes = [...onShelfCodes];
+      onShelfTotal = codes.length;
+      if (codes.length === 0) {
+        return res.json({
+          ok: true,
+          total: 0,
+          on_shelf_total: 0,
+          rows: [],
+          limit,
+          offset,
+        });
+      }
+      const { data, error, count } = await baseSelect()
+        .in("code", codes)
+        .order("name", { ascending: true })
+        .range(offset, offset + limit - 1);
+      if (error) {
+        return res.status(500).json({ ok: false, error: error.message });
+      }
+      rows = (data ?? []).map((r) => ({ ...r, on_shelf: true }));
+      total = count ?? 0;
+    } else {
+      // First page block: on-shelf rows. Then off-shelf fills the rest.
+      const codes = [...onShelfCodes];
+      let shelfData = [];
+      let shelfCount = 0;
+      if (codes.length > 0) {
+        const r = await baseSelect()
+          .in("code", codes)
+          .order("name", { ascending: true })
+          .range(0, 1000); // pull all on-shelf at once; small set
+        if (r.error) {
+          return res.status(500).json({ ok: false, error: r.error.message });
+        }
+        shelfData = r.data ?? [];
+        shelfCount = shelfData.length;
+      }
+      onShelfTotal = shelfCount;
+
+      const offShelfStart = Math.max(0, offset - shelfCount);
+      const offShelfLimit = limit - Math.max(0, Math.min(limit, shelfCount - offset));
+
+      let offShelfData = [];
+      let offShelfTotal = 0;
+      if (offShelfLimit > 0) {
+        let off = supabase
+          .from("mlcc_items")
+          .select(
+            "code, name, bottle_size_ml, bottle_size_label, ada_name, category",
+            { count: "exact" },
+          )
+          .is("image_url", null)
+          .eq("is_active", true);
+        if (codes.length > 0) {
+          off = off.not("code", "in", `(${codes.map((c) => `"${c}"`).join(",")})`);
+        }
+        if (q) off = off.ilike("name", `%${q}%`);
+        const r = await off
+          .order("name", { ascending: true })
+          .range(offShelfStart, offShelfStart + offShelfLimit - 1);
+        if (r.error) {
+          return res.status(500).json({ ok: false, error: r.error.message });
+        }
+        offShelfData = r.data ?? [];
+        offShelfTotal = r.count ?? 0;
+      }
+
+      const shelfSlice = shelfData
+        .slice(offset, offset + limit)
+        .map((r) => ({ ...r, on_shelf: true }));
+      const offSlice = offShelfData.map((r) => ({ ...r, on_shelf: false }));
+      rows = [...shelfSlice, ...offSlice].slice(0, limit);
+      total = shelfCount + offShelfTotal;
+    }
+
+    return res.json({
+      ok: true,
+      total,
+      on_shelf_total: onShelfTotal,
+      rows,
+      limit,
+      offset,
+    });
+  } catch (e) {
+    return res
+      .status(500)
+      .json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * PUT /admin/catalog/:code/image
+ * Body: { image_url: string }
+ *
+ * Updates image_url + image_source='manual' + image_updated_at=now()
+ * on every mlcc_items row with the matching code (across ADAs).
+ * Validates URL is http(s) and under 2000 chars.
+ */
+router.put("/catalog/:code/image", express.json(), async (req, res) => {
+  if (!assertAdminToken(req, res)) return;
+  try {
+    const code = String(req.params.code ?? "").trim();
+    if (!code) {
+      return res.status(400).json({ ok: false, error: "code_required" });
+    }
+    const imageUrl = String(req.body?.image_url ?? "").trim();
+    if (!isValidImageUrl(imageUrl)) {
+      return res.status(400).json({ ok: false, error: "invalid_url" });
+    }
+
+    const { data, error } = await supabase
+      .from("mlcc_items")
+      .update({
+        image_url: imageUrl,
+        image_source: "manual",
+        image_updated_at: new Date().toISOString(),
+      })
+      .eq("code", code)
+      .select("id");
+    if (error) {
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+    return res.json({ ok: true, updated: (data ?? []).length });
+  } catch (e) {
+    return res
+      .status(500)
+      .json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * DELETE /admin/catalog/:code/image — clears image_url back to null.
+ */
+router.delete("/catalog/:code/image", async (req, res) => {
+  if (!assertAdminToken(req, res)) return;
+  try {
+    const code = String(req.params.code ?? "").trim();
+    if (!code) {
+      return res.status(400).json({ ok: false, error: "code_required" });
+    }
+    const { data, error } = await supabase
+      .from("mlcc_items")
+      .update({
+        image_url: null,
+        image_source: null,
+        image_updated_at: new Date().toISOString(),
+      })
+      .eq("code", code)
+      .select("id");
+    if (error) {
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+    return res.json({ ok: true, updated: (data ?? []).length });
+  } catch (e) {
+    return res
+      .status(500)
+      .json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/* ============================================================
+ * LK Founder Console (task #81, 2026-06-06).
+ *
+ * "Tony's god view." Returns the company-wide aggregate state in
+ * one shot so the founder dashboard can paint with a single fetch:
+ *   - Stores: total / new today / new this week / new this month
+ *   - Users: total auth users with at least one store_user row
+ *   - Runs: last 24h successful runs, failed runs by failure_type
+ *   - Confirmations: last 7 days submit count + gross spend across
+ *     all stores (LK platform GMV)
+ *   - Recent stores list (newest 10 with signup date + first activity)
+ *   - Recent errors (10 most recent failed runs with the error message)
+ *   - Estimated MRR (active store count × $119)
+ *
+ * Auth: same LK_ADMIN_TOKEN gate as other /admin/* endpoints. No
+ * authenticated user can hit this — bearer must match the secret.
+ * ============================================================ */
+router.get("/founder-console", async (req, res) => {
+  if (!assertAdminToken(req, res)) return;
+  try {
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const weekStart = new Date(now.getTime() - 7 * 86_400_000);
+    const monthStart = new Date(now.getTime() - 30 * 86_400_000);
+    const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    /*
+     * Run a bunch of count queries in parallel. Supabase / PostgREST
+     * `head:true` + `count:'exact'` returns the count without the
+     * rows — cheap. We tolerate individual query failures so a
+     * broken table doesn't blackhole the whole dashboard.
+     */
+    const countSafe = async (table, build) => {
+      try {
+        const q = build(supabase.from(table).select("*", { count: "exact", head: true }));
+        const { count, error } = await q;
+        if (error) return { ok: false, error: error.message };
+        return { ok: true, count: count ?? 0 };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    };
+
+    const [
+      totalStores,
+      newStoresToday,
+      newStoresWeek,
+      newStoresMonth,
+      activeStores,
+      totalUsers,
+      runsLast24hAll,
+      runsLast24hFailed,
+      confsLast7d,
+    ] = await Promise.all([
+      countSafe("stores", (q) => q),
+      countSafe("stores", (q) => q.gte("created_at", todayStart.toISOString())),
+      countSafe("stores", (q) => q.gte("created_at", weekStart.toISOString())),
+      countSafe("stores", (q) => q.gte("created_at", monthStart.toISOString())),
+      countSafe("stores", (q) => q.eq("is_active", true)),
+      countSafe("store_users", (q) => q.eq("is_active", true)),
+      countSafe("execution_runs", (q) => q.gte("created_at", last24h.toISOString())),
+      countSafe("execution_runs", (q) =>
+        q.gte("created_at", last24h.toISOString()).eq("status", "failed"),
+      ),
+      countSafe("milo_order_confirmations", (q) =>
+        q.gte("placed_at", weekStart.toISOString()),
+      ),
+    ]);
+
+    /*
+     * Recent stores (last 10). We want the newest signups for the
+     * "watch the funnel" panel. Joining store_users client-side to
+     * count owners per store (simpler than a Postgres JOIN here).
+     */
+    const { data: recentStores } = await supabase
+      .from("stores")
+      .select(
+        "id, store_name, liquor_license, mlcc_username, is_active, created_at, mlcc_credentials_last_verified_at",
+      )
+      .order("created_at", { ascending: false, nullsFirst: false })
+      .limit(10);
+
+    /*
+     * Recent failures (last 10) — the "something needs my attention"
+     * list. Includes the store_name so Tony can click straight through.
+     */
+    const { data: recentFailures } = await supabase
+      .from("execution_runs")
+      .select(
+        "id, store_id, status, failure_type, error_message, finished_at, worker_notes",
+      )
+      .eq("status", "failed")
+      .order("created_at", { ascending: false, nullsFirst: false })
+      .limit(10);
+
+    // Hydrate store names for the failures list in one query.
+    const failureStoreIds = [
+      ...new Set(
+        (recentFailures ?? [])
+          .map((f) => f.store_id)
+          .filter(Boolean),
+      ),
+    ];
+    let storeNameById = new Map();
+    if (failureStoreIds.length > 0) {
+      const { data: storeRows } = await supabase
+        .from("stores")
+        .select("id, store_name")
+        .in("id", failureStoreIds);
+      storeNameById = new Map(
+        (storeRows ?? []).map((s) => [s.id, s.store_name]),
+      );
+    }
+    const failuresEnriched = (recentFailures ?? []).map((f) => ({
+      ...f,
+      store_name: storeNameById.get(f.store_id) ?? "unknown",
+    }));
+
+    /*
+     * Platform GMV last 7 days — the headline LK number. Sum of
+     * net_total across every confirmation submitted in the window.
+     */
+    const { data: confRows } = await supabase
+      .from("milo_order_confirmations")
+      .select("net_total, store_id")
+      .gte("placed_at", weekStart.toISOString());
+    const gmvLast7d =
+      Math.round(
+        (confRows ?? []).reduce(
+          (acc, r) => acc + (Number(r.net_total) || 0),
+          0,
+        ) * 100,
+      ) / 100;
+    const activeStoresLast7d = new Set(
+      (confRows ?? []).map((r) => r.store_id).filter(Boolean),
+    ).size;
+
+    /*
+     * Estimated MRR. For now: active_store_count × $119. Real value
+     * comes from Stripe once billing is wired (#future). This is the
+     * "if everyone paid today" upper bound for the founder's pricing
+     * sanity check.
+     */
+    const PRICE_PER_STORE_USD = 119;
+    const estimatedMrr = (activeStores.count ?? 0) * PRICE_PER_STORE_USD;
+
+    return res.json({
+      ok: true,
+      generated_at: now.toISOString(),
+      stores: {
+        total: totalStores.count ?? 0,
+        active: activeStores.count ?? 0,
+        new_today: newStoresToday.count ?? 0,
+        new_this_week: newStoresWeek.count ?? 0,
+        new_this_month: newStoresMonth.count ?? 0,
+      },
+      users: {
+        active: totalUsers.count ?? 0,
+      },
+      runs: {
+        last_24h_total: runsLast24hAll.count ?? 0,
+        last_24h_failed: runsLast24hFailed.count ?? 0,
+        success_rate_pct:
+          (runsLast24hAll.count ?? 0) === 0
+            ? null
+            : Math.round(
+                ((runsLast24hAll.count - runsLast24hFailed.count) /
+                  runsLast24hAll.count) *
+                  10000,
+              ) / 100,
+      },
+      activity: {
+        confirmations_last_7d: confsLast7d.count ?? 0,
+        gmv_last_7d_usd: gmvLast7d,
+        active_stores_last_7d: activeStoresLast7d,
+      },
+      financials: {
+        estimated_mrr_usd: estimatedMrr,
+        price_per_store_usd: PRICE_PER_STORE_USD,
+      },
+      recent_stores: recentStores ?? [],
+      recent_failures: failuresEnriched,
+    });
+  } catch (e) {
+    return res
+      .status(500)
+      .json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 export default router;

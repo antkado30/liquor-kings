@@ -59,8 +59,16 @@ export function BrowsePage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openPicker, setOpenPicker] = useState<
-    null | "category" | "ada" | "size" | "sort"
+    null | "category" | "ada" | "size" | "sort" | "price" | "proof"
   >(null);
+
+  // Local input buffers for the range pickers (task #73, 2026-06-04).
+  // Held separately from `filters` so the user can type freely without
+  // re-fetching mid-keystroke. Committed to filters on the Apply tap.
+  const [priceMinInput, setPriceMinInput] = useState("");
+  const [priceMaxInput, setPriceMaxInput] = useState("");
+  const [proofMinInput, setProofMinInput] = useState("");
+  const [proofMaxInput, setProofMaxInput] = useState("");
 
   // ProductCard modal state — same pattern as ScannerPage.
   const [showProductCard, setShowProductCard] = useState(false);
@@ -136,15 +144,64 @@ export function BrowsePage() {
   const sortChipLabel =
     SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "Sort";
 
+  // Range chip labels — show "Price" when unset, "$20-$50" etc. when bounded.
+  const priceChipLabel =
+    filters.min_price != null && filters.max_price != null
+      ? `$${filters.min_price}-$${filters.max_price}`
+      : filters.min_price != null
+        ? `≥ $${filters.min_price}`
+        : filters.max_price != null
+          ? `≤ $${filters.max_price}`
+          : "Price";
+
+  const proofChipLabel =
+    filters.min_proof != null && filters.max_proof != null
+      ? `${filters.min_proof}-${filters.max_proof} proof`
+      : filters.min_proof != null
+        ? `≥ ${filters.min_proof} proof`
+        : filters.max_proof != null
+          ? `≤ ${filters.max_proof} proof`
+          : "Proof";
+
   const hasAnyFilter =
     !!filters.category ||
     !!filters.ada_number ||
     filters.bottle_size_ml != null ||
+    filters.min_price != null ||
+    filters.max_price != null ||
+    filters.min_proof != null ||
+    filters.max_proof != null ||
     !!query.trim();
 
   const clearAll = () => {
     setFilters({});
     setQuery("");
+    setPriceMinInput("");
+    setPriceMaxInput("");
+    setProofMinInput("");
+    setProofMaxInput("");
+  };
+
+  // Apply handlers — parse inputs, push into filters, close picker.
+  const applyPriceRange = () => {
+    const min = priceMinInput.trim() === "" ? null : Number(priceMinInput);
+    const max = priceMaxInput.trim() === "" ? null : Number(priceMaxInput);
+    setFilters((f) => ({
+      ...f,
+      min_price: Number.isFinite(min) ? min : null,
+      max_price: Number.isFinite(max) ? max : null,
+    }));
+    setOpenPicker(null);
+  };
+  const applyProofRange = () => {
+    const min = proofMinInput.trim() === "" ? null : Number(proofMinInput);
+    const max = proofMaxInput.trim() === "" ? null : Number(proofMaxInput);
+    setFilters((f) => ({
+      ...f,
+      min_proof: Number.isFinite(min) ? min : null,
+      max_proof: Number.isFinite(max) ? max : null,
+    }));
+    setOpenPicker(null);
   };
 
   return (
@@ -187,6 +244,28 @@ export function BrowsePage() {
           onClick={() => setOpenPicker("size")}
         >
           {sizeChipLabel} ▾
+        </button>
+        <button
+          type="button"
+          className={`browse-chip${filters.min_price != null || filters.max_price != null ? " browse-chip--active" : ""}`}
+          onClick={() => {
+            setPriceMinInput(filters.min_price?.toString() ?? "");
+            setPriceMaxInput(filters.max_price?.toString() ?? "");
+            setOpenPicker("price");
+          }}
+        >
+          {priceChipLabel} ▾
+        </button>
+        <button
+          type="button"
+          className={`browse-chip${filters.min_proof != null || filters.max_proof != null ? " browse-chip--active" : ""}`}
+          onClick={() => {
+            setProofMinInput(filters.min_proof?.toString() ?? "");
+            setProofMaxInput(filters.max_proof?.toString() ?? "");
+            setOpenPicker("proof");
+          }}
+        >
+          {proofChipLabel} ▾
         </button>
         <button
           type="button"
@@ -281,7 +360,11 @@ export function BrowsePage() {
                     ? "Distributor"
                     : openPicker === "size"
                       ? "Bottle size"
-                      : "Sort"}
+                      : openPicker === "price"
+                        ? "Price range"
+                        : openPicker === "proof"
+                          ? "Proof range"
+                          : "Sort"}
               </h2>
               <button
                 type="button"
@@ -402,6 +485,144 @@ export function BrowsePage() {
                     </li>
                   ))}
                 </>
+              ) : null}
+              {openPicker === "price" ? (
+                <li style={{ padding: 12 }}>
+                  <p className="muted small" style={{ margin: "0 0 12px 0" }}>
+                    Filter by licensee price. Leave a box empty to skip that bound.
+                  </p>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+                    <span style={{ fontSize: 14 }}>$</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      placeholder="min"
+                      value={priceMinInput}
+                      onChange={(e) => setPriceMinInput(e.target.value)}
+                      style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "inherit" }}
+                    />
+                    <span>to</span>
+                    <span style={{ fontSize: 14 }}>$</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      placeholder="max"
+                      value={priceMaxInput}
+                      onChange={(e) => setPriceMaxInput(e.target.value)}
+                      style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "inherit" }}
+                    />
+                  </div>
+                  {/* Quick-pick presets — common ranges for liquor pricing */}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                    {[
+                      { label: "Under $20", min: "", max: "20" },
+                      { label: "$20–$50", min: "20", max: "50" },
+                      { label: "$50–$100", min: "50", max: "100" },
+                      { label: "$100+", min: "100", max: "" },
+                    ].map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        className="browse-chip"
+                        onClick={() => {
+                          setPriceMinInput(preset.min);
+                          setPriceMaxInput(preset.max);
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      className="btn secondary"
+                      onClick={() => {
+                        setPriceMinInput("");
+                        setPriceMaxInput("");
+                        setFilters((f) => ({ ...f, min_price: null, max_price: null }));
+                        setOpenPicker(null);
+                      }}
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      style={{ flex: 1 }}
+                      onClick={applyPriceRange}
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </li>
+              ) : null}
+              {openPicker === "proof" ? (
+                <li style={{ padding: 12 }}>
+                  <p className="muted small" style={{ margin: "0 0 12px 0" }}>
+                    Filter by alcohol proof. Beer is ~10, wine ~24, liquor 60-100+, overproof 100+.
+                  </p>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      placeholder="min"
+                      value={proofMinInput}
+                      onChange={(e) => setProofMinInput(e.target.value)}
+                      style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "inherit" }}
+                    />
+                    <span>to</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      placeholder="max"
+                      value={proofMaxInput}
+                      onChange={(e) => setProofMaxInput(e.target.value)}
+                      style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "inherit" }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                    {[
+                      { label: "Low (≤80)", min: "", max: "80" },
+                      { label: "Standard (80–100)", min: "80", max: "100" },
+                      { label: "High (100+)", min: "100", max: "" },
+                    ].map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        className="browse-chip"
+                        onClick={() => {
+                          setProofMinInput(preset.min);
+                          setProofMaxInput(preset.max);
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      className="btn secondary"
+                      onClick={() => {
+                        setProofMinInput("");
+                        setProofMaxInput("");
+                        setFilters((f) => ({ ...f, min_proof: null, max_proof: null }));
+                        setOpenPicker(null);
+                      }}
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      style={{ flex: 1 }}
+                      onClick={applyProofRange}
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </li>
               ) : null}
             </ul>
           </div>

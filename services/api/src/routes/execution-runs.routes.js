@@ -7,6 +7,7 @@ import {
   getExecutionRunOperatorReviewBundleById,
   getExecutionRunOperatorActionsById,
   createExecutionRunFromCart,
+  createCartResetExecutionRun,
   getExecutionRunEvidenceById,
   getExecutionRunById,
   getExecutionRunLifecycleById,
@@ -95,6 +96,27 @@ router.post("/from-cart/:storeId/:cartId", async (req, res) => {
     { userId: req.auth_user_id, mode },
   );
 
+  return res.status(statusCode).json(body);
+});
+
+/**
+ * POST /execution-runs/cart-reset/:storeId
+ *
+ * Creates a cart_reset_only execution run. The worker logs in to MILO,
+ * navigates to /milo/cart, clicks Clear Cart, verifies empty, and
+ * finalizes. No cart payload is required — the run carries metadata
+ * and a store record only. Task #57 (2026-06-04).
+ *
+ * Idempotent: if an active cart_reset_only run is already in flight for
+ * this store, the existing run id is returned instead of a 400.
+ */
+router.post("/cart-reset/:storeId", async (req, res) => {
+  const { storeId } = req.params;
+  const { statusCode, body } = await createCartResetExecutionRun(
+    supabase,
+    storeId,
+    req.auth_user_id,
+  );
   return res.status(statusCode).json(body);
 });
 
