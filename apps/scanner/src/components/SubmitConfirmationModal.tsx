@@ -80,6 +80,22 @@ export function SubmitConfirmationModal({
     subtotal;
   const milccTax = orderSummary?.liquorTax ?? null;
   const milccGross = orderSummary?.grossTotal ?? null;
+  /*
+   * Discount line (added 2026-06-07 after Tony's first prod test of #89).
+   *
+   * MLCC sells to licensees at a discounted rate vs. the retail
+   * price MILO surfaces as "grossTotal." If we show
+   * "Subtotal + Tax = Total" without surfacing that discount, the
+   * arithmetic visibly doesn't reconcile (e.g. $497.66 + $59.37 ≠
+   * $472.32) and the user thinks the app is broken — even though
+   * MLCC's math is correct. Discipline #1 (predictable): same input,
+   * same output, every time. We MUST show the discount when present
+   * so the math visibly adds up.
+   */
+  const milccDiscount =
+    orderSummary?.discount && Math.abs(orderSummary.discount) > 0.005
+      ? orderSummary.discount
+      : null;
 
   return (
     <div
@@ -153,6 +169,14 @@ export function SubmitConfirmationModal({
               <span style={totalValueStyle}>{money(subtotal)}</span>
             </div>
           )}
+          {milccDiscount != null ? (
+            <div style={totalRowStyle}>
+              <span style={totalLabelStyle}>Licensee discount</span>
+              <span style={discountValueStyle}>
+                −{money(Math.abs(milccDiscount))}
+              </span>
+            </div>
+          ) : null}
           {milccTax != null ? (
             <div style={totalRowStyle}>
               <span style={totalLabelStyle}>MLCC liquor tax</span>
@@ -341,6 +365,12 @@ const totalLabelStyle: React.CSSProperties = {
 const totalValueStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
   fontWeight: 600,
+  fontVariantNumeric: "tabular-nums",
+};
+
+const discountValueStyle: React.CSSProperties = {
+  color: "#34d399", // soft green — discount = money you save
+  fontWeight: 700,
   fontVariantNumeric: "tabular-nums",
 };
 
