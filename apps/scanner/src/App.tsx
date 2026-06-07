@@ -6,6 +6,7 @@ import { CartPage } from "./pages/CartPage";
 import { OrderDetailPage } from "./pages/OrderDetailPage";
 import { OrdersPage } from "./pages/OrdersPage";
 import { ScannerPage } from "./pages/ScannerPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 export default function App() {
   // AuthGate runs FIRST (before CartProvider/Router) so we never attempt to
@@ -22,6 +23,7 @@ export default function App() {
             <Route path="/orders" element={<OrdersPage />} />
             <Route path="/orders/:id" element={<OrderDetailPage />} />
             <Route path="/browse" element={<BrowsePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

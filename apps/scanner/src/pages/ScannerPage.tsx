@@ -14,6 +14,8 @@ import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
 import { AssistantPanel } from "../components/AssistantPanel";
 import { ProductCard } from "../components/ProductCard";
+import { AnalyticsDashboard } from "../components/AnalyticsDashboard";
+import { ScheduledTemplateBanner } from "../components/ScheduledTemplateBanner";
 import { SmartCards } from "../components/SmartCards";
 import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
 import { VisionCandidatePicker } from "../components/VisionCandidatePicker";
@@ -68,6 +70,7 @@ export function ScannerPage() {
   const [productCardInitialCode, setProductCardInitialCode] = useState<string | undefined>(undefined);
   const [showCart, setShowCart] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [notFoundMsg, setNotFoundMsg] = useState(false);
   const [upcCandidates, setUpcCandidates] = useState<{
@@ -277,6 +280,19 @@ export function ScannerPage() {
               💬
             </span>
           </button>
+          {/*
+            Analytics dashboard button (task #77, 2026-06-06). Sits
+            between assistant chat and cart so dad can glance at
+            "how's the business" with one tap.
+          */}
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setShowDashboard(true)}
+            aria-label="Open analytics dashboard"
+          >
+            <span aria-hidden>📊</span>
+          </button>
           <button type="button" className="icon-btn cart-btn" onClick={() => setShowCart(true)} aria-label="Open cart">
             <span className="cart-glyph" aria-hidden>
               🛒
@@ -310,6 +326,15 @@ export function ScannerPage() {
             title="Browse"
           >
             <span aria-hidden>🔎</span>
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => navigate("/settings")}
+            aria-label="Settings"
+            title="Settings"
+          >
+            <span aria-hidden>⚙️</span>
           </button>
           <button
             type="button"
@@ -348,6 +373,16 @@ export function ScannerPage() {
         input gets hidden by passing hideManualInput. Smart cards stay
         above the camera as the highest-attention slot.
       */}
+      {/*
+        Scheduled template banner (task #75). Renders at the very top
+        of the home — above smart cards — because "your weekly order
+        is ready" is the highest-attention nudge we ever show. Renders
+        nothing when no template's scheduler has fired today.
+      */}
+      <ScheduledTemplateBanner
+        cart={cart}
+        onLoaded={() => setShowCart(true)}
+      />
       <SmartCards
         onTapProduct={(code) => {
           void getProductByCode(code).then((p) => {
@@ -503,7 +538,12 @@ export function ScannerPage() {
         />
       ) : null}
 
-      {showAssistant ? <AssistantPanel onClose={() => setShowAssistant(false)} /> : null}
+      {showAssistant ? (
+        <AssistantPanel cart={cart} onClose={() => setShowAssistant(false)} />
+      ) : null}
+      {showDashboard ? (
+        <AnalyticsDashboard onClose={() => setShowDashboard(false)} />
+      ) : null}
 
       {confirmSignOut ? (
         <div

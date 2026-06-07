@@ -26,6 +26,7 @@ import {
   isTerminalStatus,
   triggerMlccCartReset,
 } from "../api/execution";
+import { MlccCredentialsForm } from "./MlccCredentialsForm";
 
 const STAGES: Array<{ id: string; label: string }> = [
   { id: "rpa_login", label: "Signing into MLCC" },
@@ -57,6 +58,10 @@ export function OnboardingActivation({
 }) {
   const [state, setState] = useState<ActivationState>({ kind: "starting" });
   const startedRef = useRef(false);
+  // When user clicks "Update MLCC credentials" inside the failure
+  // state, expand the inline form. After they save, we auto-retry
+  // the probe with the new creds.
+  const [showFixCreds, setShowFixCreds] = useState(false);
 
   const begin = useCallback(async () => {
     if (startedRef.current) return;
@@ -141,30 +146,68 @@ export function OnboardingActivation({
             <div style={emojiStyle}>⚠️</div>
             <h2 style={titleStyle}>Couldn&apos;t verify connection</h2>
             <p style={subtitleStyle}>{state.message}</p>
-            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  startedRef.current = false;
-                  void begin();
-                }}
-                style={primaryBtnStyle}
-              >
-                Try again
-              </button>
-              <button
-                type="button"
-                onClick={onComplete}
-                style={secondaryBtnStyle}
-              >
-                Skip for now
-              </button>
-            </div>
-            <p style={{ ...subtitleStyle, fontSize: 12, marginTop: 16, opacity: 0.6 }}>
-              Common causes: wrong MLCC username/password, MLCC site down,
-              account requires 2FA setup. You can re-enter your creds
-              from settings later.
-            </p>
+            {showFixCreds && storeId ? (
+              <div style={{ marginTop: 18 }}>
+                <MlccCredentialsForm
+                  overrideStoreId={storeId}
+                  passwordRequired
+                  submitLabel="Save & retry connection"
+                  onSaved={() => {
+                    setShowFixCreds(false);
+                    startedRef.current = false;
+                    void begin();
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowFixCreds(false)}
+                  style={{ ...secondaryBtnStyle, marginTop: 10 }}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      startedRef.current = false;
+                      void begin();
+                    }}
+                    style={primaryBtnStyle}
+                  >
+                    Try again
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onComplete}
+                    style={secondaryBtnStyle}
+                  >
+                    Skip for now
+                  </button>
+                </div>
+                {storeId ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowFixCreds(true)}
+                    style={{
+                      ...secondaryBtnStyle,
+                      width: "100%",
+                      marginTop: 10,
+                      background: "rgba(58, 130, 247, 0.12)",
+                      borderColor: "rgba(58, 130, 247, 0.4)",
+                    }}
+                  >
+                    Update MLCC credentials
+                  </button>
+                ) : null}
+                <p style={{ ...subtitleStyle, fontSize: 12, marginTop: 16, opacity: 0.6 }}>
+                  Common causes: wrong MLCC username/password, MLCC site down,
+                  account requires 2FA setup.
+                </p>
+              </>
+            )}
           </>
         ) : (
           <>

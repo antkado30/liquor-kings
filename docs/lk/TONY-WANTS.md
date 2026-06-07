@@ -87,11 +87,12 @@
   competitor — potential partner.
 
 ### In progress / next up
-- ⏳ **Edit MLCC credentials post-signup.** If activation fails because
-  of a wrong MLCC password, user is currently stuck. Need settings
-  page or inline retry-with-new-creds UI. **This is the next priority.**
+- ✅ **Edit MLCC credentials post-signup.** Settings page + inline
+  "Update MLCC credentials" button inside the activation failure
+  modal. PATCH /auth/me/mlcc-credentials re-encrypts with AES-256-GCM
+  and stamps mlcc_credentials_updated_at. (#86, 2026-06-06)
 - ⏳ **ToS + Privacy policy pages.** V1 launch-blocker. Generic
-  templates or hand-rolled for LK.
+  templates or hand-rolled for LK. **Next up.**
 - ⏳ **Custom domain liquorkings.com** pointed at Fly.
 - ⏳ **Persistent activation state** (`stores.mlcc_credentials_last_verified_at`)
   so refresh-mid-activation doesn't drop user into a broken state.
