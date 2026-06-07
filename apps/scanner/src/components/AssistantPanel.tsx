@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { askAssistant } from "../api/assistant";
+import { useHideTabBar } from "../hooks/useHideTabBar";
 import type { CartContextValue } from "../hooks/useCart";
 
 type Message = { id: number; role: "user" | "assistant"; text: string };
@@ -67,6 +68,9 @@ type AssistantPanelProps = {
  * client-side for display.
  */
 export function AssistantPanel({ onClose, cart }: AssistantPanelProps) {
+  // Hide the bottom tab bar — the input area would otherwise be
+  // covered by it and the user couldn't type (Tony, 2026-06-07).
+  useHideTabBar();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isAsking, setIsAsking] = useState(false);

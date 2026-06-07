@@ -96,6 +96,12 @@ export function ScannerPage() {
       setShowAssistant(true);
       searchParams.delete("view");
       setSearchParams(searchParams, { replace: true });
+    } else if (view === "cart") {
+      // Cart tab routes here so the real CartDrawer opens (the
+      // standalone CartPage was a stub — Tony's 2026-06-07 fix).
+      setShowCart(true);
+      searchParams.delete("view");
+      setSearchParams(searchParams, { replace: true });
     }
   }, [searchParams, setSearchParams]);
   /*
@@ -404,7 +410,7 @@ export function ScannerPage() {
         <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
           <div style={aiHeroEyebrowStyle}>YOUR AI ASSISTANT</div>
           <div style={aiHeroTitleStyle}>
-            Ask anything about your store
+            Ask anything — your store, your catalog, or liquor in general
           </div>
         </div>
         <span style={{ color: "rgba(255,255,255,0.5)" }}>

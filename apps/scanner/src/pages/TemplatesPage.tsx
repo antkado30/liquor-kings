@@ -116,11 +116,37 @@ export function TemplatesPage() {
         </p>
       </header>
 
-      {error ? <div style={errorBannerStyle}>{error}</div> : null}
+      {error ? (
+        <div style={errorBannerStyle}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>
+            Couldn&apos;t load templates
+          </div>
+          <div style={{ fontSize: 12, marginBottom: 10 }}>{error}</div>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            style={{
+              background: "rgba(244, 63, 94, 0.18)",
+              border: "1px solid rgba(244, 63, 94, 0.4)",
+              color: "#fff",
+              borderRadius: 8,
+              padding: "8px 14px",
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
 
-      {templates === null ? (
+      {templates === null && !error ? (
         <div style={emptyStyle}>Loading…</div>
-      ) : templates.length === 0 ? (
+      ) : templates === null && error ? (
+        /* error already rendered above; render nothing here */
+        null
+      ) : templates !== null && templates.length === 0 ? (
         <div style={emptyCardStyle}>
           <div
             style={{
@@ -151,7 +177,7 @@ export function TemplatesPage() {
             Go to Scan
           </button>
         </div>
-      ) : (
+      ) : templates ? (
         <ul style={listStyle}>
           {templates.map((t) => {
             const totalQty = t.items.reduce((s, i) => s + i.quantity, 0);
@@ -215,7 +241,7 @@ export function TemplatesPage() {
             );
           })}
         </ul>
-      )}
+      ) : null}
 
       {toast ? <div style={toastStyle}>{toast}</div> : null}
 

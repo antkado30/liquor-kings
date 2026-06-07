@@ -42,6 +42,7 @@ import {
 import { cartLineId, type CartContextValue } from "../hooks/useCart";
 import { useSubmission } from "../hooks/useSubmission";
 import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
+import { useHideTabBar } from "../hooks/useHideTabBar";
 import { SubmitConfirmationModal } from "./SubmitConfirmationModal";
 import {
   generateValidQuantities,
@@ -211,6 +212,13 @@ export function CartDrawer({
   storeName,
   storeLicense,
 }: CartDrawerProps) {
+  /*
+   * Hide the bottom tab bar while the drawer is open. Tony's
+   * 2026-06-07 critical bug: the tab bar was covering the Submit
+   * button at the bottom of the drawer so the user literally could
+   * not reach it. This kills the overlap.
+   */
+  useHideTabBar();
   const {
     items,
     groupedByAda,

@@ -1882,6 +1882,17 @@ select {
   min-height: 100vh;
 }
 
+/*
+  Hide the bottom tab bar when an overlay/modal is open. Tony hit
+  this critical bug 2026-06-07: the AssistantPanel input + CartDrawer
+  Submit button were both covered by the tab bar. Modals call
+  useHideTabBar() which toggles body.lk-tab-bar-hidden; the tab bar
+  disappears for as long as the modal is mounted.
+*/
+body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
+  display: none !important;
+}
+
 .page-header {
   display: flex;
   align-items: center;

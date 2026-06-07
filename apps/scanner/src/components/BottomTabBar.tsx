@@ -12,15 +12,15 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { useCart } from "../hooks/useCart";
 import {
-  IconCalendar,
   IconCart,
   IconCatalog,
   IconHome,
   IconMore,
+  IconSparkles,
 } from "./Icons";
 
 type Tab = {
-  id: "scan" | "catalog" | "cart" | "templates" | "more";
+  id: "scan" | "catalog" | "cart" | "ai" | "more";
   label: string;
   Icon: React.ComponentType<{
     size?: number;
@@ -31,6 +31,16 @@ type Tab = {
   matches: (pathname: string) => boolean;
 };
 
+/*
+ * Tab bar shape — Tony's 2026-06-07 redesign call: AI Assistant
+ * replaces Templates as a top-level tab because AI is the MOAT and
+ * shouldn't be buried. Templates moves into the More page (still
+ * accessible, just not a tab).
+ *
+ * Tap AI tab → /?view=assistant → ScannerPage opens the assistant
+ * overlay (same pattern as Dashboard/Cart now). Long-term, the
+ * assistant becomes a real /assistant page.
+ */
 const TABS: Tab[] = [
   {
     id: "scan",
@@ -54,11 +64,11 @@ const TABS: Tab[] = [
     matches: (p) => p.startsWith("/cart"),
   },
   {
-    id: "templates",
-    label: "Templates",
-    Icon: IconCalendar,
-    path: "/templates",
-    matches: (p) => p.startsWith("/templates"),
+    id: "ai",
+    label: "AI",
+    Icon: IconSparkles,
+    path: "/?view=assistant",
+    matches: () => false /* assistant is an overlay; never the active route */,
   },
   {
     id: "more",
@@ -68,7 +78,8 @@ const TABS: Tab[] = [
     matches: (p) =>
       p.startsWith("/more") ||
       p.startsWith("/orders") ||
-      p.startsWith("/settings"),
+      p.startsWith("/settings") ||
+      p.startsWith("/templates"),
   },
 ];
 

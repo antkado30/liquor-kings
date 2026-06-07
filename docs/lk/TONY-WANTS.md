@@ -127,6 +127,16 @@ Trustworthy + Proud-of. The doctrine is the moat. Read the doc.
 - ⏳ **Search → continuous dropdown of bottles.** When user types in
   the scan-page search bar, show a scrollable result list with "Load
   more" at bottom. Amazon-style typeahead.
+- ⏳ **AI Assistant broader scope.** Currently the prompt is store-
+  centric. Tony wants it to answer ANY liquor question (general
+  knowledge, pairing, history, regulations across states, brand
+  trivia) AND anything store-specific (orders, inventory, MLCC).
+  Backend prompt + tool-use update.
+- ⏳ **AI Assistant accepts images.** Send the assistant a photo for
+  deeper conversation about what's in the picture. Vision API wiring.
+- ⏳ **AI Assistant becomes a real page route.** Currently overlay; long
+  term should be its own destination, not a modal. Then the AI tab
+  highlights properly when active.
 - ⏳ **Real product photos for all 13,000+ bottles in catalog.** No
   more placeholder bottle silhouettes. Strategy options: Google
   Custom Search Image API (~$65 for full catalog), distributor

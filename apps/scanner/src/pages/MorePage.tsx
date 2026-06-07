@@ -19,6 +19,7 @@ import { signOut } from "../lib/supabase";
 import { clearCurrentStoreId } from "../lib/currentStore";
 import {
   IconBarChart,
+  IconCalendar,
   IconChevronRight,
   IconClipboardList,
   IconLogOut,
@@ -40,6 +41,12 @@ export function MorePage() {
   const [confirmSignOut, setConfirmSignOut] = useState(false);
 
   const items: MenuItem[] = [
+    {
+      Icon: IconCalendar,
+      label: "Templates",
+      blurb: "Saved carts + weekly auto-prepare",
+      onTap: () => navigate("/templates"),
+    },
     {
       Icon: IconClipboardList,
       label: "Orders",
@@ -89,10 +96,12 @@ export function MorePage() {
         </div>
         <div style={aiHeroContentStyle}>
           <div style={aiHeroEyebrowStyle}>YOUR AI ASSISTANT</div>
-          <div style={aiHeroTitleStyle}>Ask anything about your store</div>
+          <div style={aiHeroTitleStyle}>
+            Ask anything — your store or liquor in general
+          </div>
           <div style={aiHeroSubtitleStyle}>
-            Order suggestions, MLCC rules, this week&apos;s movers,
-            inventory questions — grounded in your real data.
+            Your orders, your inventory, MLCC rules, pricing, what
+            pairs with what — grounded in real data.
           </div>
         </div>
         <span style={aiHeroChevronStyle}>

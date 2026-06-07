@@ -20,6 +20,7 @@ import {
   getAnalytics,
   type AnalyticsDashboard as DashData,
 } from "../api/home";
+import { useHideTabBar } from "../hooks/useHideTabBar";
 
 function money(n: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -47,6 +48,8 @@ export function AnalyticsDashboard({
 }: {
   onClose: () => void;
 }) {
+  // Hide tab bar — dashboard is full-screen, tab bar would overlap.
+  useHideTabBar();
   const [data, setData] = useState<DashData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
