@@ -99,8 +99,12 @@
   runbook at [docs/lk/runbooks/CUSTOM-DOMAIN-LIQUORKINGS.md](runbooks/CUSTOM-DOMAIN-LIQUORKINGS.md).**
   Mostly DNS work — needs Tony to register/own the domain. ~5–15 min
   hands-on, then cert provisioning runs in background.
-- ⏳ **Persistent activation state** (`stores.mlcc_credentials_last_verified_at`)
-  so refresh-mid-activation doesn't drop user into a broken state.
+- ✅ **Persistent activation state.** Any successful RPA run now stamps
+  `stores.mlcc_credentials_last_verified_at`. Backfilled for existing
+  stores with prior orders (dad's, mine). Scanner home shows a soft
+  amber "Verify your MLCC connection" banner when null — one-tap
+  probe via `cart_reset_only` clears it. Survives refresh, device
+  switch, account-skip-of-activation. (#88, 2026-06-06)
 - ⏳ **Real Sentry DSN setup** (replace placeholder).
 - ⏳ **cron-job.org setup** for daily price-book freshness ping.
 

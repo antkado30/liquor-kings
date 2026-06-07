@@ -20,8 +20,16 @@ export type SmartCard = {
   createdAt: string;
 };
 
+export type StoreVerificationMeta = {
+  mlcc_credentials_last_verified_at: string | null;
+};
+
 export type GetSmartCardsResult =
-  | { ok: true; cards: SmartCard[] }
+  | {
+      ok: true;
+      cards: SmartCard[];
+      store_meta?: StoreVerificationMeta;
+    }
   | { ok: false; error: string };
 
 export async function getSmartCards(): Promise<GetSmartCardsResult> {
@@ -64,6 +72,10 @@ export async function getSmartCards(): Promise<GetSmartCardsResult> {
   return {
     ok: true,
     cards: Array.isArray(raw.cards) ? (raw.cards as SmartCard[]) : [],
+    store_meta:
+      raw.store_meta && typeof raw.store_meta === "object"
+        ? (raw.store_meta as StoreVerificationMeta)
+        : undefined,
   };
 }
 

@@ -17,6 +17,8 @@ import { ProductCard } from "../components/ProductCard";
 import { AnalyticsDashboard } from "../components/AnalyticsDashboard";
 import { ScheduledTemplateBanner } from "../components/ScheduledTemplateBanner";
 import { SmartCards } from "../components/SmartCards";
+import { VerifyMlccBanner } from "../components/VerifyMlccBanner";
+import type { StoreVerificationMeta } from "../api/home";
 import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
 import { VisionCandidatePicker } from "../components/VisionCandidatePicker";
 import {
@@ -71,6 +73,21 @@ export function ScannerPage() {
   const [showCart, setShowCart] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
+  /*
+   * Persistent activation state (task #88). storeMeta comes back
+   * with the smart-cards fetch — undefined while loading, then an
+   * object after the API resolves. If
+   * mlcc_credentials_last_verified_at is null/missing, render the
+   * VerifyMlccBanner above SmartCards. `verifyRefreshKey` is a
+   * counter we bump after a successful probe to force SmartCards
+   * to re-fetch so the banner disappears.
+   */
+  const [storeMeta, setStoreMeta] = useState<
+    StoreVerificationMeta | undefined
+  >(undefined);
+  const [verifyRefreshKey, setVerifyRefreshKey] = useState(0);
+  const needsMlccVerification =
+    storeMeta !== undefined && !storeMeta.mlcc_credentials_last_verified_at;
   const [toast, setToast] = useState<string | null>(null);
   const [notFoundMsg, setNotFoundMsg] = useState(false);
   const [upcCandidates, setUpcCandidates] = useState<{
@@ -383,12 +400,23 @@ export function ScannerPage() {
         cart={cart}
         onLoaded={() => setShowCart(true)}
       />
+      {needsMlccVerification ? (
+        <VerifyMlccBanner
+          onVerified={() => {
+            // Bump the refresh key so SmartCards re-fetches and
+            // hides the banner naturally (last_verified_at now stamped).
+            setVerifyRefreshKey((k) => k + 1);
+          }}
+        />
+      ) : null}
       <SmartCards
         onTapProduct={(code) => {
           void getProductByCode(code).then((p) => {
             if (p) void openFamily(p);
           });
         }}
+        onStoreMeta={setStoreMeta}
+        refreshKey={verifyRefreshKey}
       />
 
       <BarcodeScanner

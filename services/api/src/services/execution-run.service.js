@@ -836,6 +836,115 @@ export const createExecutionRunFromCart = async (
   };
 };
 
+/**
+ * Create a "cart_reset_only" execution_run (task #57, 2026-06-04).
+ *
+ * Unlike validate_only / rpa_run, this run has NO cart payload — it's a
+ * one-shot operation that logs in to MILO and clears the cart. The
+ * worker dispatches on metadata.run_type and runs a stripped-down
+ * pipeline (Stage 1 login → navigate to /milo/products → clearMiloCart).
+ *
+ * Idempotency: refuses to enqueue if any cart_reset_only run is already
+ * active (queued/running) for this store. Returns the existing run id
+ * so the caller can hop straight to polling.
+ */
+export const createCartResetExecutionRun = async (
+  supabase,
+  storeId,
+  userId,
+) => {
+  if (!isUuid(storeId)) {
+    return { statusCode: 404, body: { error: "Store not found" } };
+  }
+
+  // Look for an in-flight cart_reset for this store already. run_type
+  // lives inside payload_snapshot.metadata (not as a top-level column);
+  // the earlier `.select("id,status,metadata")` here returned a
+  // "column execution_runs.metadata does not exist" 500 in prod
+  // (2026-06-04). Read payload_snapshot instead.
+  const { data: existing, error: existingErr } = await supabase
+    .from("execution_runs")
+    .select("id, status, payload_snapshot")
+    .is("cart_id", null)
+    .eq("store_id", storeId)
+    .in("status", ACTIVE_STATUSES)
+    .limit(5);
+  if (existingErr) {
+    return serverError(existingErr.message);
+  }
+  const live = (existing ?? []).find(
+    (r) => r?.payload_snapshot?.metadata?.run_type === "cart_reset_only",
+  );
+  if (live) {
+    return {
+      statusCode: 200,
+      body: { success: true, data: { id: live.id, reused: true } },
+    };
+  }
+
+  // Load store record so the worker can resolve liquor_license without
+  // a separate trip. payload.store needs the same shape the rpa_run
+  // path uses (liquor_license is the only field actually consumed).
+  //
+  // NOTE 2026-06-04: stores has `store_name` not `name`, and no
+  // `ada_number` column at all. Earlier select with those names
+  // returned null silently (PostgREST swallows unknown-column queries
+  // on .single()), causing cart_reset_only runs to fail at the
+  // worker's license-number resolution. Selecting * for safety.
+  const { data: store, error: storeErr } = await supabase
+    .from("stores")
+    .select("id, store_name, liquor_license, mlcc_store_number")
+    .eq("id", storeId)
+    .maybeSingle();
+  if (storeErr) {
+    return serverError(storeErr.message);
+  }
+  if (!store) {
+    return { statusCode: 404, body: { error: "Store not found" } };
+  }
+
+  const metadata = {
+    run_type: "cart_reset_only",
+    requested_at: new Date().toISOString(),
+    requested_by_user_id: userId ?? null,
+  };
+
+  const { data: executionRun, error: insertError } = await supabase
+    .from("execution_runs")
+    .insert({
+      cart_id: null,
+      store_id: storeId,
+      status: "queued",
+      queued_at: new Date().toISOString(),
+      payload_snapshot: {
+        metadata,
+        items: [],
+        // Stub cart so the worker's payload shape guard doesn't trip on
+        // a missing cart. Worker's isCartResetOnly branch ignores it.
+        cart: { id: null, store_id: storeId, items: [] },
+        store,
+      },
+      worker_notes: null,
+      error_message: null,
+      retry_count: 0,
+      max_retries: DEFAULT_MAX_RETRIES,
+      failure_type: null,
+      failure_details: null,
+      started_at: null,
+      finished_at: null,
+    })
+    .select("*")
+    .single();
+
+  if (insertError) {
+    return serverError(insertError.message);
+  }
+  return {
+    statusCode: 201,
+    body: { success: true, data: executionRun },
+  };
+};
+
 export const listExecutionRunsForCart = async (supabase, storeId, cartId) => {
   if (!isUuid(cartId)) {
     return {
@@ -2022,6 +2131,45 @@ export const updateExecutionRunStatus = async (
       "succeeded",
     );
     if (fin.error) return serverError(fin.error.message);
+
+    /*
+     * Persistent activation state (task #88, 2026-06-06).
+     *
+     * A successful run is the strongest possible proof that the
+     * store's MLCC credentials still work — we just logged in to
+     * MILO and did something. Stamp last_verified_at so the scanner
+     * can know "this store's creds have been proven recently" even
+     * across refreshes, devices, etc.
+     *
+     * Specifically this is what makes refresh-mid-activation safe:
+     * if the onboarding cart_reset_only succeeds and stamps this
+     * field, then even if the user refreshes before the modal closes,
+     * the scanner home checks this field on load and won't show the
+     * "verify your connection" banner. If activation never succeeded
+     * (skipped, failed, never attempted), the banner shows and they
+     * can verify in one tap.
+     *
+     * Fire-and-forget — if this update fails we don't bubble the
+     * error to the worker because that would invert the meaning of
+     * "succeeded" for the run itself. We just log and move on.
+     */
+    try {
+      const { error: stampErr } = await supabase
+        .from("stores")
+        .update({ mlcc_credentials_last_verified_at: nowIso })
+        .eq("id", storeId);
+      if (stampErr) {
+        console.warn(
+          "[execution-run] failed to stamp mlcc_credentials_last_verified_at",
+          { storeId, runId, error: stampErr.message },
+        );
+      }
+    } catch (e) {
+      console.warn(
+        "[execution-run] exception stamping mlcc_credentials_last_verified_at",
+        { storeId, runId, error: e instanceof Error ? e.message : String(e) },
+      );
+    }
   } else if (status === "failed") {
     const fin = await finalizeOpenExecutionRunAttempt(
       supabase,

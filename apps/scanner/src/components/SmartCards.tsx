@@ -11,7 +11,11 @@
  * they don't re-surface every session.
  */
 import { useEffect, useState } from "react";
-import { getSmartCards, type SmartCard } from "../api/home";
+import {
+  getSmartCards,
+  type SmartCard,
+  type StoreVerificationMeta,
+} from "../api/home";
 
 const DISMISSED_KEY = "lk-smart-cards-dismissed-v1";
 
@@ -37,9 +41,30 @@ function saveDismissed(s: Set<string>) {
 type SmartCardsProps = {
   /** Called when user taps a card with a productCode — opens ProductCard. */
   onTapProduct: (code: string) => void;
+  /**
+   * Optional. Called when the API returns store_meta — used by the
+   * parent to decide whether to render the VerifyMlccBanner above
+   * the cards. We piggyback on the smart-cards request so we don't
+   * add a separate round-trip on home load.
+   *
+   * Also receives a `refreshKey` value (incrementing number) when the
+   * parent wants to force a re-fetch (e.g. after the user finishes a
+   * verification probe so the banner disappears).
+   */
+  onStoreMeta?: (meta: StoreVerificationMeta | undefined) => void;
+  /**
+   * Incrementing key — when this changes, SmartCards re-fetches.
+   * Set this on the parent to force a refresh after some external
+   * event (verification probe finished, etc).
+   */
+  refreshKey?: number;
 };
 
-export function SmartCards({ onTapProduct }: SmartCardsProps) {
+export function SmartCards({
+  onTapProduct,
+  onStoreMeta,
+  refreshKey = 0,
+}: SmartCardsProps) {
   const [cards, setCards] = useState<SmartCard[] | null>(null);
   const [dismissed, setDismissed] = useState<Set<string>>(() => loadDismissed());
   const [error, setError] = useState<string | null>(null);
@@ -48,11 +73,14 @@ export function SmartCards({ onTapProduct }: SmartCardsProps) {
     void getSmartCards().then((r) => {
       if (r.ok) {
         setCards(r.cards);
+        onStoreMeta?.(r.store_meta);
       } else {
         setError(r.error);
       }
     });
-  }, []);
+    // refreshKey intentionally in deps so parent can force re-fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
   if (error) {
     // Fail silently in production — don't block the scanner UI on
