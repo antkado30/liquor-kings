@@ -90,9 +90,12 @@ router.get("/browse", async (req, res) => {
     discontinued SKUs (task #44 handles per-product freshness; this is
     a broader catalog hygiene filter).
   */
+  // No count:"exact" — it forced a full COUNT scan over the filtered
+  // (often ilike) result set on EVERY page fetch, and the client doesn't
+  // use `total` anymore. Dropping it is the single biggest browse speedup.
   let select = supabase
     .from("mlcc_items")
-    .select("*", { count: "exact" })
+    .select("*")
     .eq("is_active", true);
 
   if (category) select = select.eq("category", category);
@@ -175,7 +178,7 @@ router.get("/browse", async (req, res) => {
 
   select = select.limit(limit + 1);
 
-  const { data, error, count } = await select;
+  const { data, error } = await select;
   if (error) {
     return res.status(500).json({ ok: false, error: error.message });
   }
@@ -208,7 +211,9 @@ router.get("/browse", async (req, res) => {
     ok: true,
     products,
     nextCursor,
-    total: typeof count === "number" ? count : null,
+    // total intentionally null — the client paginates by cursor and never
+    // displayed a total, so we skip the expensive exact-count scan.
+    total: null,
   });
 });
 
@@ -329,20 +334,23 @@ async function facetSizes(supabase) {
 
 async function facetPriceRange(supabase) {
   try {
-    const { data: lo } = await supabase
-      .from("mlcc_items")
-      .select("licensee_price")
-      .eq("is_active", true)
-      .not("licensee_price", "is", null)
-      .order("licensee_price", { ascending: true })
-      .limit(1);
-    const { data: hi } = await supabase
-      .from("mlcc_items")
-      .select("licensee_price")
-      .eq("is_active", true)
-      .not("licensee_price", "is", null)
-      .order("licensee_price", { ascending: false })
-      .limit(1);
+    // lo + hi are independent — run them concurrently, not back to back.
+    const [{ data: lo }, { data: hi }] = await Promise.all([
+      supabase
+        .from("mlcc_items")
+        .select("licensee_price")
+        .eq("is_active", true)
+        .not("licensee_price", "is", null)
+        .order("licensee_price", { ascending: true })
+        .limit(1),
+      supabase
+        .from("mlcc_items")
+        .select("licensee_price")
+        .eq("is_active", true)
+        .not("licensee_price", "is", null)
+        .order("licensee_price", { ascending: false })
+        .limit(1),
+    ]);
     const min = lo?.[0]?.licensee_price ?? 0;
     const max = hi?.[0]?.licensee_price ?? 0;
     return {
@@ -356,20 +364,23 @@ async function facetPriceRange(supabase) {
 
 async function facetProofRange(supabase) {
   try {
-    const { data: lo } = await supabase
-      .from("mlcc_items")
-      .select("proof")
-      .eq("is_active", true)
-      .not("proof", "is", null)
-      .order("proof", { ascending: true })
-      .limit(1);
-    const { data: hi } = await supabase
-      .from("mlcc_items")
-      .select("proof")
-      .eq("is_active", true)
-      .not("proof", "is", null)
-      .order("proof", { ascending: false })
-      .limit(1);
+    // lo + hi are independent — run them concurrently, not back to back.
+    const [{ data: lo }, { data: hi }] = await Promise.all([
+      supabase
+        .from("mlcc_items")
+        .select("proof")
+        .eq("is_active", true)
+        .not("proof", "is", null)
+        .order("proof", { ascending: true })
+        .limit(1),
+      supabase
+        .from("mlcc_items")
+        .select("proof")
+        .eq("is_active", true)
+        .not("proof", "is", null)
+        .order("proof", { ascending: false })
+        .limit(1),
+    ]);
     const min = lo?.[0]?.proof ?? 0;
     const max = hi?.[0]?.proof ?? 0;
     return {

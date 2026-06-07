@@ -93,32 +93,39 @@ async function buildPriceChangeCards(supabase, storeId) {
       Date.now() - REORDER_HISTORY_DAYS * 86_400_000,
     ).toISOString();
     const interestingCodes = new Set();
-    try {
-      const { data: orders } = await supabase
+    // These two lookups are independent — fetch them concurrently.
+    const [ordersResult, bottlesResult] = await Promise.allSettled([
+      supabase
         .from("milo_order_confirmations")
         .select("line_items")
         .eq("store_id", storeId)
-        .gte("placed_at", sinceIso);
-      for (const order of orders ?? []) {
+        .gte("placed_at", sinceIso),
+      supabase
+        .from("bottles")
+        .select("mlcc_code")
+        .eq("store_id", storeId)
+        .eq("is_active", true),
+    ]);
+    if (ordersResult.status === "fulfilled") {
+      for (const order of ordersResult.value.data ?? []) {
         for (const li of Array.isArray(order.line_items) ? order.line_items : []) {
           const code = li?.liquorCode;
           if (typeof code === "string" && code) interestingCodes.add(code);
         }
       }
-    } catch (e) {
-      console.warn(`[home] order history for price-change failed: ${e?.message}`);
+    } else {
+      console.warn(
+        `[home] order history for price-change failed: ${ordersResult.reason?.message}`,
+      );
     }
-    try {
-      const { data: bottles } = await supabase
-        .from("bottles")
-        .select("mlcc_code")
-        .eq("store_id", storeId)
-        .eq("is_active", true);
-      for (const b of bottles ?? []) {
+    if (bottlesResult.status === "fulfilled") {
+      for (const b of bottlesResult.value.data ?? []) {
         if (b?.mlcc_code) interestingCodes.add(String(b.mlcc_code));
       }
-    } catch (e) {
-      console.warn(`[home] bottles lookup for price-change failed: ${e?.message}`);
+    } else {
+      console.warn(
+        `[home] bottles lookup for price-change failed: ${bottlesResult.reason?.message}`,
+      );
     }
 
     if (interestingCodes.size === 0) return [];

@@ -57,8 +57,17 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   chunks (Browse 15KB, Templates 10KB, etc.), prefetched on idle so first
   taps stay instant. ZXing was already its own dynamic chunk. Home bundle
   shrank; other screens no longer block first paint.
-- ⏳ **Backend speed** — API in Fly ORD, DB in us-east-1; parallelize the
-  sequential queries in `/browse` and `/home/smart-cards`, confirm indexes.
+- ✅ **Backend speed pass #1** (2026-06-07) — dropped the `count:"exact"`
+  full-table scan from every `/browse` query (client never used the total);
+  parallelized the price/proof range facet pairs and the home price-change
+  card's order+bottles lookups. Code-only, no migration.
+- ⏳ **Backend indexes** — confirm/add indexes on `mlcc_items` for the
+  browse sort+filter columns (name, licensee_price, proof,
+  last_price_book_date, category, ada_number). Needs prod Supabase
+  (eamoozfhqolshdztbrez) — probe read-only first, then migration.
+- ⏳ **Facet aggregation** — the 3 category/ada/size facets each scan all
+  ~13.8k rows to count in JS; replace with a GROUP BY RPC (now masked by
+  client-side facet cache, so lower priority).
 - 💡 Co-locate API + DB region (bigger move, later).
 
 ---
