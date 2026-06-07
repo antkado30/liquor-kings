@@ -7,7 +7,7 @@
  * a list of confirmations grouped visually by placed-at date. Tap a
  * row to open the detail page.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   getOrdersSummary,
@@ -15,6 +15,8 @@ import {
   type MiloOrderListItem,
   type OrdersSummary,
 } from "../api/orders";
+import { useCachedResource } from "../lib/swr";
+import { getCurrentStoreId } from "../lib/currentStore";
 
 function money(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(Number(n))) return "—";
@@ -40,53 +42,58 @@ function dayKey(iso: string | null | undefined): string {
   return iso.slice(0, 10);
 }
 
+type OrdersData = {
+  orders: MiloOrderListItem[];
+  summary: OrdersSummary | null;
+  cursor: string | null;
+  hasMore: boolean;
+};
+
 export function OrdersPage() {
   const navigate = useNavigate();
-  const [orders, setOrders] = useState<MiloOrderListItem[]>([]);
-  const [summary, setSummary] = useState<OrdersSummary | null>(null);
-  const [loading, setLoading] = useState(true);
+  const storeId = getCurrentStoreId() ?? "none";
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
 
-  const loadInitial = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // Cached so reopening the Orders tab paints instantly; revalidates in bg.
+  const res = useCachedResource<OrdersData>(`orders:${storeId}`, async () => {
     const [listRes, sumRes] = await Promise.all([
       listOrders({ limit: 25 }),
       getOrdersSummary(),
     ]);
-    if (listRes.ok) {
-      setOrders(listRes.orders);
-      setCursor(listRes.nextCursor);
-      setHasMore(Boolean(listRes.nextCursor));
-    } else {
-      setError(listRes.error);
-    }
-    if (sumRes.ok) {
-      setSummary(sumRes.summary);
-    }
-    setLoading(false);
-  }, []);
+    if (!listRes.ok) throw new Error(listRes.error);
+    return {
+      orders: listRes.orders,
+      summary: sumRes.ok ? sumRes.summary : null,
+      cursor: listRes.nextCursor,
+      hasMore: Boolean(listRes.nextCursor),
+    };
+  });
+
+  const orders = res.data?.orders ?? [];
+  const summary = res.data?.summary ?? null;
+  const cursor = res.data?.cursor ?? null;
+  const hasMore = res.data?.hasMore ?? false;
+  const loading = res.loading;
+  const error = res.error
+    ? res.error instanceof Error
+      ? res.error.message
+      : String(res.error)
+    : null;
 
   const loadMore = useCallback(async () => {
-    if (!cursor || loadingMore) return;
+    if (!cursor || loadingMore || !res.data) return;
     setLoadingMore(true);
-    const res = await listOrders({ limit: 25, cursor });
-    if (res.ok) {
-      setOrders((prev) => [...prev, ...res.orders]);
-      setCursor(res.nextCursor);
-      setHasMore(Boolean(res.nextCursor));
-    } else {
-      setError(res.error);
+    const more = await listOrders({ limit: 25, cursor });
+    if (more.ok) {
+      res.mutate({
+        ...res.data,
+        orders: [...res.data.orders, ...more.orders],
+        cursor: more.nextCursor,
+        hasMore: Boolean(more.nextCursor),
+      });
     }
     setLoadingMore(false);
-  }, [cursor, loadingMore]);
-
-  useEffect(() => {
-    void loadInitial();
-  }, [loadInitial]);
+  }, [cursor, loadingMore, res]);
 
   /*
     Group rows by placed-at day so the list reads chronologically.

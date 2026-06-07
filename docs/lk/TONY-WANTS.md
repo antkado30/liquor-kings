@@ -37,6 +37,30 @@ This isn't a vibe — it's 12 named operational disciplines that govern
 every code/product decision LK ships. "Perfect" = Predictable +
 Trustworthy + Proud-of. The doctrine is the moat. Read the doc.
 
+## Instant feel (the speed bar) — stated 2026-06-07
+
+> **"Everything must feel INSTANT. Once you click a button, once you
+> enter a new page / a new tab, everything is instant. Once you
+> validate, once you submit, everything is instant. That's the goal."**
+
+Perceived latency is a bug class under the Integrity Doctrine. Status:
+
+- ✅ **Instant tab switches** (2026-06-07) — added a zero-dependency
+  stale-while-revalidate cache (`apps/scanner/src/lib/swr.ts`). Catalog,
+  Orders, Templates, Smart Cards, and price-book status now paint cached
+  data instantly on reopen and refresh in the background. No more blank →
+  spinner on every tab switch.
+- ✅ **Sync auth token** (2026-06-07) — JWT read from an in-memory session
+  mirror instead of awaiting `getSession()` before every API call.
+- ⏳ **Code-split the bundle** — all pages + the ZXing scanner lib ship in
+  one ~930 KB JS bundle. Lazy-load routes + load ZXing only on the scan
+  screen. Cuts cold-load / first-open time.
+- ⏳ **Backend speed** — API in Fly ORD, DB in us-east-1; parallelize the
+  sequential queries in `/browse` and `/home/smart-cards`, confirm indexes.
+- 💡 Co-locate API + DB region (bigger move, later).
+
+---
+
 ## How Tony wants me to work with him (permanent operating rules)
 
 - ✅ **"Keep pushing" mode is default.** Don't ask permission for next

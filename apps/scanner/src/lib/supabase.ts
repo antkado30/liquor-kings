@@ -21,7 +21,8 @@
  * The previous dev-bearer model that bundled the service role key has been
  * removed; the scanner now authenticates as a real Supabase Auth user.
  */
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient, type Session } from "@supabase/supabase-js";
+import { clearAllCache } from "./swr";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as
@@ -73,19 +74,43 @@ export const supabase: SupabaseClient = createClient(
 );
 
 /**
+ * In-memory mirror of the current session, kept fresh by onAuthStateChange
+ * below. This lets getAuthBearer() return the JWT synchronously from memory
+ * instead of awaiting supabase.auth.getSession() before EVERY API call —
+ * that per-request round trip was part of the "everything feels slow"
+ * problem (see feedback_instant_feel). Supabase fires onAuthStateChange on
+ * sign-in, sign-out, AND token auto-refresh, so this mirror never goes
+ * stale: when the JWT rotates, we get the new one immediately.
+ */
+let cachedSession: Session | null = null;
+
+supabase.auth.onAuthStateChange((_event, session) => {
+  cachedSession = session;
+});
+
+// Prime the mirror once at startup (covers a persisted session restored
+// from localStorage on a fresh page load, before the first auth event).
+void supabase.auth.getSession().then(({ data }) => {
+  if (data.session) cachedSession = data.session;
+});
+
+/**
  * Returns the current session's access token (JWT) for use as a Bearer
  * token against the Liquor Kings API. Returns null if not signed in.
  *
- * Always read this freshly — Supabase rotates the JWT on auto-refresh, so
- * caching the token across requests would eventually serve a stale value.
+ * Reads from the in-memory mirror first (instant, no await on storage),
+ * falling back to a real getSession() only on a cold cache (e.g. the very
+ * first request right after load, before the mirror is primed).
  */
 export async function getAuthBearer(): Promise<string | null> {
+  if (cachedSession?.access_token) return cachedSession.access_token;
   const { data, error } = await supabase.auth.getSession();
   if (error) {
     // Don't throw — let callers decide how to react (usually: redirect to login).
     console.warn("[scanner] supabase.auth.getSession failed:", error.message);
     return null;
   }
+  cachedSession = data.session;
   return data.session?.access_token ?? null;
 }
 
@@ -101,6 +126,10 @@ export async function getAuthBearer(): Promise<string | null> {
  * the login form when this resolves.
  */
 export async function signOut(): Promise<void> {
+  // Wipe the SWR cache so the next user in this browser starts clean and
+  // never sees the previous user's cached orders/templates/catalog.
+  clearAllCache();
+  cachedSession = null;
   const { error } = await supabase.auth.signOut();
   if (error) {
     console.warn("[scanner] supabase.auth.signOut failed:", error.message);

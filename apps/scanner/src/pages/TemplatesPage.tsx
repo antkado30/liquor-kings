@@ -19,7 +19,7 @@
  * verification) — delete shows a confirm step; discipline #5 (loud
  * failures) — load errors surface a clear message, not a silent fail.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   archiveOrderTemplate,
@@ -30,14 +30,16 @@ import {
 } from "../api/orderTemplates";
 import { useCart } from "../hooks/useCart";
 import { IconCalendar, IconTrash } from "../components/Icons";
+import { useCachedResource } from "../lib/swr";
+import { getCurrentStoreId } from "../lib/currentStore";
 
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export function TemplatesPage() {
   const navigate = useNavigate();
   const cart = useCart();
-  const [templates, setTemplates] = useState<OrderTemplate[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const storeId = getCurrentStoreId() ?? "none";
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [editing, setEditing] = useState<OrderTemplate | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<OrderTemplate | null>(
@@ -45,34 +47,38 @@ export function TemplatesPage() {
   );
   const [toast, setToast] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setError(null);
-    const r = await listOrderTemplates();
-    if (r.ok) {
+  // Cached so reopening Templates is instant; revalidates in background.
+  const res = useCachedResource<OrderTemplate[]>(
+    `templates:${storeId}`,
+    async () => {
+      const r = await listOrderTemplates();
+      if (!r.ok) throw new Error(r.error);
       // Sort: needs_review first, then alphabetical
-      const sorted = [...r.data].sort((a, b) => {
-        if (a.needs_review !== b.needs_review) {
-          return a.needs_review ? -1 : 1;
-        }
+      return [...r.data].sort((a, b) => {
+        if (a.needs_review !== b.needs_review) return a.needs_review ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
-      setTemplates(sorted);
-    } else {
-      setError(r.error);
-    }
-  }, []);
+    },
+  );
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const templates = res.data ?? null;
+  // Surface either a fetch error or an action error (load/delete failures).
+  const error =
+    loadError ??
+    (res.error
+      ? res.error instanceof Error
+        ? res.error.message
+        : String(res.error)
+      : null);
+  const refresh = res.refresh;
 
   async function handleLoad(t: OrderTemplate) {
     setLoadingId(t.id);
-    setError(null);
+    setLoadError(null);
     const r = await loadOrderTemplate(t.id);
     setLoadingId(null);
     if (!r.ok) {
-      setError(`Couldn't load "${t.name}": ${r.error}`);
+      setLoadError(`Couldn't load "${t.name}": ${r.error}`);
       return;
     }
     // Add every item to the cart.
@@ -98,7 +104,7 @@ export function TemplatesPage() {
     setConfirmDelete(null);
     const r = await archiveOrderTemplate(t.id);
     if (!r.ok) {
-      setError(`Couldn't delete "${t.name}": ${r.error}`);
+      setLoadError(`Couldn't delete "${t.name}": ${r.error}`);
       return;
     }
     setToast(`Deleted "${t.name}"`);

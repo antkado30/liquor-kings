@@ -26,6 +26,8 @@ import {
 import { getProductFamily } from "../api/catalog";
 import { ProductCard } from "../components/ProductCard";
 import { useCart } from "../hooks/useCart";
+import { useCachedResource } from "../lib/swr";
+import { getCurrentStoreId } from "../lib/currentStore";
 import type { MlccProduct, ProductFamily } from "../types";
 
 function money(n: number | null | undefined): string {
@@ -48,19 +50,51 @@ const SORT_OPTIONS: Array<{ value: BrowseSort; label: string }> = [
 export function BrowsePage() {
   const navigate = useNavigate();
   const cart = useCart();
-  const [facets, setFacets] = useState<BrowseFacets | null>(null);
+  const storeId = getCurrentStoreId() ?? "none";
   const [toast, setToast] = useState<string | null>(null);
-  const [products, setProducts] = useState<MlccProduct[]>([]);
   const [filters, setFilters] = useState<BrowseFilters>({});
   const [sort, setSort] = useState<BrowseSort>("name");
   const [query, setQuery] = useState("");
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [openPicker, setOpenPicker] = useState<
     null | "category" | "ada" | "size" | "sort" | "price" | "proof"
   >(null);
+
+  // Facets rarely change — cache them so reopening Browse is instant.
+  const facetsRes = useCachedResource<BrowseFacets>(
+    `browse:facets:${storeId}`,
+    async () => {
+      const r = await getBrowseFacets();
+      if (!r.ok) throw new Error("facets_failed");
+      return r.facets;
+    },
+    5 * 60_000, // facets are very stable; refresh at most every 5 min
+  );
+  const facets = facetsRes.data ?? null;
+
+  // Product list — cached per (filters + sort + query) combo so flipping
+  // filters back and forth, or returning to the Catalog tab, is instant.
+  const listKey = `browse:list:${storeId}:${JSON.stringify({ filters, sort, query })}`;
+  const listRes = useCachedResource<{ products: MlccProduct[]; cursor: string | null }>(
+    listKey,
+    async () => {
+      const r = await browseProducts({
+        filters: { ...filters, q: query || null },
+        sort,
+        limit: 30,
+      });
+      if (!r.ok) throw new Error(r.error);
+      return { products: r.products, cursor: r.nextCursor };
+    },
+  );
+  const products = listRes.data?.products ?? [];
+  const cursor = listRes.data?.cursor ?? null;
+  const loading = listRes.loading;
+  const error = listRes.error
+    ? listRes.error instanceof Error
+      ? listRes.error.message
+      : String(listRes.error)
+    : null;
 
   // Local input buffers for the range pickers (task #73, 2026-06-04).
   // Held separately from `filters` so the user can type freely without
@@ -84,35 +118,6 @@ export function BrowsePage() {
     }
   }, []);
 
-  // Load facets once.
-  useEffect(() => {
-    void getBrowseFacets().then((r) => {
-      if (r.ok) setFacets(r.facets);
-    });
-  }, []);
-
-  // Load initial / refresh on filter or sort change.
-  const loadInitial = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    const r = await browseProducts({
-      filters: { ...filters, q: query || null },
-      sort,
-      limit: 30,
-    });
-    if (r.ok) {
-      setProducts(r.products);
-      setCursor(r.nextCursor);
-    } else {
-      setError(r.error);
-    }
-    setLoading(false);
-  }, [filters, sort, query]);
-
-  useEffect(() => {
-    void loadInitial();
-  }, [loadInitial]);
-
   const loadMore = useCallback(async () => {
     if (!cursor || loadingMore) return;
     setLoadingMore(true);
@@ -123,13 +128,14 @@ export function BrowsePage() {
       cursor,
     });
     if (r.ok) {
-      setProducts((prev) => [...prev, ...r.products]);
-      setCursor(r.nextCursor);
-    } else {
-      setError(r.error);
+      // Append into the cache so the longer list survives a tab switch.
+      listRes.mutate({
+        products: [...products, ...r.products],
+        cursor: r.nextCursor,
+      });
     }
     setLoadingMore(false);
-  }, [cursor, loadingMore, filters, sort, query]);
+  }, [cursor, loadingMore, filters, sort, query, products, listRes]);
 
   /*
     Chip label helpers — show "Category" when no filter, "Vodka" when

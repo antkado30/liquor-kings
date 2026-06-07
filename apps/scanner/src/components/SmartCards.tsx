@@ -16,6 +16,8 @@ import {
   type SmartCard,
   type StoreVerificationMeta,
 } from "../api/home";
+import { useCachedResource } from "../lib/swr";
+import { getCurrentStoreId } from "../lib/currentStore";
 
 const DISMISSED_KEY = "lk-smart-cards-dismissed-v1";
 
@@ -65,27 +67,34 @@ export function SmartCards({
   onStoreMeta,
   refreshKey = 0,
 }: SmartCardsProps) {
-  const [cards, setCards] = useState<SmartCard[] | null>(null);
+  const storeId = getCurrentStoreId() ?? "none";
   const [dismissed, setDismissed] = useState<Set<string>>(() => loadDismissed());
-  const [error, setError] = useState<string | null>(null);
 
+  // Cached so the home screen paints its cards instantly on return.
+  // refreshKey is part of the key so the parent can force a fresh fetch
+  // (e.g. after an MLCC verification probe finishes).
+  const res = useCachedResource<{
+    cards: SmartCard[];
+    store_meta: StoreVerificationMeta | undefined;
+  }>(`home:smartcards:${storeId}:${refreshKey}`, async () => {
+    const r = await getSmartCards();
+    if (!r.ok) throw new Error(r.error);
+    return { cards: r.cards, store_meta: r.store_meta };
+  });
+
+  const cards = res.data?.cards ?? null;
+
+  // Bubble store_meta up to the parent whenever it lands (cached or fresh).
   useEffect(() => {
-    void getSmartCards().then((r) => {
-      if (r.ok) {
-        setCards(r.cards);
-        onStoreMeta?.(r.store_meta);
-      } else {
-        setError(r.error);
-      }
-    });
-    // refreshKey intentionally in deps so parent can force re-fetch.
+    if (res.data) onStoreMeta?.(res.data.store_meta);
+    // onStoreMeta is stable enough; re-firing with the same value is a no-op.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey]);
+  }, [res.data]);
 
-  if (error) {
+  if (res.error) {
     // Fail silently in production — don't block the scanner UI on
     // an optional decoration. Logged via console for diagnosis.
-    console.warn("[smart-cards] load failed:", error);
+    console.warn("[smart-cards] load failed:", res.error);
     return null;
   }
 

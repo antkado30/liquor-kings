@@ -35,6 +35,8 @@ import { useCart } from "../hooks/useCart";
 import { useCatalogSearch } from "../hooks/useCatalogSearch";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useBackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
+import { useCachedResource } from "../lib/swr";
+import { getCurrentStoreId } from "../lib/currentStore";
 import type { MlccProduct, ProductFamily, UpcLookupResponse } from "../types";
 
 function money(n: number | null | undefined): string {
@@ -137,7 +139,21 @@ export function ScannerPage() {
   // smart cards now handle that surfacing (task #63). We still need
   // the latest book date for ProductCard's per-product freshness
   // check (#44), so that state stays.
-  const [latestPriceBookDate, setLatestPriceBookDate] = useState<string | null>(null);
+  // Cached price-book date — was refetched on every home visit. ProductCard
+  // needs it for per-product freshness (#44). Stable for days, so cache long.
+  const priceBookRes = useCachedResource<string | null>(
+    `pricebook:status:${getCurrentStoreId() ?? "none"}`,
+    async () => {
+      const s = await getPriceBookStatus();
+      return s.ok &&
+        typeof s.priceBookDate === "string" &&
+        s.priceBookDate.trim() !== ""
+        ? s.priceBookDate.trim()
+        : null;
+    },
+    10 * 60_000,
+  );
+  const latestPriceBookDate = priceBookRes.data ?? null;
   const [networkWarn, setNetworkWarn] = useState(false);
   /*
     Vision identification state (task #37, 2026-06-01). When the user
@@ -153,18 +169,6 @@ export function ScannerPage() {
   } | null>(null);
   const [visionBusy, setVisionBusy] = useState(false);
   const [visionError, setVisionError] = useState<string | null>(null);
-
-  useEffect(() => {
-    void (async () => {
-      const s = await getPriceBookStatus();
-      // Always capture the latest date if the endpoint returned one,
-      // even when status=fresh. ProductCard needs it for per-product
-      // freshness checks (task #44 discontinuation detection).
-      if (s.ok && typeof s.priceBookDate === "string" && s.priceBookDate.trim() !== "") {
-        setLatestPriceBookDate(s.priceBookDate.trim());
-      }
-    })();
-  }, []);
 
   useEffect(() => {
     if (!toast) return;
