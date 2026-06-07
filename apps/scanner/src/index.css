@@ -136,11 +136,18 @@ select {
 
 .scanner-video-wrap {
   position: relative;
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
   background: #000;
-  aspect-ratio: 4 / 3;
-  max-height: 52vh;
+  /*
+    Scan-page layout fix (task #93, 2026-06-07). Tony's screenshot
+    showed dead space below the camera + search bar. Bumped to a
+    near-square aspect ratio + higher max-height so the camera fills
+    more of the screen and the dead zone shrinks. Premium feel: more
+    scanning area = more confidence the camera is actually working.
+  */
+  aspect-ratio: 5 / 6;
+  max-height: 62vh;
 }
 
 .scanner-video {

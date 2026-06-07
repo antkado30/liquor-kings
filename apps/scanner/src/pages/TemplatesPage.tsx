@@ -29,6 +29,7 @@ import {
   type OrderTemplate,
 } from "../api/orderTemplates";
 import { useCart } from "../hooks/useCart";
+import { IconCalendar, IconTrash } from "../components/Icons";
 
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -121,7 +122,21 @@ export function TemplatesPage() {
         <div style={emptyStyle}>Loading…</div>
       ) : templates.length === 0 ? (
         <div style={emptyCardStyle}>
-          <div style={{ fontSize: 36, marginBottom: 8 }}>📅</div>
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 56,
+              height: 56,
+              borderRadius: 16,
+              background: "rgba(58, 130, 247, 0.1)",
+              color: "#b9d1ff",
+              marginBottom: 12,
+            }}
+          >
+            <IconCalendar size={28} strokeWidth={1.75} />
+          </div>
           <div style={emptyTitleStyle}>No templates yet</div>
           <p style={emptyBlurbStyle}>
             Build a cart, then tap &ldquo;Save as template&rdquo; to add
@@ -193,7 +208,7 @@ export function TemplatesPage() {
                     style={dangerBtnStyle}
                     aria-label={`Delete ${t.name}`}
                   >
-                    🗑
+                    <IconTrash size={18} strokeWidth={1.85} />
                   </button>
                 </div>
               </li>

@@ -106,6 +106,35 @@ Trustworthy + Proud-of. The doctrine is the moat. Read the doc.
   competitor — potential partner.
 
 ### In progress / next up
+
+**🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
+
+- ✅ **Premium-feel pass #1: emoji icons → inline SVG.** Tab bar,
+  More page rows, Templates trash + empty state, Scan cart icon, Sign
+  out all use stroke-based currentColor SVG. New `Icons.tsx` is the
+  canonical source. (#91, 2026-06-07)
+- ✅ **AI Assistant promoted — hero card on Scan + top of More.**
+  Purple gradient hero card with Sparkles icon, eyebrow + headline,
+  Tap = opens existing assistant overlay. Same hero treatment at the
+  top of the More page. The moat is now front and center. (#92,
+  2026-06-07)
+- ✅ **Scan page camera resized.** Aspect ratio 5:6 (was 4:3),
+  max-height 62vh (was 52vh). Camera fills the screen, dead zone
+  below shrinks. (#93, 2026-06-07)
+- ⏳ **Templates: edit items inside a template.** Currently edit only
+  changes name + schedule. Need to add/remove bottles, adjust qty
+  per-line. Effectively make the template editable like a cart.
+- ⏳ **Search → continuous dropdown of bottles.** When user types in
+  the scan-page search bar, show a scrollable result list with "Load
+  more" at bottom. Amazon-style typeahead.
+- ⏳ **Real product photos for all 13,000+ bottles in catalog.** No
+  more placeholder bottle silhouettes. Strategy options: Google
+  Custom Search Image API (~$65 for full catalog), distributor
+  website scraping, manual curation via /admin/images, or a
+  combination. NEEDS STRATEGY DECISION before execution.
+
+**Earlier items (still active):**
+
 - ✅ **Edit MLCC credentials post-signup.** Settings page + inline
   "Update MLCC credentials" button inside the activation failure
   modal. PATCH /auth/me/mlcc-credentials re-encrypts with AES-256-GCM

@@ -1,28 +1,34 @@
 /**
- * MorePage — the menu accessed from the 5th bottom tab (task #90,
- * 2026-06-07). Holds destinations that don't merit a dedicated tab
- * for V1:
+ * MorePage — task #90 + #91 + #92 (2026-06-07).
  *
- *   - Orders (history)
- *   - Dashboard (analytics)
- *   - AI Assistant (chat)
- *   - Settings
- *   - Sign out
+ * Premium SVG icons replace emojis (#91). AI Assistant promoted to
+ * top of list with hero-card styling (#92) — Tony's correct call:
+ * "the AI assistant is our MOAT, why is it hidden in More."
  *
- * "Coming soon" entries seed the user's mental model of what's next:
- *   - Inventory tracking (per TONY-WANTS — next major build)
- *
- * Doctrine alignment: discipline #1 (predictable) — same order, same
- * destinations; discipline #5 (loud failures) — Sign out shows a
- * confirm step so a misfire doesn't end your session.
+ * Layout:
+ *   - Top: BIG AI Assistant card (purple gradient, sparkles icon,
+ *     "Ask anything about your store" tagline). This is the moat,
+ *     make it impossible to miss.
+ *   - Then the rest as standard rows: Orders, Dashboard, Inventory
+ *     (Coming Soon), Settings.
+ *   - Sign-out at the bottom.
  */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { signOut } from "../lib/supabase";
 import { clearCurrentStoreId } from "../lib/currentStore";
+import {
+  IconBarChart,
+  IconChevronRight,
+  IconClipboardList,
+  IconLogOut,
+  IconPackage,
+  IconSettings,
+  IconSparkles,
+} from "../components/Icons";
 
 type MenuItem = {
-  icon: string;
+  Icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
   label: string;
   blurb: string;
   onTap: () => void;
@@ -35,41 +41,28 @@ export function MorePage() {
 
   const items: MenuItem[] = [
     {
-      icon: "📋",
+      Icon: IconClipboardList,
       label: "Orders",
       blurb: "MILO confirmation history",
       onTap: () => navigate("/orders"),
     },
     {
-      icon: "📊",
+      Icon: IconBarChart,
       label: "Dashboard",
       blurb: "Weekly spend, top SKUs, biggest movers",
-      /*
-       * Dashboard and AI Assistant are modal overlays on the
-       * ScannerPage today, not standalone routes. Rather than
-       * refactor them tonight, navigate home with a query param the
-       * scanner reads on mount to auto-open the right overlay.
-       * Promotes to a real page in a follow-up.
-       */
       onTap: () => navigate("/?view=dashboard"),
     },
     {
-      icon: "💬",
-      label: "AI Assistant",
-      blurb: "Ask anything about your inventory or orders",
-      onTap: () => navigate("/?view=assistant"),
-    },
-    {
-      icon: "📦",
+      Icon: IconPackage,
       label: "Inventory",
       blurb: "Par levels, on-hand, reorder alerts",
       comingSoon: true,
       onTap: () => {
-        /* coming soon — no-op tap */
+        /* coming soon */
       },
     },
     {
-      icon: "⚙️",
+      Icon: IconSettings,
       label: "Settings",
       blurb: "MLCC credentials, store profile",
       onTap: () => navigate("/settings"),
@@ -81,34 +74,66 @@ export function MorePage() {
       <header style={headerStyle}>
         <h1 style={titleStyle}>More</h1>
         <p style={subtitleStyle}>
-          Everything else — history, analytics, AI, settings.
+          AI assistant, history, analytics, settings.
         </p>
       </header>
 
+      {/* ─── Hero AI Assistant card — the moat lives here (#92) ─── */}
+      <button
+        type="button"
+        onClick={() => navigate("/?view=assistant")}
+        style={aiHeroStyle}
+      >
+        <div style={aiHeroIconWrapStyle}>
+          <IconSparkles size={28} strokeWidth={1.9} />
+        </div>
+        <div style={aiHeroContentStyle}>
+          <div style={aiHeroEyebrowStyle}>YOUR AI ASSISTANT</div>
+          <div style={aiHeroTitleStyle}>Ask anything about your store</div>
+          <div style={aiHeroSubtitleStyle}>
+            Order suggestions, MLCC rules, this week&apos;s movers,
+            inventory questions — grounded in your real data.
+          </div>
+        </div>
+        <span style={aiHeroChevronStyle}>
+          <IconChevronRight size={22} />
+        </span>
+      </button>
+
+      {/* ─── Standard rows ─── */}
       <ul style={listStyle}>
-        {items.map((item) => (
-          <li
-            key={item.label}
-            style={{
-              ...rowStyle,
-              opacity: item.comingSoon ? 0.55 : 1,
-              cursor: item.comingSoon ? "default" : "pointer",
-            }}
-            onClick={() => !item.comingSoon && item.onTap()}
-          >
-            <span style={iconStyle}>{item.icon}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={rowTitleStyle}>
-                {item.label}
-                {item.comingSoon ? (
-                  <span style={comingSoonBadgeStyle}>Coming soon</span>
-                ) : null}
+        {items.map((item) => {
+          const Icon = item.Icon;
+          return (
+            <li
+              key={item.label}
+              style={{
+                ...rowStyle,
+                opacity: item.comingSoon ? 0.55 : 1,
+                cursor: item.comingSoon ? "default" : "pointer",
+              }}
+              onClick={() => !item.comingSoon && item.onTap()}
+            >
+              <span style={iconWrapStyle}>
+                <Icon size={22} strokeWidth={1.75} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={rowTitleStyle}>
+                  {item.label}
+                  {item.comingSoon ? (
+                    <span style={comingSoonBadgeStyle}>Coming soon</span>
+                  ) : null}
+                </div>
+                <div style={rowBlurbStyle}>{item.blurb}</div>
               </div>
-              <div style={rowBlurbStyle}>{item.blurb}</div>
-            </div>
-            {!item.comingSoon ? <span style={chevronStyle}>›</span> : null}
-          </li>
-        ))}
+              {!item.comingSoon ? (
+                <span style={chevronStyle}>
+                  <IconChevronRight size={20} />
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
 
       <button
@@ -116,7 +141,8 @@ export function MorePage() {
         onClick={() => setConfirmSignOut(true)}
         style={signOutBtnStyle}
       >
-        🚪 Sign out
+        <IconLogOut size={18} strokeWidth={1.9} />
+        <span>Sign out</span>
       </button>
 
       {confirmSignOut ? (
@@ -158,13 +184,6 @@ export function MorePage() {
   );
 }
 
-/* ─── routes for menu items that don't have explicit pages yet ──────── */
-/* (We'll wire /dashboard and /assistant once their components are
- * moved out of the ScannerPage overlay model. For now those buttons
- * navigate to placeholder routes that fall back to home via the
- * catch-all <Route path="*"> in App.tsx. Tracked in TONY-WANTS as
- * future iteration. */
-
 const pageStyle: React.CSSProperties = {
   maxWidth: 560,
   margin: "0 auto",
@@ -177,16 +196,83 @@ const headerStyle: React.CSSProperties = {
 };
 
 const titleStyle: React.CSSProperties = {
-  fontSize: 28,
+  fontSize: 30,
   fontWeight: 800,
+  letterSpacing: "-0.01em",
   margin: "0 0 4px",
 };
 
 const subtitleStyle: React.CSSProperties = {
   fontSize: 13,
-  color: "rgba(255,255,255,0.6)",
+  color: "rgba(255,255,255,0.55)",
   margin: 0,
 };
+
+/* ─── AI hero card ────────────────────────────────────────────────── */
+
+const aiHeroStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+  width: "100%",
+  textAlign: "left",
+  background:
+    "linear-gradient(135deg, rgba(124, 92, 255, 0.22), rgba(58, 130, 247, 0.12))",
+  border: "1px solid rgba(140, 110, 255, 0.35)",
+  borderRadius: 16,
+  padding: "16px 14px",
+  marginBottom: 18,
+  color: "#fff",
+  cursor: "pointer",
+  position: "relative",
+  overflow: "hidden",
+};
+
+const aiHeroIconWrapStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 48,
+  height: 48,
+  borderRadius: 14,
+  background: "rgba(140, 110, 255, 0.22)",
+  color: "#cbb8ff",
+  flexShrink: 0,
+};
+
+const aiHeroContentStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+};
+
+const aiHeroEyebrowStyle: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: "0.1em",
+  color: "rgba(203, 184, 255, 0.85)",
+  marginBottom: 4,
+};
+
+const aiHeroTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 800,
+  lineHeight: 1.25,
+  marginBottom: 4,
+};
+
+const aiHeroSubtitleStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: "rgba(255,255,255,0.65)",
+  lineHeight: 1.45,
+};
+
+const aiHeroChevronStyle: React.CSSProperties = {
+  color: "rgba(255,255,255,0.5)",
+  display: "inline-flex",
+  alignSelf: "center",
+};
+
+/* ─── Standard rows ───────────────────────────────────────────────── */
 
 const listStyle: React.CSSProperties = {
   listStyle: "none",
@@ -199,19 +285,20 @@ const listStyle: React.CSSProperties = {
 
 const rowStyle: React.CSSProperties = {
   background: "#11141b",
-  border: "1px solid rgba(255,255,255,0.07)",
-  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.06)",
+  borderRadius: 14,
   padding: "14px 14px",
   display: "flex",
   alignItems: "center",
   gap: 14,
 };
 
-const iconStyle: React.CSSProperties = {
-  fontSize: 24,
-  lineHeight: 1,
+const iconWrapStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
   width: 36,
-  textAlign: "center",
+  color: "rgba(255,255,255,0.85)",
 };
 
 const rowTitleStyle: React.CSSProperties = {
@@ -225,21 +312,20 @@ const rowTitleStyle: React.CSSProperties = {
 
 const rowBlurbStyle: React.CSSProperties = {
   fontSize: 12,
-  color: "rgba(255,255,255,0.55)",
+  color: "rgba(255,255,255,0.5)",
   marginTop: 2,
 };
 
 const chevronStyle: React.CSSProperties = {
-  fontSize: 22,
   color: "rgba(255,255,255,0.3)",
-  fontWeight: 300,
+  display: "inline-flex",
 };
 
 const comingSoonBadgeStyle: React.CSSProperties = {
   fontSize: 10,
-  background: "rgba(245, 158, 11, 0.18)",
+  background: "rgba(245, 158, 11, 0.16)",
   color: "#fde6b3",
-  border: "1px solid rgba(245, 158, 11, 0.4)",
+  border: "1px solid rgba(245, 158, 11, 0.35)",
   borderRadius: 999,
   padding: "2px 8px",
   fontWeight: 700,
@@ -247,16 +333,22 @@ const comingSoonBadgeStyle: React.CSSProperties = {
   letterSpacing: "0.05em",
 };
 
+/* ─── Sign out ────────────────────────────────────────────────────── */
+
 const signOutBtnStyle: React.CSSProperties = {
   width: "100%",
-  background: "rgba(244, 63, 94, 0.08)",
-  border: "1px solid rgba(244, 63, 94, 0.3)",
+  background: "rgba(244, 63, 94, 0.06)",
+  border: "1px solid rgba(244, 63, 94, 0.24)",
   color: "#fda4af",
-  borderRadius: 12,
+  borderRadius: 14,
   padding: "14px 18px",
   fontSize: 15,
   fontWeight: 700,
   cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 10,
 };
 
 const backdropStyle: React.CSSProperties = {

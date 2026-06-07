@@ -19,6 +19,11 @@ import { ScheduledTemplateBanner } from "../components/ScheduledTemplateBanner";
 import { SmartCards } from "../components/SmartCards";
 import { VerifyMlccBanner } from "../components/VerifyMlccBanner";
 import type { StoreVerificationMeta } from "../api/home";
+import {
+  IconCart,
+  IconChevronRight,
+  IconSparkles,
+} from "../components/Icons";
 import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
 import { VisionCandidatePicker } from "../components/VisionCandidatePicker";
 import {
@@ -321,10 +326,15 @@ export function ScannerPage() {
             className="icon-btn cart-btn"
             onClick={() => setShowCart(true)}
             aria-label="Open cart drawer"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#fff",
+              position: "relative",
+            }}
           >
-            <span className="cart-glyph" aria-hidden>
-              🛒
-            </span>
+            <IconCart size={24} strokeWidth={1.85} />
             {cart.totalItems > 0 ? (
               <span className="cart-badge">{cart.totalItems}</span>
             ) : null}
@@ -374,6 +384,34 @@ export function ScannerPage() {
           }}
         />
       ) : null}
+
+      {/*
+        AI Assistant hero card (task #92, 2026-06-07). Tony's call:
+        "the AI assistant is our MOAT, why is it hidden in More" —
+        promoting it to prime real estate on the home screen,
+        impossible to miss, above smart cards. Tap = opens the
+        existing assistant overlay.
+      */}
+      <button
+        type="button"
+        onClick={() => setShowAssistant(true)}
+        style={aiHeroBtnStyle}
+        aria-label="Open AI assistant"
+      >
+        <div style={aiHeroIconWrapStyle}>
+          <IconSparkles size={26} strokeWidth={1.9} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+          <div style={aiHeroEyebrowStyle}>YOUR AI ASSISTANT</div>
+          <div style={aiHeroTitleStyle}>
+            Ask anything about your store
+          </div>
+        </div>
+        <span style={{ color: "rgba(255,255,255,0.5)" }}>
+          <IconChevronRight size={20} />
+        </span>
+      </button>
+
       <SmartCards
         onTapProduct={(code) => {
           void getProductByCode(code).then((p) => {
@@ -705,3 +743,47 @@ export function ScannerPage() {
     </div>
   );
 }
+
+
+/* ─── AI Assistant hero card styles (task #92, 2026-06-07) ───────── */
+
+const aiHeroBtnStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+  width: "100%",
+  background:
+    "linear-gradient(135deg, rgba(124, 92, 255, 0.22), rgba(58, 130, 247, 0.12))",
+  border: "1px solid rgba(140, 110, 255, 0.32)",
+  borderRadius: 14,
+  padding: "13px 14px",
+  margin: "10px 0",
+  color: "#fff",
+  cursor: "pointer",
+};
+
+const aiHeroIconWrapStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 42,
+  height: 42,
+  borderRadius: 12,
+  background: "rgba(140, 110, 255, 0.22)",
+  color: "#cbb8ff",
+  flexShrink: 0,
+};
+
+const aiHeroEyebrowStyle: React.CSSProperties = {
+  fontSize: 9,
+  fontWeight: 800,
+  letterSpacing: "0.1em",
+  color: "rgba(203, 184, 255, 0.85)",
+  marginBottom: 2,
+};
+
+const aiHeroTitleStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  lineHeight: 1.25,
+};

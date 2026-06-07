@@ -1,33 +1,33 @@
 /**
  * BottomTabBar — Amazon-style 5-tab fixed bottom navigation (task #90,
- * 2026-06-07). Tony approved on the spot:
+ * 2026-06-07). Premium SVG icon pass (#91, same day) replaced the
+ * tacky emoji icons.
  *
- *   🏠 Scan · 📚 Catalog · 🛒 Cart · 📅 Templates · 👤 More
+ *   ⌂ Scan · ❐ Catalog · ⛁ Cart · ▦ Templates · ⌗ More
  *
- * Why this shape:
- *   - 5 is the proven sweet spot (Amazon, Instacart, every shopping app)
- *   - Cart in center, larger, with a count badge — primary action front
- *     and center
- *   - Templates gets its own tab because it's aspirational use (every
- *     week) not reference-only
- *   - "More" absorbs Orders / Dashboard / AI Chat / Settings so the bar
- *     stays clean
- *   - When Inventory ships (next major feature per TONY-WANTS), it
- *     promotes out of More into a tab. We'll either swap one of the 5
- *     into More, or go to 6 if the count badge needs the breathing room.
- *
- * Doctrine alignment: discipline #1 (predictable). Same tabs, same
- * order, same icons, every render. No A/B variations.
+ * Each tab gets a clean stroke SVG icon (see Icons.tsx). Active tab
+ * highlighted with accent color + top indicator bar. Cart tab is
+ * slightly wider and gets a count badge.
  */
 import { useLocation, useNavigate } from "react-router-dom";
 import { useCart } from "../hooks/useCart";
+import {
+  IconCalendar,
+  IconCart,
+  IconCatalog,
+  IconHome,
+  IconMore,
+} from "./Icons";
 
 type Tab = {
   id: "scan" | "catalog" | "cart" | "templates" | "more";
   label: string;
-  icon: string;
+  Icon: React.ComponentType<{
+    size?: number;
+    strokeWidth?: number;
+    style?: React.CSSProperties;
+  }>;
   path: string;
-  /** Match function — true if the current pathname belongs to this tab. */
   matches: (pathname: string) => boolean;
 };
 
@@ -35,39 +35,36 @@ const TABS: Tab[] = [
   {
     id: "scan",
     label: "Scan",
-    icon: "🏠",
+    Icon: IconHome,
     path: "/",
     matches: (p) => p === "/" || p === "",
   },
   {
     id: "catalog",
     label: "Catalog",
-    icon: "📚",
+    Icon: IconCatalog,
     path: "/browse",
     matches: (p) => p.startsWith("/browse"),
   },
   {
     id: "cart",
     label: "Cart",
-    icon: "🛒",
+    Icon: IconCart,
     path: "/cart",
     matches: (p) => p.startsWith("/cart"),
   },
   {
     id: "templates",
     label: "Templates",
-    icon: "📅",
+    Icon: IconCalendar,
     path: "/templates",
     matches: (p) => p.startsWith("/templates"),
   },
   {
     id: "more",
     label: "More",
-    icon: "👤",
+    Icon: IconMore,
     path: "/more",
-    /* `more` also matches the destinations the More menu links to,
-     * so the active highlight stays on More when the user is deep in
-     * Orders, Dashboard, Settings, etc. */
     matches: (p) =>
       p.startsWith("/more") ||
       p.startsWith("/orders") ||
@@ -90,6 +87,7 @@ export function BottomTabBar() {
         const active = tab.matches(location.pathname);
         const isCart = tab.id === "cart";
         const badge = isCart && cart.totalItems > 0 ? cart.totalItems : null;
+        const Icon = tab.Icon;
         return (
           <button
             key={tab.id}
@@ -104,13 +102,12 @@ export function BottomTabBar() {
           >
             <span
               style={{
-                ...iconStyle,
-                ...(isCart ? cartIconStyle : null),
-                opacity: active ? 1 : 0.55,
+                ...iconWrapStyle,
+                color: active ? "#fff" : "rgba(255,255,255,0.55)",
                 transform: active ? "translateY(-1px)" : "none",
               }}
             >
-              {tab.icon}
+              <Icon size={isCart ? 26 : 22} strokeWidth={active ? 2.1 : 1.75} />
               {badge != null ? (
                 <span style={badgeStyle}>
                   {badge > 99 ? "99+" : badge}
@@ -159,7 +156,7 @@ const tabBtnStyle: React.CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  gap: 3,
+  gap: 4,
   background: "transparent",
   border: "none",
   color: "#fff",
@@ -173,16 +170,13 @@ const cartTabExtraStyle: React.CSSProperties = {
   flex: 1.15,
 };
 
-const iconStyle: React.CSSProperties = {
-  fontSize: 22,
-  lineHeight: 1,
+const iconWrapStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
   position: "relative",
-  display: "inline-block",
-  transition: "opacity 120ms ease, transform 120ms ease",
-};
-
-const cartIconStyle: React.CSSProperties = {
-  fontSize: 26,
+  transition: "color 120ms ease, transform 120ms ease",
+  height: 26,
 };
 
 const labelStyle: React.CSSProperties = {
