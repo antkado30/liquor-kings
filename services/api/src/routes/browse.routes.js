@@ -93,9 +93,21 @@ router.get("/browse", async (req, res) => {
   // No count:"exact" — it forced a full COUNT scan over the filtered
   // (often ilike) result set on EVERY page fetch, and the client doesn't
   // use `total` anymore. Dropping it is the single biggest browse speedup.
+  //
+  // Select only the columns the catalog card + cursor + filters need —
+  // NOT select("*"). mlcc_items has ~20 columns (base_price, state_min_price,
+  // case_size, name_normalized, scan_count, price_changed_at, upc, …) that
+  // the browse grid never renders. Trimming the row shrinks the payload that
+  // crosses the Fly-ORD ↔ Supabase-us-east-1 hop, which is where the real
+  // browse latency lives (the table itself is only ~14k rows — too small for
+  // indexes to matter). Includes every sort column so the cursor keeps working.
+  const BROWSE_COLUMNS =
+    "id, code, name, category, ada_number, ada_name, " +
+    "bottle_size_ml, bottle_size_label, licensee_price, proof, " +
+    "is_new_item, last_price_book_date, image_url";
   let select = supabase
     .from("mlcc_items")
-    .select("*")
+    .select(BROWSE_COLUMNS)
     .eq("is_active", true);
 
   if (category) select = select.eq("category", category);

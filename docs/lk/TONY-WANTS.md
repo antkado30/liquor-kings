@@ -61,13 +61,17 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   full-table scan from every `/browse` query (client never used the total);
   parallelized the price/proof range facet pairs and the home price-change
   card's order+bottles lookups. Code-only, no migration.
-- ⏳ **Backend indexes** — confirm/add indexes on `mlcc_items` for the
-  browse sort+filter columns (name, licensee_price, proof,
-  last_price_book_date, category, ada_number). Needs prod Supabase
-  (eamoozfhqolshdztbrez) — probe read-only first, then migration.
+- ✅ **Browse payload trim** (2026-06-07) — `/browse` now selects only the
+  ~13 columns the catalog card + cursor need instead of `select("*")`,
+  shrinking each row over the cross-region hop.
+- ❌ **Backend indexes — decided NOT needed** (2026-06-07). Probed prod
+  `mlcc_items` indexes: at ~13.8k rows Postgres seq-scans/sorts in <10ms,
+  so sort/filter indexes give negligible read gain for real write+migration
+  cost. The `count:"exact"` removal + payload trim were the real DB wins.
+  Revisit only if the catalog grows 10x or EXPLAIN shows a real hotspot.
 - ⏳ **Facet aggregation** — the 3 category/ada/size facets each scan all
   ~13.8k rows to count in JS; replace with a GROUP BY RPC (now masked by
-  client-side facet cache, so lower priority).
+  client-side facet cache, so low priority).
 - 💡 Co-locate API + DB region (bigger move, later).
 
 ---
