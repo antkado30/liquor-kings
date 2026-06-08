@@ -73,6 +73,14 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   ~13.8k rows to count in JS; replace with a GROUP BY RPC (now masked by
   client-side facet cache, so low priority).
 - 💡 Co-locate API + DB region (bigger move, later).
+- ⏳ **Split the Chromium worker into its own Fly service (deploy-speed fix).**
+  Today one 821MB Playwright image runs both API/web AND the RPA worker, so
+  every deploy is slow. Plan: API/web on a slim ~150MB Node image (fast
+  deploys), worker stays on the Playwright image in a SEPARATE Fly app (worker
+  already reaches the API via the public URL, so it's feasible). ~1.5-2 hrs +
+  a real test order before cutover — touches the ORDER PIPELINE, so do it
+  FRESH, never rushed. Quick interim win available: reorder Dockerfile so a
+  scanner-only change doesn't also rebuild admin (~8-10s/deploy).
 
 ---
 
@@ -109,6 +117,19 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
    as fuck — BEFORE launch.** Every feature, lightning fast. Scale + reliability
    bar. (Ties to the integrity doctrine + the known scale gaps: RPA
    concurrency, monitoring, KMS.)
+
+---
+
+## Command Deck (admin) — next-session TODO
+
+- ✅ Premium dark "Command Deck" redesign shipped 2026-06-07 (sign-in, shell,
+  founder console + health strip). Tony loved the look.
+- ⏳ **Replace the token-paste sign-in.** It requires extracting a short-lived
+  (~1hr) Supabase access token via browser console — Tony hit "Invalid or
+  expired token" and it's bad UX. Build a real sign-in: email+password
+  (Supabase signInWithPassword in the admin app) OR a long-lived Command Deck
+  key. Goal: sign in once on the phone, add to home screen, stay in. Also
+  verify his account has operator access for /operator-review/session.
 
 ---
 
