@@ -29,9 +29,12 @@ kill_timeout = "5m"
 #   - `worker` is the persistent RPA daemon — claims execution_runs from the
 #     queue and runs all 5 stages, one run at a time. Scale by adding
 #     machines: `fly scale count worker=N`.
+# Worker split 2026-06-08: the RPA worker moved to its own app
+# (liquor-kings-worker, fly.worker.toml + Dockerfile.worker) so THIS app runs
+# only the slim API/web image and deploys fast. This app no longer runs any
+# RPA / Chromium process.
 [processes]
   app = "npm start"
-  worker = "node src/workers/run-rpa-worker.js"
 
 [env]
   # Default to dry_run-only in production until per-store ARM is wired.
@@ -75,17 +78,9 @@ kill_timeout = "5m"
     timeout = "5s"
     path = "/health"
 
-# Resource sizing is per-process. The API serves HTTP and is cheap; the
-# worker runs Chromium and needs the room (one browser ≈ 500 MB).
-
+# The API serves HTTP and is cheap. (The Chromium worker is a separate app now.)
 [[vm]]
   processes = ["app"]
   cpu_kind = "shared"
   cpus = 1
   memory_mb = 1024
-
-[[vm]]
-  processes = ["worker"]
-  cpu_kind = "shared"
-  cpus = 1
-  memory_mb = 2048

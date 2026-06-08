@@ -1,0 +1,39 @@
+# Liquor Kings — RPA WORKER app (2026-06-08, deploy-speed split).
+#
+# Separate Fly app so the heavy Chromium image doesn't slow down API/web
+# deploys. Deploy with:
+#   fly deploy -c fly.worker.toml -a liquor-kings-worker --strategy rolling --wait-timeout 900
+#   (or: npm run deploy:worker)
+#
+# This app serves NO HTTP — it's a daemon that claims execution_runs from the
+# API (API_BASE_URL) and runs all 5 RPA stages, one at a time. Scale with
+# `fly scale count -a liquor-kings-worker N` (claim-next is atomic — safe).
+#
+# Secrets must mirror the API app — see docs/lk/runbooks/WORKER-SPLIT.md.
+
+app = "liquor-kings-worker"
+primary_region = "ord"
+kill_signal = "SIGINT"
+# Give an in-flight RPA run time to finish gracefully on deploy/restart before
+# Fly force-kills (the orphan reaper covers anything past the deadline).
+kill_timeout = "5m"
+
+[build]
+  dockerfile = "Dockerfile.worker"
+
+[env]
+  LK_CHROMIUM_SANDBOX = "off"
+  # The worker reaches the API over the public URL to claim runs.
+  API_BASE_URL = "https://liquor-kings.fly.dev"
+  # MUST match the API app's effective value. Stage 5 real submission requires
+  # this = "yes" AND per-store arming; if "no", orders fall back to dry_run.
+  # If liquor-kings has this overridden by a secret, set the same secret here.
+  LK_ALLOW_ORDER_SUBMISSION = "no"
+
+# No [http_service] — the worker is outbound-only and serves nothing.
+
+# Chromium needs the room (one browser ≈ 500 MB); match the old worker VM.
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 2048

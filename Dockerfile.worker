@@ -1,0 +1,35 @@
+# Liquor Kings — RPA WORKER image (2026-06-08).
+#
+# This is the HEAVY half of the deploy-speed split. It carries the Playwright
+# (Chromium) base because the RPA worker drives a real browser against MILO.
+# It is deployed as its OWN Fly app (liquor-kings-worker) so the API/web app
+# can run on a slim image and deploy fast. See docs/lk/runbooks/WORKER-SPLIT.md.
+#
+# The worker serves NO HTTP — it claims execution_runs from the API over HTTP
+# (API_BASE_URL) and processes them one at a time. No SPAs are bundled here.
+#
+# Keep this Playwright tag in lockstep with services/api/package.json's
+# playwright dependency (^1.x must resolve to a version matching this image).
+
+FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS production
+
+ENV NODE_ENV=production
+# The base image already ships the browser; never re-download on npm install.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+# Chromium-in-container sandbox flag — read by the launch wrapper.
+ENV LK_CHROMIUM_SANDBOX=off
+
+WORKDIR /app
+
+# Install API deps first for layer caching.
+COPY services/api/package.json services/api/package-lock.json ./services/api/
+RUN cd services/api && npm ci --omit=dev
+
+# API source (the worker lives under src/workers + src/rpa).
+COPY services/api/src ./services/api/src
+COPY services/api/scripts ./services/api/scripts
+
+WORKDIR /app/services/api
+
+# The persistent RPA worker daemon — claim → run all stages → finalize, forever.
+CMD ["node", "src/workers/run-rpa-worker.js"]
