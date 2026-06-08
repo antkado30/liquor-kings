@@ -524,6 +524,18 @@ export function ScannerPage() {
               </li>
             );
           })}
+          {search.hasMore ? (
+            <li>
+              <button
+                type="button"
+                className="result-load-more"
+                onClick={() => void search.loadMore()}
+                disabled={search.loadingMore}
+              >
+                {search.loadingMore ? "Loading…" : "Load more results"}
+              </button>
+            </li>
+          ) : null}
         </ul>
       ) : null}
 

@@ -6,6 +6,7 @@
  */
 import express from "express";
 import supabase from "../config/supabase.js";
+import { operatorSessionIsValid } from "./operator-review.routes.js";
 
 const router = express.Router();
 
@@ -13,8 +14,22 @@ if (!process.env.LK_ADMIN_TOKEN?.trim()) {
   console.warn("[admin] LK_ADMIN_TOKEN is not set; /admin/upc-audit and /admin/telemetry allow unauthenticated access (dev mode)");
 }
 
-/** @param {import("express").Request} req */
+/**
+ * Authorize an /admin request. Passes if EITHER:
+ *   1. A signed-in operator session cookie is present (the Command Deck —
+ *      Tony signs in with email+password, gets a session, and that now
+ *      authorizes the founder/admin read views). [2026-06-08]
+ *   2. The X-Admin-Token header matches LK_ADMIN_TOKEN (scripts / curl).
+ *   3. LK_ADMIN_TOKEN is unset (dev mode — open).
+ *
+ * NOTE: for V1 any valid operator = founder (Tony is the only operator).
+ * When LK has multiple operators, gate the founder-console/health company-wide
+ * views behind an explicit founder role instead of any operator session.
+ *
+ * @param {import("express").Request} req
+ */
 function assertAdminToken(req, res) {
+  if (operatorSessionIsValid(req)) return true;
   const expected = process.env.LK_ADMIN_TOKEN?.trim();
   if (!expected) return true;
   const got = String(req.headers["x-admin-token"] ?? "").trim();

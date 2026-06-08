@@ -84,6 +84,14 @@ const getSession = (req) => {
   return { sid, ...record };
 };
 
+/**
+ * True if the request carries a valid (non-expired) operator session cookie.
+ * Exported so the admin routes can authorize a signed-in operator for the
+ * founder/admin read views without requiring the separate X-Admin-Token
+ * (2026-06-08). Same in-memory `sessions` store — single module instance.
+ */
+export const operatorSessionIsValid = (req) => getSession(req) != null;
+
 const logOperatorSessionEvent = async ({ event, userId = null, storeId = null, payload = {} }) => {
   await logSystemDiagnostic({
     kind: DIAGNOSTIC_KIND.OPERATOR_SESSION,

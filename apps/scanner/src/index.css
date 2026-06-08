@@ -2652,3 +2652,18 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   cursor: pointer;
   z-index: 70;
 }
+
+/* Typeahead "Load more results" button (2026-06-07) */
+.result-load-more {
+  width: 100%;
+  padding: 12px;
+  margin-top: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: var(--text, #fff);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.result-load-more:disabled { opacity: 0.6; cursor: default; }
