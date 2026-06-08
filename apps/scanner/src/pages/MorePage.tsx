@@ -63,10 +63,7 @@ export function MorePage() {
       Icon: IconPackage,
       label: "Inventory",
       blurb: "Par levels, on-hand, reorder alerts",
-      comingSoon: true,
-      onTap: () => {
-        /* coming soon */
-      },
+      onTap: () => navigate("/inventory"),
     },
     {
       Icon: IconSettings,
@@ -88,7 +85,7 @@ export function MorePage() {
       {/* ─── Hero AI Assistant card — the moat lives here (#92) ─── */}
       <button
         type="button"
-        onClick={() => navigate("/?view=assistant")}
+        onClick={() => navigate("/assistant")}
         style={aiHeroStyle}
       >
         <div style={aiHeroIconWrapStyle}>

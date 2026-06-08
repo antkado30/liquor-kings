@@ -37,9 +37,7 @@ type Tab = {
  * shouldn't be buried. Templates moves into the More page (still
  * accessible, just not a tab).
  *
- * Tap AI tab → /?view=assistant → ScannerPage opens the assistant
- * overlay (same pattern as Dashboard/Cart now). Long-term, the
- * assistant becomes a real /assistant page.
+ * Tap AI tab → /assistant (full-screen chat page).
  */
 const TABS: Tab[] = [
   {
@@ -67,8 +65,8 @@ const TABS: Tab[] = [
     id: "ai",
     label: "AI",
     Icon: IconSparkles,
-    path: "/?view=assistant",
-    matches: () => false /* assistant is an overlay; never the active route */,
+    path: "/assistant",
+    matches: (p) => p.startsWith("/assistant"),
   },
   {
     id: "more",

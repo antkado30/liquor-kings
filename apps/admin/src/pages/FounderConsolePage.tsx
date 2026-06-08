@@ -16,7 +16,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   fetchFounderConsole,
+  fetchSystemHealth,
   type FounderConsoleData,
+  type SystemHealth,
 } from "../api/founderConsole";
 
 function money(n: number): string {
@@ -65,19 +67,24 @@ function fmtDateTime(iso: string | null): string {
 
 export function FounderConsolePage() {
   const [data, setData] = useState<FounderConsoleData | null>(null);
+  const [health, setHealth] = useState<SystemHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const r = await fetchFounderConsole();
+    const [r, h] = await Promise.all([
+      fetchFounderConsole(),
+      fetchSystemHealth(),
+    ]);
     if (r.ok) {
       setData(r.data);
       setError(null);
     } else {
       setError(r.error);
     }
+    if (h.ok) setHealth(h.data);
     setLoading(false);
     setLastFetched(new Date());
   }, []);
@@ -126,6 +133,53 @@ export function FounderConsolePage() {
           {loading ? "Refreshing…" : "Refresh now"}
         </button>
       </header>
+
+      {/* ─── System health strip — first thing you see ─── */}
+      {health ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+            flexWrap: "wrap",
+            marginBottom: 20,
+            padding: "14px 18px",
+            borderRadius: 12,
+            border: `1px solid ${health.status === "ok" ? "rgba(34,197,94,0.35)" : "rgba(239,68,68,0.45)"}`,
+            background:
+              health.status === "ok"
+                ? "rgba(34,197,94,0.08)"
+                : "rgba(239,68,68,0.10)",
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 12,
+              height: 12,
+              borderRadius: "50%",
+              background: health.status === "ok" ? "#22c55e" : "#ef4444",
+              flexShrink: 0,
+              boxShadow: `0 0 10px ${health.status === "ok" ? "#22c55e" : "#ef4444"}`,
+            }}
+          />
+          <strong style={{ fontSize: 16 }}>
+            {health.status === "ok"
+              ? "All systems healthy"
+              : "System degraded — needs attention"}
+          </strong>
+          {health.reasons.length > 0 ? (
+            <span style={{ fontSize: 13, opacity: 0.85 }}>
+              {health.reasons.join(" · ")}
+            </span>
+          ) : null}
+          <span style={{ marginLeft: "auto", fontSize: 12, opacity: 0.7 }}>
+            queued {health.checks.queued} · running {health.checks.running} ·
+            stuck {health.checks.stuck} · 24h {health.checks.succeeded24h}✓/
+            {health.checks.failed24h}✗ ({100 - health.checks.failureRatePct}% ok)
+          </span>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="banner banner-err" style={{ marginBottom: 16 }}>

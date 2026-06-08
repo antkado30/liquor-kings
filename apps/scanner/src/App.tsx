@@ -29,6 +29,12 @@ const SettingsPage = lazy(() =>
 const TemplatesPage = lazy(() =>
   import("./pages/TemplatesPage").then((m) => ({ default: m.TemplatesPage })),
 );
+const AssistantPage = lazy(() =>
+  import("./pages/AssistantPage").then((m) => ({ default: m.AssistantPage })),
+);
+const InventoryPage = lazy(() =>
+  import("./pages/InventoryPage").then((m) => ({ default: m.InventoryPage })),
+);
 
 type IdleWindow = Window & {
   requestIdleCallback?: (cb: () => void) => number;
@@ -53,6 +59,8 @@ function RoutePrefetcher() {
       void import("./pages/CartPage");
       void import("./pages/SettingsPage");
       void import("./pages/OrderDetailPage");
+      void import("./pages/AssistantPage");
+      void import("./pages/InventoryPage");
     });
     return () => {
       if (w.cancelIdleCallback) w.cancelIdleCallback(id);
@@ -81,6 +89,8 @@ export default function App() {
               <Route path="/templates" element={<TemplatesPage />} />
               <Route path="/more" element={<MorePage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/assistant" element={<AssistantPage />} />
+              <Route path="/inventory" element={<InventoryPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>

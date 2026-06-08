@@ -21,9 +21,18 @@ export type AssistantResult =
  * history, inventory) work; without it, catalog/rules/pricing answers
  * still resolve fine.
  */
-export async function askAssistant(question: string): Promise<AssistantResult> {
+export async function askAssistant(
+  question: string,
+  imageDataUri?: string,
+): Promise<AssistantResult> {
   const trimmed = question.trim();
-  if (!trimmed) return { ok: false, error: "Question is empty." };
+  const image =
+    typeof imageDataUri === "string" && imageDataUri.trim().length > 0
+      ? imageDataUri.trim()
+      : undefined;
+  if (!trimmed && !image) {
+    return { ok: false, error: "Question or image is required." };
+  }
 
   let storeId: string | undefined;
   try {
@@ -42,6 +51,7 @@ export async function askAssistant(question: string): Promise<AssistantResult> {
         body: JSON.stringify({
           question: trimmed,
           ...(storeId ? { storeId } : {}),
+          ...(image ? { imageDataUri: image } : {}),
         }),
       },
       { maxRetries: 1, baseDelayMs: 600, timeoutMs: 30_000 },

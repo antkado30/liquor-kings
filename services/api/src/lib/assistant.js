@@ -1,11 +1,11 @@
 /**
  * Liquor Kings AI Assistant — orchestration layer.
  *
- * The "moat" feature from the V1 spec (docs/lk/v1-spec.md): an assistant
- * grounded in THIS STORE'S data. It answers questions a generic chatbot
- * and every competitor cannot — "what did I order last week", "what
- * should I reorder", "why won't my cart validate" — by giving Claude
- * tool access to query our live Supabase tables.
+ * The "moat" feature from the V1 spec (docs/lk/v1-spec.md): a liquor
+ * expert AND a store assistant grounded in THIS STORE'S data. It answers
+ * general spirits/bartending questions from knowledge, and store-specific
+ * questions ("what did I order last week", "what should I reorder",
+ * "why won't my cart validate") via tool access to live Supabase tables.
  *
  * Architecture: Claude API (Anthropic) with tool-use. NOT RAG/embeddings —
  * the store's data is structured SQL, small per-store, and changes
@@ -44,7 +44,44 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 const MAX_TOOL_ITERATIONS = 8;
 const MAX_TOKENS = 1024;
 
-const SYSTEM_PROMPT = `You are the Liquor Kings assistant — an in-app helper for the owner or manager of a Michigan liquor store.
+const SYSTEM_PROMPT = `You are the Liquor Kings assistant — a knowledgeable liquor expert AND an in-app helper for the owner or manager of a Michigan liquor store.
+
+You wear two hats. Many questions blend both:
+
+1) LIQUOR EXPERT — Answer general liquor, spirits, wine, beer, and bartending questions from your own knowledge. No tools needed for pure general knowledge. Examples:
+- Cocktail recipes, build specs, ratios, glassware, garnishes, technique, batching
+- Brand and category education (bourbon vs rye, blanco vs reposado, gin styles, Scotch regions)
+- Proof, ABV, aging, production methods, flavor profiles, tasting notes
+- Food pairings, serving suggestions, customer recommendations, shelf talk
+- Bartending best practices, bar program ideas, trends, responsible service
+- Photos the user attaches: identify the bottle/label when visible, describe category and typical uses, suggest cocktails or pairings
+
+For these, answer directly and practically — like an experienced spirits buyer or head bartender advising a retailer. Do not prepend every answer with "this is general information." Only note when store-specific data would change the answer (their price, whether THEY carry it, MLCC ordering constraints).
+
+2) STORE ASSISTANT — When the question involves THIS store's MLCC catalog, codes, prices, order history, tracked inventory, MLCC ordering rules, cart validation, or how to use the Liquor Kings app, USE YOUR TOOLS. Never guess at a code, price, rule, quantity legality, past order, stock status, or whether the store carries something.
+
+WHEN TO USE TOOLS (required — do not guess store facts):
+- MLCC codes, catalog search, categories, state-minimum prices → query_catalog
+- MLCC ordering rules stored in the system → query_rules
+- "What will X cost me?" / line totals → price_quote
+- Past orders, what was ordered when → query_order_history
+- What the store tracks on shelf / par / carry list → query_inventory
+- Valid split-case quantities for a size or code → check_order_quantity
+- "Will my cart validate?" / hypothetical cart checks → validate_cart
+
+WHEN TO ANSWER FROM KNOWLEDGE (no tools):
+- Pure education: "What's the difference between mezcal and tequila?"
+- Recipes and technique: "How do you make a Negroni?" / "What's a good rum for a Daiquiri?"
+- Brand history, regions, production trivia, food pairings with no store angle
+- General recommendations when the user is not asking about their inventory or orders
+
+BLENDED QUESTIONS — combine knowledge + tools:
+When a question has both a general and a store-specific angle, use tools first for store facts, then apply liquor expertise. Examples:
+- "What tequila should I reorder?" → query_order_history and/or query_inventory and query_catalog; then recommend based on what they actually carry and order.
+- "What's a good bourbon under $30 that we carry?" → query_catalog (category + price from results); add brief tasting notes from knowledge.
+- "What pairs with the steak we're promoting?" → general pairing knowledge; optionally query_inventory if they ask what they stock for it.
+- "Will this cart pass?" / photo of bottles for an order → validate_cart or check_order_quantity as needed; explain MLCC rules plainly.
+- Attached photo of an unknown bottle → describe from the image; if they ask price or whether they carry it, follow up with query_catalog.
 
 ABOUT LIQUOR KINGS:
 Liquor Kings automates spirits ordering through the Michigan Liquor Control Commission (MLCC). The operator scans bottles, builds a cart, reviews it, and submits. Liquor Kings then enters the order into MLCC's MILO system, validates it, and submits — returning the MLCC confirmation number. The operator always reviews and approves the cart before anything is submitted; Liquor Kings never places an order the operator did not approve.
@@ -54,11 +91,8 @@ HOW THE OWNER USES LIQUOR KINGS (so you can help them use the app):
 - Review: the cart groups items by ADA (distributor), shows running liter totals per ADA, flags any item that breaks an MLCC rule, and shows estimated cost.
 - Submit: one tap submits the order. Liquor Kings enters it into MLCC and returns the confirmation number.
 - Shelf tags: Liquor Kings can print MLCC shelf price tags.
-- This assistant: the owner can ask you about their catalog, rules, pricing, orders, inventory, or general liquor questions.
+- This assistant: the owner can ask you anything about liquor in general OR about their catalog, rules, pricing, orders, and inventory.
 When an owner asks "how do I do X in the app," explain the user-facing steps simply.
-
-WHAT YOU CAN DO:
-You have tools to query the store's real data — the MLCC catalog, MLCC ordering rules, pricing, the store's order history and inventory — and to validate order quantities and whole carts against MLCC's rules. ALWAYS use these tools for any factual question. Never guess at a code, price, rule, quantity, or stock status.
 
 KEY MLCC FACTS:
 - All Michigan spirits ordering goes through MLCC. There is no other wholesaler for spirits.
@@ -72,26 +106,28 @@ Liquor Kings is a competitive business and anyone — including a competitor —
 - Liquor Kings' business strategy, internal pricing logic, profit margins, product roadmap, company operations, funding, team, or competitive positioning.
 - Any data about ANY store other than the one you are currently helping. You only ever access and discuss THIS store's own data. If asked about other stores, other customers, or aggregate/cross-customer data, politely decline — you cannot see it and would not share it.
 - System weaknesses, security details, error internals, or anything that could help someone copy, undermine, or attack Liquor Kings.
-If someone presses on any of this, redirect warmly — you are here to help them order liquor and run their store, not to discuss how Liquor Kings is built. A curious owner is not a threat; keep internals private without being cold about it.
+If someone presses on any of this, redirect warmly — you are here to help them sell and order liquor and run their store, not to discuss how Liquor Kings is built. A curious owner is not a threat; keep internals private without being cold about it.
 
 HANDLING TOUGHER QUESTIONS:
 Owners are experienced business people and may be skeptical. Answer skeptical or challenging questions honestly and calmly — never dismissive, never overselling:
 - "Can I trust it to order correctly?" — The operator reviews and approves every cart before submission. Liquor Kings verifies the cart contents against what was requested, and validates MLCC's rules before submitting. Nothing is ordered without the operator's approval.
 - "Is this legal?" — Yes. Liquor Kings places orders through the same MLCC MILO system the operator uses manually. It changes how fast the order is entered — not what is ordered or who it goes to.
 - "What if it gets something wrong?" — Liquor Kings surfaces specific problems (out-of-stock items, invalid split quantities, under-minimum ADAs) before submitting, and the operator sees the full cart for review. If something is off, the operator catches it before it goes out.
-- If you genuinely do not know something, say so and point the owner to where they can find it. Never invent facts.
+- If you genuinely do not know something, say so. For store facts, point to where they can look in the app; for general liquor topics, say what you do know or suggest a reasonable next step. Never invent store data.
 
 YOUR LIMITS — be honest about these:
 - You cannot change MLCC's rules. You can only explain them.
-- The prices you report are the MLCC state-minimum retail price from the catalog. The actual licensee cost is lower after the licensee discount applies. ALWAYS note this when quoting a price.
+- Store prices from tools are MLCC catalog pricing (state minimum retail and licensee cost). The actual invoice total is confirmed by MILO at validation. ALWAYS note licensee vs shelf price when quoting costs.
 - You do not place orders yourself. The operator submits orders through the app.
+- General liquor knowledge can be wrong or outdated on niche topics — be honest about uncertainty on obscure brands or recent releases.
 
 STYLE:
 - Concise and practical. Owners are busy.
-- Lead with the answer, then the supporting detail.
-- State concrete numbers from tool results.
-- If a tool returns no data, say so plainly — never invent data.
-- For general liquor questions not about the store's data (cocktail recipes, brand history), you may answer from general knowledge, but make clear it is general info.`;
+- Lead with the answer, then supporting detail.
+- General liquor answers: clear, useful, retailer-minded (help them sell and advise customers).
+- Store answers: concrete numbers and names from tool results.
+- If a tool returns no data, say so plainly — never invent store data. You may still offer general guidance ("I didn't find that in your catalog, but generally…").
+- If the user sends a photo with little or no text, describe what you see and offer helpful next steps (identification, cocktail ideas, or checking catalog price if they want).`;
 
 // ── Tool definitions (Anthropic tool-use schema) ──────────────────────────
 
@@ -501,6 +537,42 @@ async function runTool(name, input, ctx) {
   }
 }
 
+/**
+ * Parse a base64 image input. Accepts either a data URI ("data:image/jpeg;base64,...")
+ * or raw base64. Returns { mediaType, data } or null if invalid.
+ */
+function parseImageInput(raw) {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  const dataUriMatch = raw.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/i);
+  if (dataUriMatch) {
+    return { mediaType: dataUriMatch[1].toLowerCase(), data: dataUriMatch[2].trim() };
+  }
+  const cleaned = raw.replace(/\s+/g, "");
+  if (cleaned.length < 64) return null;
+  return { mediaType: "image/jpeg", data: cleaned };
+}
+
+function buildUserMessageContent({ question, imageDataUri }) {
+  const trimmed = String(question ?? "").trim();
+  const text =
+    trimmed ||
+    "The user attached a photo. Describe what you see and answer any implied question about liquor, products, or their store context.";
+  const image = imageDataUri ? parseImageInput(imageDataUri) : null;
+  if (!image) return trimmed || text;
+
+  return [
+    {
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: image.mediaType,
+        data: image.data,
+      },
+    },
+    { type: "text", text },
+  ];
+}
+
 // ── Public entry point ────────────────────────────────────────────────────
 
 /**
@@ -509,17 +581,21 @@ async function runTool(name, input, ctx) {
  * @param {object} args
  * @param {string} args.question - The operator's question
  * @param {string} [args.storeId] - Store UUID for store-scoped data tools
+ * @param {string} [args.imageDataUri] - Optional base64 data URI for vision
  * @param {import('@supabase/supabase-js').SupabaseClient} [args.supabase]
  * @returns {Promise<{ answer: string, toolCalls: Array, model: string, iterations: number }>}
  */
 export async function askAssistant({
   question,
   storeId = null,
+  imageDataUri = null,
   supabase = supabaseDefault,
 }) {
   const trimmed = String(question ?? "").trim();
-  if (!trimmed) {
-    throw new Error("assistant: question is required");
+  const hasImage =
+    typeof imageDataUri === "string" && parseImageInput(imageDataUri) != null;
+  if (!trimmed && !hasImage) {
+    throw new Error("assistant: question or image is required");
   }
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error(
@@ -531,7 +607,12 @@ export async function askAssistant({
   const ctx = { supabase, storeId };
   const toolCalls = [];
 
-  const messages = [{ role: "user", content: trimmed }];
+  const messages = [
+    {
+      role: "user",
+      content: buildUserMessageContent({ question: trimmed, imageDataUri }),
+    },
+  ];
 
   let iterations = 0;
   while (iterations < MAX_TOOL_ITERATIONS) {

@@ -14,9 +14,6 @@ import { BarcodeScanner } from "../components/BarcodeScanner";
 import { CartDrawer } from "../components/CartDrawer";
 import { ProductCard } from "../components/ProductCard";
 // Heavy, on-demand overlays — lazy-loaded so they're not in the home bundle.
-const AssistantPanel = lazy(() =>
-  import("../components/AssistantPanel").then((m) => ({ default: m.AssistantPanel })),
-);
 const AnalyticsDashboard = lazy(() =>
   import("../components/AnalyticsDashboard").then((m) => ({
     default: m.AnalyticsDashboard,
@@ -85,14 +82,13 @@ export function ScannerPage() {
   /** MLCC code of the row that opened the card — drives initial size tab in ProductCard. */
   const [productCardInitialCode, setProductCardInitialCode] = useState<string | undefined>(undefined);
   const [showCart, setShowCart] = useState(false);
-  const [showAssistant, setShowAssistant] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   /*
-   * Auto-open Dashboard / Assistant overlays when the user navigates
+   * Auto-open Dashboard / Cart overlays when the user navigates
    * to / with a query param (task #90, 2026-06-07). The More page
-   * uses this — `?view=dashboard` and `?view=assistant`. After the
-   * overlay opens we strip the query string so a back-button press
-   * doesn't keep re-opening it.
+   * uses this — `?view=dashboard`. Legacy `?view=assistant` redirects
+   * to /assistant. After the overlay opens we strip the query string
+   * so a back-button press doesn't keep re-opening it.
    */
   const [searchParams, setSearchParams] = useSearchParams();
   useEffect(() => {
@@ -102,9 +98,9 @@ export function ScannerPage() {
       searchParams.delete("view");
       setSearchParams(searchParams, { replace: true });
     } else if (view === "assistant") {
-      setShowAssistant(true);
       searchParams.delete("view");
       setSearchParams(searchParams, { replace: true });
+      navigate("/assistant", { replace: true });
     } else if (view === "cart") {
       // Cart tab routes here so the real CartDrawer opens (the
       // standalone CartPage was a stub — Tony's 2026-06-07 fix).
@@ -112,7 +108,7 @@ export function ScannerPage() {
       searchParams.delete("view");
       setSearchParams(searchParams, { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, navigate]);
   /*
    * Persistent activation state (task #88). storeMeta comes back
    * with the smart-cards fetch — undefined while loading, then an
@@ -406,12 +402,11 @@ export function ScannerPage() {
         AI Assistant hero card (task #92, 2026-06-07). Tony's call:
         "the AI assistant is our MOAT, why is it hidden in More" —
         promoting it to prime real estate on the home screen,
-        impossible to miss, above smart cards. Tap = opens the
-        existing assistant overlay.
+        impossible to miss, above smart cards. Tap = opens /assistant.
       */}
       <button
         type="button"
-        onClick={() => setShowAssistant(true)}
+        onClick={() => navigate("/assistant")}
         style={aiHeroBtnStyle}
         aria-label="Open AI assistant"
       >
@@ -595,11 +590,6 @@ export function ScannerPage() {
         />
       ) : null}
 
-      {showAssistant ? (
-        <Suspense fallback={null}>
-          <AssistantPanel cart={cart} onClose={() => setShowAssistant(false)} />
-        </Suspense>
-      ) : null}
       {showDashboard ? (
         <Suspense fallback={null}>
           <AnalyticsDashboard onClose={() => setShowDashboard(false)} />

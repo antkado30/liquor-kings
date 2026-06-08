@@ -880,6 +880,26 @@ export function CartDrawer({
           </>
         ) : null}
 
+        {/*
+          Instant rule verdict during a validate run. The local rule-engine
+          check already ran (debounced on cart change), so the moment the user
+          taps Validate we can INSTANTLY confirm the cart passes MLCC's rules
+          while the slower live MLCC availability check runs underneath. Turns
+          the wait from a dead spinner into immediate positive feedback —
+          Tony's "validate should feel instant" ask (2026-06-07).
+        */}
+        {isBusy &&
+        (state.kind === "validateSyncing" ||
+          state.kind === "validateStarting" ||
+          state.kind === "validatePolling") &&
+        validationResult?.ok &&
+        validationResult.valid ? (
+          <div className="banner banner-ok" style={{ marginBottom: 8 }}>
+            ✓ Your cart passes MLCC rules — now confirming live availability
+            with MLCC.
+          </div>
+        ) : null}
+
         {/* ─── Async progress (validate OR submit) ───────────────────────── */}
         {isBusy ? (
           <RpaProgressPanel

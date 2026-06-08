@@ -1327,6 +1327,122 @@ select {
   font-size: 0.9rem;
 }
 
+.assistant-chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.assistant-chat--page {
+  flex: 1 1 auto;
+}
+
+.assistant-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.assistant-page-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.assistant-page-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(140, 110, 255, 0.22);
+  color: #cbb8ff;
+  flex-shrink: 0;
+}
+
+.assistant-page-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.assistant-page-subtitle {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+}
+
+.assistant-chat--page .assistant-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.assistant-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.assistant-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.assistant-attach-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.assistant-image-preview {
+  position: relative;
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
+.assistant-image-preview img {
+  display: block;
+  max-width: 120px;
+  max-height: 120px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.assistant-image-remove {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(11, 13, 18, 0.95);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.assistant-msg-image {
+  display: block;
+  max-width: 180px;
+  max-height: 180px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
 .drawer-ada-subtotal {
   display: flex;
   justify-content: space-between;

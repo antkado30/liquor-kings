@@ -282,3 +282,24 @@ export function IconPlug(props: IconProps) {
     ),
   });
 }
+
+export function IconPaperclip(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <path d="m16 6-8.5 8.5a2.1 2.1 0 1 0 3 3L19 9a3.5 3.5 0 0 0-5-5L5.5 12.5a5.5 5.5 0 1 0 7.8 7.8L21 13" />
+    ),
+  });
+}
+
+export function IconX(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <path d="M18 6 6 18" />
+        <path d="m6 6 12 12" />
+      </>
+    ),
+  });
+}

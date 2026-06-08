@@ -49,27 +49,26 @@ export default defineConfig({
     host: "0.0.0.0",
     https: httpsConfig,
     allowedHosts: [".ngrok-free.dev", ".ngrok.io", ".ngrok-free.app", "localhost", "10.1.10.9"],
-    proxy: {
-      "/operator-review": {
-        target: proxyTarget,
-        changeOrigin: true,
-      },
-      "/price-book": {
-        target: proxyTarget,
-        changeOrigin: true,
-      },
-      "/cart": {
-        target: proxyTarget,
-        changeOrigin: true,
-      },
-      "/inventory": {
-        target: proxyTarget,
-        changeOrigin: true,
-      },
-      "/execution-runs": {
-        target: proxyTarget,
-        changeOrigin: true,
-      },
-    },
+    // Every API prefix the scanner calls is proxied to VITE_PROXY_TARGET so
+    // `npm run dev:scanner` works fully against ANY backend. Point it at prod
+    // to iterate the UI instantly (Vite hot reload) with zero deploys:
+    //   VITE_PROXY_TARGET=https://liquor-kings.fly.dev npm run dev:scanner
+    // (Supabase auth talks to supabase.co directly, so it's not proxied here.)
+    proxy: Object.fromEntries(
+      [
+        "/operator-review",
+        "/price-book",
+        "/cart",
+        "/inventory",
+        "/execution-runs",
+        "/catalog",
+        "/home",
+        "/orders",
+        "/order-templates",
+        "/assistant",
+        "/tags",
+        "/auth",
+      ].map((prefix) => [prefix, { target: proxyTarget, changeOrigin: true }]),
+    ),
   },
 });

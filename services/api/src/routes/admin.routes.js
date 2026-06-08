@@ -628,6 +628,117 @@ router.delete("/catalog/:code/image", async (req, res) => {
  * Auth: same LK_ADMIN_TOKEN gate as other /admin/* endpoints. No
  * authenticated user can hit this — bearer must match the secret.
  * ============================================================ */
+/**
+ * GET /admin/health — one-call system health for the "ready for hundreds of
+ * stores" reliability bar (2026-06-07). Answers "is everything OK right now?"
+ * so failures don't go unnoticed:
+ *   - worker liveness via STUCK runs (status=running with a stale/absent
+ *     heartbeat — the same >15min threshold the orphan reaper uses)
+ *   - queue backlog (queued count) — a growing queue = workers can't keep up
+ *   - 24h failure rate + recent failures with store names
+ *
+ * `status` is a single rollup: "ok" | "degraded". Designed to be polled by a
+ * scheduled check that pings Tony the moment it flips to "degraded" — no
+ * dashboard-watching required.
+ */
+router.get("/health", async (req, res) => {
+  if (!assertAdminToken(req, res)) return;
+  try {
+    const now = new Date();
+    const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const staleCutoff = new Date(now.getTime() - 15 * 60 * 1000); // reaper threshold
+
+    const countSafe = async (build) => {
+      try {
+        const q = build(
+          supabase.from("execution_runs").select("*", { count: "exact", head: true }),
+        );
+        const { count, error } = await q;
+        if (error) return 0;
+        return count ?? 0;
+      } catch {
+        return 0;
+      }
+    };
+
+    const [queued, running, stuck, total24h, failed24h, succeeded24h] =
+      await Promise.all([
+        countSafe((q) => q.eq("status", "queued")),
+        countSafe((q) => q.eq("status", "running")),
+        // Stuck = running but heartbeat is stale, OR never heartbeat'd and old.
+        countSafe((q) =>
+          q
+            .eq("status", "running")
+            .or(
+              `heartbeat_at.lt.${staleCutoff.toISOString()},and(heartbeat_at.is.null,created_at.lt.${staleCutoff.toISOString()})`,
+            ),
+        ),
+        countSafe((q) => q.gte("created_at", last24h.toISOString())),
+        countSafe((q) =>
+          q.gte("created_at", last24h.toISOString()).eq("status", "failed"),
+        ),
+        countSafe((q) =>
+          q.gte("created_at", last24h.toISOString()).eq("status", "succeeded"),
+        ),
+      ]);
+
+    const failureRate = total24h > 0 ? failed24h / total24h : 0;
+
+    // Recent failures (last 5) with store names so an alert can name the store.
+    const { data: recentFailures } = await supabase
+      .from("execution_runs")
+      .select("id, store_id, failure_type, error_message, finished_at")
+      .eq("status", "failed")
+      .order("created_at", { ascending: false, nullsFirst: false })
+      .limit(5);
+    const failStoreIds = [
+      ...new Set((recentFailures ?? []).map((f) => f.store_id).filter(Boolean)),
+    ];
+    let nameById = new Map();
+    if (failStoreIds.length > 0) {
+      const { data: storeRows } = await supabase
+        .from("stores")
+        .select("id, store_name")
+        .in("id", failStoreIds);
+      nameById = new Map((storeRows ?? []).map((s) => [s.id, s.store_name]));
+    }
+    const failures = (recentFailures ?? []).map((f) => ({
+      ...f,
+      store_name: nameById.get(f.store_id) ?? "unknown",
+    }));
+
+    // Rollup. Degraded if any run is wedged, or the failure rate is high on a
+    // meaningful sample, or the queue is backing up badly.
+    const reasons = [];
+    if (stuck > 0) reasons.push(`${stuck} stuck run(s)`);
+    if (total24h >= 5 && failureRate > 0.5)
+      reasons.push(`high failure rate (${Math.round(failureRate * 100)}% of last 24h)`);
+    if (queued >= 25) reasons.push(`queue backlog (${queued} queued)`);
+    const status = reasons.length > 0 ? "degraded" : "ok";
+
+    return res.json({
+      ok: true,
+      status,
+      reasons,
+      checks: {
+        queued,
+        running,
+        stuck,
+        runs24h: total24h,
+        failed24h,
+        succeeded24h,
+        failureRatePct: Math.round(failureRate * 100),
+      },
+      recentFailures: failures,
+      generatedAt: now.toISOString(),
+    });
+  } catch (e) {
+    return res
+      .status(500)
+      .json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 router.get("/founder-console", async (req, res) => {
   if (!assertAdminToken(req, res)) return;
   try {

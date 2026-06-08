@@ -54,6 +54,29 @@ export type FounderConsoleData = {
   }>;
 };
 
+export type SystemHealth = {
+  status: "ok" | "degraded";
+  reasons: string[];
+  checks: {
+    queued: number;
+    running: number;
+    stuck: number;
+    runs24h: number;
+    failed24h: number;
+    succeeded24h: number;
+    failureRatePct: number;
+  };
+  recentFailures: Array<{
+    id: string;
+    store_id: string | null;
+    store_name: string;
+    failure_type: string | null;
+    error_message: string | null;
+    finished_at: string | null;
+  }>;
+  generatedAt: string;
+};
+
 function authHeaders(): Record<string, string> {
   const token = (import.meta.env.VITE_ADMIN_TOKEN as string | undefined)?.trim();
   return token ? { "X-Admin-Token": token } : {};
@@ -83,4 +106,34 @@ export async function fetchFounderConsole(): Promise<
   }
   const { ok: _, ...rest } = raw;
   return { ok: true, data: rest as unknown as FounderConsoleData };
+}
+
+/**
+ * System health — one call answering "is everything OK right now?" (stuck
+ * runs, queue backlog, 24h failure rate). Powers the health strip at the top
+ * of the console so a degraded system is impossible to miss.
+ */
+export async function fetchSystemHealth(): Promise<
+  { ok: true; data: SystemHealth } | { ok: false; error: string }
+> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/health`, {
+      credentials: "same-origin",
+      headers: authHeaders(),
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  let raw: { ok?: boolean; error?: string; [k: string]: unknown };
+  try {
+    raw = (await res.json()) as typeof raw;
+  } catch {
+    return { ok: false, error: `HTTP ${res.status}` };
+  }
+  if (!res.ok || raw.ok !== true) {
+    return { ok: false, error: raw.error ?? `HTTP ${res.status}` };
+  }
+  const { ok: _, ...rest } = raw;
+  return { ok: true, data: rest as unknown as SystemHealth };
 }
