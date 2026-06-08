@@ -91,6 +91,9 @@ export type BackgroundPreValidateStatus =
   | "success"
   | "error";
 
+/** The shape useSubmission consumes — cache hit OR latched-onto in-flight run. */
+export type ConsumableResult = Omit<CachedResult, "cartHash" | "completedAt">;
+
 export type BackgroundPreValidate = {
   status: BackgroundPreValidateStatus;
   /**
@@ -98,9 +101,19 @@ export type BackgroundPreValidate = {
    * Caller hashes its current cart, the hook compares against the
    * cached hash, returns the result on match or null on miss.
    */
-  getCachedResult: (
+  getCachedResult: (currentItems: CartItem[]) => ConsumableResult | null;
+  /**
+   * If a background pre-validate is CURRENTLY running for this exact
+   * cart, return its promise so a foreground Validate tap can latch
+   * onto the in-flight run instead of starting a wasteful duplicate.
+   * Resolves to the result on success, or null (caller falls back to a
+   * fresh run). Returns null synchronously if nothing matching is in
+   * flight. This is the big "validate feels faster" win — the user
+   * usually taps Validate while the pre-validate is mid-flight.
+   */
+  getInFlight: (
     currentItems: CartItem[],
-  ) => Omit<CachedResult, "cartHash" | "completedAt"> | null;
+  ) => Promise<ConsumableResult | null> | null;
   /**
    * Wipe the cache. Called when useSubmission consumes the cached
    * result so the same pre-validate isn't reused for a second click.
@@ -126,6 +139,15 @@ export function hashCart(items: CartItem[]): string {
 export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValidate {
   const [status, setStatus] = useState<BackgroundPreValidateStatus>("idle");
   const cacheRef = useRef<CachedResult | null>(null);
+  /**
+   * The currently-running pre-validate, if any: the cart hash it's
+   * validating + a promise that resolves to the result (or null on
+   * failure). Lets a foreground tap latch onto it.
+   */
+  const inFlightRef = useRef<{
+    hash: string;
+    promise: Promise<ConsumableResult | null>;
+  } | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
    * Generation counter. Each background run has its own number; if a
@@ -161,86 +183,94 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
    * Run a single background pre-validate. Captures the generation
    * number; bails on completion if a newer generation has started.
    */
-  const runPreValidate = useCallback(async (validatingItems: CartItem[]) => {
-    const myGeneration = generationRef.current;
-    const cartHashAtStart = hashCart(validatingItems);
-    if (validatingItems.length === 0) return;
+  const runPreValidate = useCallback(
+    async (validatingItems: CartItem[]): Promise<ConsumableResult | null> => {
+      const myGeneration = generationRef.current;
+      const cartHashAtStart = hashCart(validatingItems);
+      if (validatingItems.length === 0) return null;
 
-    setStatus("syncing");
-    // Step 1: sync the cart in ONE bulk request (perf 2026-06-07). Errors
-    // abort silently — the foreground flow will retry and show the user the
-    // error if it persists.
-    if (generationRef.current !== myGeneration) return;
-    const syncResult = await replaceCartLines(
-      validatingItems.map((line) => ({
-        mlccCode: line.product.code,
-        quantity: line.quantity,
-      })),
-    );
-    if (generationRef.current !== myGeneration) return;
-    if (!syncResult.ok) {
-      if (generationRef.current === myGeneration) setStatus("error");
-      return;
-    }
-    const cartId = syncResult.cartId;
-
-    // Step 2: trigger validate_only.
-    const triggerResult = await triggerRpaRunFromCart({
-      cartId,
-      mode: "validate_only",
-    });
-    if (!triggerResult.ok) {
-      if (generationRef.current === myGeneration) setStatus("error");
-      return;
-    }
-    const runId = triggerResult.runId;
-
-    setStatus("polling");
-    // Step 3: poll until terminal. Same shape as useSubmission's
-    // pollUntilTerminal but pared down — no UI tick, just wait for the
-    // final result.
-    const pollStart = Date.now();
-    let terminalSummary: {
-      finalStatus: "succeeded" | "failed" | "cancelled";
-      validateResult: ValidateResult | null;
-    } | null = null;
-
-    while (generationRef.current === myGeneration) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      if (generationRef.current !== myGeneration) return;
-      if (Date.now() - pollStart > MAX_POLL_MS) {
+      setStatus("syncing");
+      // Step 1: sync the cart in ONE bulk request (perf 2026-06-07). Errors
+      // abort silently — the foreground flow will retry and show the user the
+      // error if it persists.
+      if (generationRef.current !== myGeneration) return null;
+      const syncResult = await replaceCartLines(
+        validatingItems.map((line) => ({
+          mlccCode: line.product.code,
+          quantity: line.quantity,
+        })),
+      );
+      if (generationRef.current !== myGeneration) return null;
+      if (!syncResult.ok) {
         if (generationRef.current === myGeneration) setStatus("error");
-        return;
+        return null;
       }
-      const summaryRes = await getRunSummary({ runId });
-      if (!summaryRes.ok) continue; // transient — keep polling
-      const s = summaryRes.summary;
-      if (isTerminalStatus(s.status)) {
-        terminalSummary = {
-          finalStatus: s.status as "succeeded" | "failed" | "cancelled",
-          validateResult: s.validate_result ?? null,
-        };
-        break;
-      }
-    }
+      const cartId = syncResult.cartId;
 
-    if (!terminalSummary) return;
-    if (generationRef.current !== myGeneration) return;
-
-    if (terminalSummary.finalStatus === "succeeded") {
-      cacheRef.current = {
-        cartHash: cartHashAtStart,
+      // Step 2: trigger validate_only.
+      const triggerResult = await triggerRpaRunFromCart({
         cartId,
-        validateResult: terminalSummary.validateResult,
-        finalStatus: "succeeded",
-        completedAt: Date.now(),
-      };
-      setStatus("success");
-    } else {
+        mode: "validate_only",
+      });
+      if (!triggerResult.ok) {
+        if (generationRef.current === myGeneration) setStatus("error");
+        return null;
+      }
+      const runId = triggerResult.runId;
+
+      setStatus("polling");
+      // Step 3: poll until terminal. Same shape as useSubmission's
+      // pollUntilTerminal but pared down — no UI tick, just wait for the
+      // final result.
+      const pollStart = Date.now();
+      let terminalSummary: {
+        finalStatus: "succeeded" | "failed" | "cancelled";
+        validateResult: ValidateResult | null;
+      } | null = null;
+
+      while (generationRef.current === myGeneration) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        if (generationRef.current !== myGeneration) return null;
+        if (Date.now() - pollStart > MAX_POLL_MS) {
+          if (generationRef.current === myGeneration) setStatus("error");
+          return null;
+        }
+        const summaryRes = await getRunSummary({ runId });
+        if (!summaryRes.ok) continue; // transient — keep polling
+        const s = summaryRes.summary;
+        if (isTerminalStatus(s.status)) {
+          terminalSummary = {
+            finalStatus: s.status as "succeeded" | "failed" | "cancelled",
+            validateResult: s.validate_result ?? null,
+          };
+          break;
+        }
+      }
+
+      if (!terminalSummary) return null;
+      if (generationRef.current !== myGeneration) return null;
+
+      if (terminalSummary.finalStatus === "succeeded") {
+        cacheRef.current = {
+          cartHash: cartHashAtStart,
+          cartId,
+          validateResult: terminalSummary.validateResult,
+          finalStatus: "succeeded",
+          completedAt: Date.now(),
+        };
+        setStatus("success");
+        return {
+          cartId,
+          validateResult: terminalSummary.validateResult,
+          finalStatus: "succeeded",
+        };
+      }
       cacheRef.current = null;
       setStatus("error");
-    }
-  }, []);
+      return null;
+    },
+    [],
+  );
 
   /*
     Cart-watch effect: schedule a pre-validate STABILITY_DEBOUNCE_MS
@@ -279,7 +309,16 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
     // Schedule the run on the trailing edge of the debounce.
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
-      void runPreValidate(itemsRef.current);
+      const itemsNow = itemsRef.current;
+      const hash = hashCart(itemsNow);
+      // Track this run so a foreground tap can latch onto it via getInFlight.
+      const promise = runPreValidate(itemsNow);
+      inFlightRef.current = { hash, promise };
+      void promise.finally(() => {
+        if (inFlightRef.current?.promise === promise) {
+          inFlightRef.current = null;
+        }
+      });
     }, STABILITY_DEBOUNCE_MS);
 
     return () => {
@@ -290,9 +329,17 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
     };
   }, [items, runPreValidate]);
 
+  const getInFlight = useCallback((currentItems: CartItem[]) => {
+    const inf = inFlightRef.current;
+    if (!inf) return null;
+    if (hashCart(currentItems) !== inf.hash) return null;
+    return inf.promise;
+  }, []);
+
   return {
     status,
     getCachedResult,
+    getInFlight,
     invalidateCache,
   };
 }

@@ -107,14 +107,22 @@ const MAX_POLL_MS = 5 * 60 * 1000; // 5 minutes per phase
  * full sync+trigger+poll pipeline. Cache miss falls through to the
  * normal flow.
  */
+type PreValidateHit = {
+  cartId: string;
+  validateResult: ValidateResult | null;
+  finalStatus: "succeeded";
+};
+
 export type BackgroundPreValidateCache = {
-  getCachedResult: (
+  getCachedResult: (items: CartItem[]) => PreValidateHit | null;
+  /**
+   * If a background pre-validate is mid-flight for this exact cart,
+   * returns its promise so we latch onto it instead of starting a
+   * duplicate run. Null if nothing matching is in flight.
+   */
+  getInFlight?: (
     items: CartItem[],
-  ) => {
-    cartId: string;
-    validateResult: ValidateResult | null;
-    finalStatus: "succeeded";
-  } | null;
+  ) => Promise<PreValidateHit | null> | null;
   invalidateCache: () => void;
 };
 
@@ -297,6 +305,46 @@ export function useSubmission(
           });
           preValidateCache.invalidateCache();
           return;
+        }
+
+        /*
+          No finished cache, but a pre-validate may be RUNNING for this
+          exact cart. Latch onto it instead of starting a wasteful
+          duplicate run — this is the common case (user taps Validate
+          while the background run is still going) and the big perceived
+          speedup. We show the polling UI while we wait on it; if it
+          resolves with a result we're done, otherwise we fall through to
+          a fresh run below.
+        */
+        const inFlight = preValidateCache.getInFlight?.(items);
+        if (inFlight) {
+          setState({
+            kind: "validatePolling",
+            runId: "background-prevalidate",
+            status: "running",
+            progressStage: "validate",
+            progressMessage: "Finishing the MLCC check already in progress…",
+            lastPolledAt: Date.now(),
+          });
+          let latched: PreValidateHit | null = null;
+          try {
+            latched = await inFlight;
+          } catch {
+            latched = null;
+          }
+          if (cancelledRef.current) return;
+          if (latched) {
+            setState({
+              kind: "validateDone",
+              runId: "background-prevalidate",
+              finalStatus: latched.finalStatus,
+              cartId: latched.cartId,
+              validateResult: latched.validateResult,
+            });
+            preValidateCache.invalidateCache();
+            return;
+          }
+          // else: in-flight run failed/stale — fall through to a fresh run.
         }
       }
 
