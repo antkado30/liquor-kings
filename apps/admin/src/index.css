@@ -1157,3 +1157,243 @@ pre,
   padding: 32px;
   text-align: center;
 }
+
+/* ============================================================================
+   LK COMMAND DECK — premium dark theme (2026-06-07)
+   Appended last so these win on equal specificity. Transforms the generic
+   light admin into a dark "Jarvis" command center matching the LK scanner.
+   ========================================================================== */
+:root {
+  --lk-bg: #07080c;
+  --lk-bg-2: #0c0e15;
+  --lk-surface: rgba(255, 255, 255, 0.04);
+  --lk-surface-2: rgba(255, 255, 255, 0.06);
+  --lk-border: rgba(255, 255, 255, 0.09);
+  --lk-text: #eef1f7;
+  --lk-muted: rgba(255, 255, 255, 0.55);
+  --lk-accent: #7c6fff;
+  --lk-accent-2: #4f46e5;
+  --lk-glow: 0 0 0 1px rgba(124, 111, 255, 0.35), 0 8px 30px rgba(124, 111, 255, 0.18);
+}
+
+body {
+  background:
+    radial-gradient(1100px 600px at 80% -10%, rgba(124, 111, 255, 0.14), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(79, 70, 229, 0.12), transparent 55%),
+    var(--lk-bg);
+  color: var(--lk-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-header {
+  background: rgba(10, 11, 16, 0.72);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--lk-border);
+  color: var(--lk-text);
+}
+.app-header-title .sub {
+  color: var(--lk-muted);
+  opacity: 1;
+}
+
+.session-strip {
+  background: rgba(124, 111, 255, 0.08);
+  border-bottom: 1px solid var(--lk-border);
+  color: var(--lk-text);
+}
+.session-strip.signed-out {
+  background: rgba(255, 255, 255, 0.04);
+}
+.inline-label {
+  color: var(--lk-muted);
+}
+
+.admin-nav {
+  background: rgba(10, 11, 16, 0.6);
+  border-right: 1px solid var(--lk-border);
+}
+.admin-nav-title {
+  color: var(--lk-muted);
+}
+a.admin-nav-link {
+  color: var(--lk-text);
+}
+a.admin-nav-link:hover {
+  background: var(--lk-surface);
+}
+a.admin-nav-link.active {
+  background: rgba(124, 111, 255, 0.16);
+  color: #cfc8ff;
+  box-shadow: inset 2px 0 0 var(--lk-accent);
+}
+
+.card {
+  background: var(--lk-surface);
+  border: 1px solid var(--lk-border);
+  border-radius: 14px;
+  backdrop-filter: blur(8px);
+}
+
+input,
+select,
+textarea {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--lk-border);
+  color: var(--lk-text);
+  border-radius: 9px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: rgba(255, 255, 255, 0.32);
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--lk-accent);
+  box-shadow: 0 0 0 3px rgba(124, 111, 255, 0.22);
+}
+
+button {
+  background: var(--lk-accent);
+  color: #fff;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  font-weight: 600;
+}
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+button.secondary {
+  background: var(--lk-surface-2);
+  color: var(--lk-text);
+  border: 1px solid var(--lk-border);
+}
+button.danger {
+  background: #b3261e;
+}
+
+.muted {
+  color: var(--lk-muted);
+}
+
+pre,
+.box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--lk-border);
+  color: var(--lk-text);
+}
+
+.msg.error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ffb4b4;
+}
+.msg.success {
+  background: rgba(34, 197, 94, 0.12);
+  color: #b7f7c9;
+}
+.msg.warn {
+  background: rgba(245, 158, 11, 0.12);
+  color: #ffe1a6;
+}
+
+/* ── Sign-in: command-deck auth panel ── */
+.lk-auth {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+.lk-auth__panel {
+  width: 100%;
+  max-width: 420px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--lk-border);
+  border-radius: 20px;
+  padding: 28px 24px 24px;
+  box-shadow: var(--lk-glow);
+  backdrop-filter: blur(16px);
+}
+.lk-auth__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.lk-auth__crown {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: var(--lk-accent);
+  background: rgba(124, 111, 255, 0.12);
+  border: 1px solid rgba(124, 111, 255, 0.3);
+}
+.lk-auth__wordmark {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+}
+.lk-auth__eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--lk-accent);
+  margin-top: 2px;
+}
+.lk-auth__title {
+  font-size: 26px;
+  font-weight: 800;
+  margin: 0 0 6px;
+}
+.lk-auth__sub {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--lk-muted);
+  margin: 0 0 22px;
+}
+.lk-field {
+  margin-bottom: 14px;
+}
+.lk-field__label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: rgba(255, 255, 255, 0.78);
+}
+.lk-field__opt {
+  color: var(--lk-muted);
+  font-weight: 500;
+}
+.lk-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  font-size: 15px;
+}
+.lk-input--mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+.lk-btn-primary {
+  width: 100%;
+  margin-top: 6px;
+  padding: 13px 16px;
+  font-size: 15px;
+  font-weight: 700;
+  background: linear-gradient(180deg, var(--lk-accent), var(--lk-accent-2));
+  box-shadow: 0 6px 20px rgba(124, 111, 255, 0.3);
+}
+.bootstrap-wait {
+  background: var(--lk-surface);
+  border: 1px solid var(--lk-border);
+  border-radius: 14px;
+  color: var(--lk-text);
+}

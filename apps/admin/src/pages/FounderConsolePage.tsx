@@ -111,7 +111,41 @@ export function FounderConsolePage() {
         }}
       >
         <div>
-          <h1 style={{ margin: 0, fontSize: 28 }}>🏰 Founder Console</h1>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: 28,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                display: "inline-flex",
+                width: 34,
+                height: 34,
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 9,
+                color: "#7c6fff",
+                background: "rgba(124,111,255,0.12)",
+                border: "1px solid rgba(124,111,255,0.3)",
+              }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M3 7l3.5 3L12 4l5.5 6L21 7l-1.6 11H4.6L3 7z"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinejoin="round"
+                  fill="rgba(124,111,255,0.18)"
+                />
+              </svg>
+            </span>
+            Founder Console
+          </h1>
           <p
             className="muted small"
             style={{ margin: "4px 0 0", opacity: 0.7 }}
