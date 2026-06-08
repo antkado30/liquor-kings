@@ -76,6 +76,42 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
 
 ---
 
+## Tony's 2026-06-07 batch (stated after speed passes)
+
+1. ⏳ **MLCC validate feels SLOW — #1 irritation.** "If someone validated on
+   MLCC directly it's instant; on LK it always takes long. It really
+   irritates me a lot." Goal: validate must FEEL instant.
+   - REALITY (told Tony 2026-06-07): real MLCC validate is an RPA robot that
+     re-adds every item into MLCC's cart + clicks validate. For a 72-item
+     cart that's ~30-60s even warm. Can't be truly instant — MLCC's own site
+     is instant only because the cart's already in their live session.
+   - ✅ Warm session confirmed ON (`LK_RPA_PERSIST_SESSION=yes` on Fly) — so
+     it's the ~25-45s warm path, not the 2-min cold one.
+   - ✅ Bulk cart sync (2026-06-07) — new `POST /cart/:storeId/items/bulk`
+     replaces the cart in ONE request; killed the 72 phone→API round trips
+     in both foreground validate + background pre-validate. Resolves all
+     identities first (no partial writes), replace semantics (no qty doubling).
+   - ⏳ NEXT for the "feels instant" tap: (a) show the instant local rule
+     result immediately on tap + staged progress (no dead spinner) while MLCC
+     confirms in bg; (b) make a foreground tap REUSE an in-flight background
+     pre-validate instead of racing a duplicate run.
+2. ⏳ **AI = its own full page, not an overlay.** When you tap AI, it should
+   be a standalone page — the scanner must NOT be visible behind it. (Was
+   already ⏳ "AI becomes a real page route".)
+3. ⏳ **AI accepts images** — send a photo from camera roll OR take one live,
+   to the assistant. (Was already ⏳ "AI accepts images".)
+4. ⏳ **Catalog photos are ugly** — the silhouette placeholders look cheap.
+   Tony wants a REAL photo for every MLCC bottle in the whole catalog.
+   "On my life we're gonna figure out how to get every single picture."
+   (Locked plan A+C: Google Custom Search Image API ~$65 one-time + manual
+   top-SKU curation. The infra to consume image_url is already shipped.)
+5. ⏳ **V1 must be ready for hundreds of stores — lightning fast + reliable
+   as fuck — BEFORE launch.** Every feature, lightning fast. Scale + reliability
+   bar. (Ties to the integrity doctrine + the known scale gaps: RPA
+   concurrency, monitoring, KMS.)
+
+---
+
 ## How Tony wants me to work with him (permanent operating rules)
 
 - ✅ **"Keep pushing" mode is default.** Don't ask permission for next

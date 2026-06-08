@@ -41,7 +41,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CartItem } from "../types";
-import { addCartLine } from "../api/cart";
+import { replaceCartLines } from "../api/cart";
 import {
   getRunSummary,
   isTerminalStatus,
@@ -167,24 +167,22 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
     if (validatingItems.length === 0) return;
 
     setStatus("syncing");
-    // Step 1: sync the cart. Same per-line pattern as the foreground
-    // flow. Errors abort silently — the foreground flow will retry
-    // and show the user the error if it persists.
-    let cartId: string | null = null;
-    for (const line of validatingItems) {
-      if (generationRef.current !== myGeneration) return;
-      const result = await addCartLine({
+    // Step 1: sync the cart in ONE bulk request (perf 2026-06-07). Errors
+    // abort silently — the foreground flow will retry and show the user the
+    // error if it persists.
+    if (generationRef.current !== myGeneration) return;
+    const syncResult = await replaceCartLines(
+      validatingItems.map((line) => ({
         mlccCode: line.product.code,
         quantity: line.quantity,
-      });
-      if (!result.ok) {
-        if (generationRef.current === myGeneration) setStatus("error");
-        return;
-      }
-      cartId = result.cart.id;
-    }
-    if (!cartId) return;
+      })),
+    );
     if (generationRef.current !== myGeneration) return;
+    if (!syncResult.ok) {
+      if (generationRef.current === myGeneration) setStatus("error");
+      return;
+    }
+    const cartId = syncResult.cartId;
 
     // Step 2: trigger validate_only.
     const triggerResult = await triggerRpaRunFromCart({

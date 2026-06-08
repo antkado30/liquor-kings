@@ -126,6 +126,64 @@ export async function addCartLine(args: {
   };
 }
 
+export type ReplaceCartResult =
+  | { ok: true; cartId: string }
+  | { ok: false; error: string; details?: unknown };
+
+/**
+ * Replace the active server cart with these lines in ONE request
+ * (perf, 2026-06-07). Used by the validate/submit sync and the
+ * background pre-validate instead of N sequential addCartLine calls —
+ * collapses a 72-item cart from 72 phone→API round trips to one.
+ *
+ * Idempotent (replace semantics) so fetchWithRetry can safely retry.
+ */
+export async function replaceCartLines(
+  items: Array<{ mlccCode: string; quantity: number }>,
+): Promise<ReplaceCartResult> {
+  const storeId = getStoreId();
+  const url = `${CART_API_BASE}/${encodeURIComponent(storeId)}/items/bulk`;
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      url,
+      {
+        method: "POST",
+        headers: {
+          ...(await getAuthHeaders()),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          items: items.map((i) => ({
+            code: i.mlccCode,
+            quantity: i.quantity,
+          })),
+        }),
+      },
+      { maxRetries: 2, baseDelayMs: 500, timeoutMs: 20_000 },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
+  }
+  let raw: Record<string, unknown>;
+  try {
+    raw = (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
+  if (!res.ok || raw.success !== true) {
+    const err =
+      typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`;
+    return { ok: false, error: err, details: raw.details };
+  }
+  const cart = raw.cart as { id?: string } | undefined;
+  if (!cart?.id) return { ok: false, error: "bulk sync returned no cart id" };
+  return { ok: true, cartId: cart.id };
+}
+
 export type GetActiveCartResult =
   | { ok: true; cart: ServerCart | null; items: ServerCartItem[] }
   | { ok: false; error: string };

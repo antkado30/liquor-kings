@@ -42,7 +42,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CartItem } from "../types";
-import { addCartLine } from "../api/cart";
+import { replaceCartLines } from "../api/cart";
 import {
   getRunSummary,
   isTerminalStatus,
@@ -238,24 +238,20 @@ export function useSubmission(
       items: CartItem[],
       onProgress: (synced: number, total: number) => void,
     ): Promise<string> => {
-      let cartId: string | null = null;
-      for (let i = 0; i < items.length; i += 1) {
-        if (cancelledRef.current) throw new Error("Cancelled");
-        const line = items[i];
-        const result = await addCartLine({
+      if (cancelledRef.current) throw new Error("Cancelled");
+      // ONE bulk request instead of N sequential adds (perf 2026-06-07).
+      onProgress(0, items.length);
+      const result = await replaceCartLines(
+        items.map((line) => ({
           mlccCode: line.product.code,
           quantity: line.quantity,
-        });
-        if (!result.ok) {
-          throw new Error(
-            `Could not sync item ${line.product.code} (${line.product.name}): ${result.error}`,
-          );
-        }
-        cartId = result.cart.id;
-        onProgress(i + 1, items.length);
+        })),
+      );
+      if (!result.ok) {
+        throw new Error(`Could not sync cart to MLCC: ${result.error}`);
       }
-      if (!cartId) throw new Error("Sync completed but no cart id was returned.");
-      return cartId;
+      onProgress(items.length, items.length);
+      return result.cartId;
     },
     [],
   );

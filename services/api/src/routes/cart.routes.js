@@ -464,4 +464,155 @@ router.delete("/:storeId/items", async (req, res) => {
   });
 });
 
+/**
+ * POST /cart/:storeId/items/bulk — replace the active cart with the
+ * given lines in ONE request (perf, 2026-06-07).
+ *
+ * WHY: the scanner used to sync a cart by calling POST /items once per
+ * line. A 72-item cart = 72 phone→API round trips (each paying cellular
+ * + cross-region latency) before a validate/submit could even start.
+ * This collapses that into a single request: the SAME identity function
+ * (findOrCreateBottleByMlccCode) runs per line server-side, then we
+ * clear + batch-insert.
+ *
+ * SAFETY (integrity doctrine):
+ *   - We resolve EVERY line's identity FIRST. If any code can't resolve,
+ *     we return 400 and DO NOT touch the existing cart — no partial /
+ *     half-cleared state.
+ *   - Replace semantics (clear then insert exactly these lines) make the
+ *     server cart deterministically equal to the UI, and avoid the
+ *     quantity-doubling the increment path would cause on re-sync.
+ *   - Duplicate bottle_ids are merged (summed) so the (cart_id, bottle_id)
+ *     uniqueness holds.
+ *
+ * Body: { items: [{ code|mlccCode, quantity }, ...] }
+ * 200 → { success, cart, items }
+ * 400 → { success:false, error, details } when a line can't resolve
+ */
+router.post("/:storeId/items/bulk", async (req, res) => {
+  const storeId = req.store_id;
+  const rawItems = Array.isArray(req.body?.items) ? req.body.items : null;
+  if (!rawItems || rawItems.length === 0) {
+    return res
+      .status(400)
+      .json({ success: false, error: "items array is required" });
+  }
+
+  // Normalize + validate the input lines up front.
+  const lines = [];
+  for (const it of rawItems) {
+    const code =
+      (it?.mlccCode != null && String(it.mlccCode).trim()) ||
+      (it?.code != null && String(it.code).trim()) ||
+      "";
+    const qty = Number(it?.quantity);
+    if (!code) {
+      return res
+        .status(400)
+        .json({ success: false, error: "each item needs a code" });
+    }
+    if (!Number.isInteger(qty) || qty <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: `quantity must be a positive integer (code ${code})`,
+      });
+    }
+    lines.push({ code, quantity: qty });
+  }
+
+  // Resolve identity for EVERY line first — no DB writes to the cart yet.
+  // Sequential on purpose: findOrCreateBottleByMlccCode can create a
+  // bottle row, and parallel creation of the same code could race.
+  const byBottle = new Map(); // bottle_id -> { bottle_id, mlcc_item_id, quantity }
+  for (const line of lines) {
+    const result = await findOrCreateBottleByMlccCode(supabase, {
+      mlccCode: line.code,
+      storeId,
+      userId: req.auth_user_id,
+    });
+    if (!result.ok) {
+      return res.status(400).json({
+        success: false,
+        error: result.code || "CODE_MISMATCH",
+        details: { code: line.code, ...(result.details ?? {}) },
+      });
+    }
+    if (!result.mlccItem?.id) {
+      return res.status(500).json({
+        success: false,
+        error: "Identity resolution failed to produce mlcc_item_id",
+        details: { code: line.code },
+      });
+    }
+    const bottleId = result.bottle.id;
+    const existing = byBottle.get(bottleId);
+    if (existing) {
+      existing.quantity += line.quantity;
+    } else {
+      byBottle.set(bottleId, {
+        bottle_id: bottleId,
+        mlcc_item_id: result.mlccItem.id,
+        quantity: line.quantity,
+      });
+    }
+  }
+
+  // Resolve or create the active cart (same logic as POST /items).
+  let { data: cart, error: cartError } = await supabase
+    .from("carts")
+    .select("*")
+    .eq("store_id", storeId)
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (cartError) {
+    return res.status(500).json({ success: false, error: cartError.message });
+  }
+  if (!cart) {
+    const { data: newCart, error: newCartError } = await supabase
+      .from("carts")
+      .insert({ store_id: storeId, status: "active" })
+      .select("*")
+      .single();
+    if (newCartError) {
+      return res
+        .status(500)
+        .json({ success: false, error: newCartError.message });
+    }
+    cart = newCart;
+  }
+
+  // All lines resolved — now it's safe to clear + insert.
+  const { error: clearError } = await supabase
+    .from("cart_items")
+    .delete()
+    .eq("cart_id", cart.id);
+  if (clearError) {
+    return res.status(500).json({ success: false, error: clearError.message });
+  }
+
+  const rows = [...byBottle.values()].map((r) => ({
+    cart_id: cart.id,
+    bottle_id: r.bottle_id,
+    mlcc_item_id: r.mlcc_item_id,
+    store_id: storeId,
+    quantity: r.quantity,
+  }));
+
+  const { data: inserted, error: insertError } = await supabase
+    .from("cart_items")
+    .insert(rows)
+    .select("*");
+  if (insertError) {
+    return res.status(500).json({ success: false, error: insertError.message });
+  }
+
+  return res.status(200).json({
+    success: true,
+    cart,
+    items: Array.isArray(inserted) ? inserted : [],
+  });
+});
+
 export default router;
