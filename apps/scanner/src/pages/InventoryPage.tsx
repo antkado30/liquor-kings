@@ -17,6 +17,9 @@ import {
   type InventoryRow,
   type InventorySummary,
 } from "../api/inventory";
+import { getProductFamily } from "../api/catalog";
+import { useCart } from "../hooks/useCart";
+import { IconCart } from "../components/Icons";
 import { useCachedResource } from "../lib/swr";
 import { getCurrentStoreId } from "../lib/currentStore";
 
@@ -32,10 +35,12 @@ function isLow(row: InventoryRow): boolean {
 
 export function InventoryPage() {
   const storeId = getCurrentStoreId() ?? "none";
+  const cart = useCart();
   const [query, setQuery] = useState("");
   const [lowOnly, setLowOnly] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [reorderingId, setReorderingId] = useState<string | null>(null);
 
   const listRes = useCachedResource<InventoryRow[]>(
     `inventory:list:${storeId}`,
@@ -88,6 +93,33 @@ export function InventoryPage() {
       setToast(`Couldn't update — ${res.error}`);
       setTimeout(() => setToast(null), 3000);
       void listRes.refresh(); // pull true server state back
+    }
+  }
+
+  // One-tap reorder: resolve the bottle in the catalog (for ADA + price) and
+  // drop it into the cart at the configured reorder quantity (default 1).
+  async function reorder(row: InventoryRow) {
+    const code = row.bottles?.mlcc_code;
+    if (!code) return;
+    setReorderingId(row.id);
+    try {
+      const fam = await getProductFamily(code);
+      const product =
+        fam?.sizes.find((s) => s.code === code) ?? fam?.sizes[0] ?? null;
+      if (!product) {
+        setToast("That bottle isn't in the orderable catalog right now.");
+        setTimeout(() => setToast(null), 3000);
+        return;
+      }
+      const qty =
+        row.reorder_quantity && row.reorder_quantity > 0
+          ? row.reorder_quantity
+          : 1;
+      cart.addItem(product, qty);
+      setToast(`Added ${product.name} ×${qty} to your order`);
+      setTimeout(() => setToast(null), 2800);
+    } finally {
+      setReorderingId(null);
     }
   }
 
@@ -195,6 +227,19 @@ export function InventoryPage() {
                   +
                 </button>
               </div>
+              <button
+                type="button"
+                aria-label={`Add ${row.bottles?.name ?? "bottle"} to order`}
+                title="Add to order"
+                style={{
+                  ...reorderBtnStyle,
+                  ...(low ? reorderBtnLowStyle : {}),
+                }}
+                disabled={reorderingId === row.id || !row.bottles?.mlcc_code}
+                onClick={() => void reorder(row)}
+              >
+                <IconCart size={18} strokeWidth={1.85} />
+              </button>
             </li>
           );
         })}
@@ -290,6 +335,24 @@ const stepBtnStyle: React.CSSProperties = {
   fontWeight: 700,
   lineHeight: 1,
   cursor: "pointer",
+};
+const reorderBtnStyle: React.CSSProperties = {
+  width: 38,
+  height: 38,
+  borderRadius: 10,
+  border: "1px solid rgba(58,130,247,0.35)",
+  background: "rgba(58,130,247,0.12)",
+  color: "#b9d1ff",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  cursor: "pointer",
+  flexShrink: 0,
+};
+const reorderBtnLowStyle: React.CSSProperties = {
+  border: "1px solid rgba(245,158,11,0.45)",
+  background: "rgba(245,158,11,0.14)",
+  color: "#fde6b3",
 };
 const qtyStyle: React.CSSProperties = {
   minWidth: 28,
