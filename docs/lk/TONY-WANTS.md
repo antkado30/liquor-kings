@@ -73,14 +73,15 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   ~13.8k rows to count in JS; replace with a GROUP BY RPC (now masked by
   client-side facet cache, so low priority).
 - 💡 Co-locate API + DB region (bigger move, later).
-- ⏳ **Split the Chromium worker into its own Fly service (deploy-speed fix).**
-  Today one 821MB Playwright image runs both API/web AND the RPA worker, so
-  every deploy is slow. Plan: API/web on a slim ~150MB Node image (fast
-  deploys), worker stays on the Playwright image in a SEPARATE Fly app (worker
-  already reaches the API via the public URL, so it's feasible). ~1.5-2 hrs +
-  a real test order before cutover — touches the ORDER PIPELINE, so do it
-  FRESH, never rushed. Quick interim win available: reorder Dockerfile so a
-  scanner-only change doesn't also rebuild admin (~8-10s/deploy).
+- ✅ **Split the Chromium worker into its own Fly service (deploy-speed fix)**
+  (2026-06-08). DONE + verified in prod. API/web (`liquor-kings`) is now a slim
+  **117 MB** image (was 821 MB → ~7x smaller, much faster deploys); the RPA
+  worker runs on the Playwright image in a separate app (`liquor-kings-worker`).
+  Worker proven processing 3 live validates with warm-session reuse + DB-cred
+  decrypt. Files: Dockerfile (slim), Dockerfile.worker, fly.toml (worker
+  removed), fly.worker.toml, `npm run deploy:worker`, runbook
+  docs/lk/runbooks/WORKER-SPLIT.md. Scale workers with `fly scale count N -a
+  liquor-kings-worker` (claim is atomic — safe).
 
 ---
 

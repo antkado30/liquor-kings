@@ -19,7 +19,7 @@
  * verification) — delete shows a confirm step; discipline #5 (loud
  * failures) — load errors surface a clear message, not a silent fail.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   archiveOrderTemplate,
@@ -27,7 +27,10 @@ import {
   loadOrderTemplate,
   updateOrderTemplate,
   type OrderTemplate,
+  type OrderTemplateItem,
 } from "../api/orderTemplates";
+import { searchProducts } from "../api/catalog";
+import type { MlccProduct } from "../types";
 import { useCart } from "../hooks/useCart";
 import { IconCalendar, IconTrash } from "../components/Icons";
 import { useCachedResource } from "../lib/swr";
@@ -313,8 +316,75 @@ function EditTemplateModal({
   const [scheduleDow, setScheduleDow] = useState<number | null>(
     template.schedule_dow ?? null,
   );
+  const [items, setItems] = useState<OrderTemplateItem[]>(
+    () => template.items.map((it) => ({ ...it })),
+  );
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Add-bottle search.
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<MlccProduct[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const found = await searchProducts(q, { limit: 8 });
+        if (!cancelled) setResults(found);
+      } catch {
+        if (!cancelled) setResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query]);
+
+  function changeQty(code: string, delta: number) {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.mlcc_code === code
+          ? { ...it, quantity: Math.max(1, it.quantity + delta) }
+          : it,
+      ),
+    );
+  }
+  function removeItem(code: string) {
+    setItems((prev) => prev.filter((it) => it.mlcc_code !== code));
+  }
+  function addProduct(p: MlccProduct) {
+    setItems((prev) => {
+      if (prev.some((it) => it.mlcc_code === p.code)) {
+        // Already in the template — bump its quantity instead of duplicating.
+        return prev.map((it) =>
+          it.mlcc_code === p.code ? { ...it, quantity: it.quantity + 1 } : it,
+        );
+      }
+      return [
+        ...prev,
+        {
+          mlcc_code: p.code,
+          quantity: 1,
+          name: p.name ?? undefined,
+          bottle_size_ml: p.bottle_size_ml ?? undefined,
+        },
+      ];
+    });
+    setQuery("");
+    setResults([]);
+  }
 
   async function handleSave() {
     setErr(null);
@@ -323,10 +393,15 @@ function EditTemplateModal({
       setErr("Name can't be blank.");
       return;
     }
+    if (items.length === 0) {
+      setErr("A template needs at least one bottle.");
+      return;
+    }
     setSubmitting(true);
     const r = await updateOrderTemplate(template.id, {
       name: trimmed,
       schedule_dow: scheduleDow,
+      items,
     });
     setSubmitting(false);
     if (!r.ok) {
@@ -386,6 +461,178 @@ function EditTemplateModal({
               </button>
             ))}
           </div>
+        </div>
+
+        <div>
+          <div style={editLabelStyle}>Bottles ({items.length})</div>
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: "6px 0 10px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              maxHeight: 240,
+              overflowY: "auto",
+            }}
+          >
+            {items.map((it) => (
+              <li
+                key={it.mlcc_code}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  background: "#0d1017",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 10,
+                  padding: "8px 10px",
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 700,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {it.name ?? it.mlcc_code}
+                  </div>
+                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
+                    {it.bottle_size_ml ? `${it.bottle_size_ml} mL · ` : ""}#
+                    {it.mlcc_code}
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => changeQty(it.mlcc_code, -1)}
+                    disabled={submitting}
+                    aria-label="Decrease"
+                    style={tplStepBtn}
+                  >
+                    −
+                  </button>
+                  <span
+                    style={{ minWidth: 22, textAlign: "center", fontWeight: 800 }}
+                  >
+                    {it.quantity}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => changeQty(it.mlcc_code, 1)}
+                    disabled={submitting}
+                    aria-label="Increase"
+                    style={tplStepBtn}
+                  >
+                    +
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeItem(it.mlcc_code)}
+                  disabled={submitting}
+                  aria-label={`Remove ${it.name ?? it.mlcc_code}`}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "#ff7a7a",
+                    cursor: "pointer",
+                    padding: 4,
+                    display: "inline-flex",
+                  }}
+                >
+                  <IconTrash size={16} strokeWidth={1.85} />
+                </button>
+              </li>
+            ))}
+            {items.length === 0 ? (
+              <li style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
+                No bottles yet — search below to add some.
+              </li>
+            ) : null}
+          </ul>
+
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Add a bottle — search by name or code"
+            style={editInputStyle}
+            disabled={submitting}
+            autoComplete="off"
+          />
+          {searching ? (
+            <div
+              style={{
+                fontSize: 12,
+                color: "rgba(255,255,255,0.5)",
+                marginTop: 6,
+              }}
+            >
+              Searching…
+            </div>
+          ) : null}
+          {results.length > 0 ? (
+            <ul
+              style={{
+                listStyle: "none",
+                padding: 0,
+                margin: "6px 0 0",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                maxHeight: 180,
+                overflowY: "auto",
+              }}
+            >
+              {results.map((p) => (
+                <li key={p.id}>
+                  <button
+                    type="button"
+                    onClick={() => addProduct(p)}
+                    disabled={submitting}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      background: "rgba(58,130,247,0.08)",
+                      border: "1px solid rgba(58,130,247,0.25)",
+                      borderRadius: 8,
+                      padding: "8px 10px",
+                      color: "#fff",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>
+                        {p.name}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          color: "rgba(255,255,255,0.5)",
+                          marginLeft: 6,
+                        }}
+                      >
+                        {p.bottle_size_label ??
+                          (p.bottle_size_ml ? `${p.bottle_size_ml} mL` : "")}
+                      </span>
+                    </span>
+                    <span style={{ fontSize: 18, fontWeight: 800, color: "#b9d1ff" }}>
+                      +
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
 
         {err ? <div style={errorBannerStyle}>{err}</div> : null}
@@ -730,4 +977,17 @@ const dowChipStyle: React.CSSProperties = {
 const dowChipActiveStyle: React.CSSProperties = {
   background: "rgba(58, 130, 247, 0.2)",
   borderColor: "#3a82f7",
+};
+
+const tplStepBtn: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 7,
+  border: "1px solid rgba(255,255,255,0.16)",
+  background: "transparent",
+  color: "#fff",
+  fontSize: 17,
+  fontWeight: 700,
+  lineHeight: 1,
+  cursor: "pointer",
 };
