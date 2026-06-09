@@ -239,6 +239,53 @@ export function IconChevronRight(props: IconProps) {
   });
 }
 
+export function IconChevronLeft(props: IconProps) {
+  return svg({
+    ...props,
+    children: <path d="m15 6-6 6 6 6" />,
+  });
+}
+
+export function IconLoader(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <path d="M12 2v4" />
+        <path d="m16.24 7.76 2.83-2.83" opacity={0.5} />
+        <path d="M18 12h4" opacity={0.35} />
+        <path d="m16.24 16.24 2.83 2.83" opacity={0.2} />
+      </>
+    ),
+  });
+}
+
+export function IconStore(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <path d="M3 9h18v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" />
+        <path d="M3 9 5 3h14l2 6" />
+        <path d="M9 21V12h6v9" />
+      </>
+    ),
+  });
+}
+
+export function IconFileText(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <path d="M14 2v6h6" />
+        <path d="M8 13h8M8 17h8M8 9h2" />
+      </>
+    ),
+  });
+}
+
 export function IconCamera(props: IconProps) {
   return svg({
     ...props,

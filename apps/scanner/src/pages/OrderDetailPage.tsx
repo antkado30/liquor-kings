@@ -7,7 +7,9 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getOrder, type MiloOrderDetail } from "../api/orders";
 import { getProductFamily } from "../api/catalog";
+import { fetchTagsHtml } from "../api/tags";
 import { useCart } from "../hooks/useCart";
+import { TagPrintPreview } from "../components/TagPrintPreview";
 
 function money(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(Number(n))) return "—";
@@ -37,6 +39,29 @@ export function OrderDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [tagsHtml, setTagsHtml] = useState<string | null>(null);
+  const [printingTags, setPrintingTags] = useState(false);
+
+  // Collect every line's MLCC code and render all shelf tags at once.
+  async function printAllTags(items: MiloOrderDetail["line_items"]) {
+    const codes = (Array.isArray(items) ? items : [])
+      .map((li) => (li.liquorCode ? String(li.liquorCode) : ""))
+      .filter((c) => c.length > 0);
+    if (codes.length === 0) {
+      setToast("No printable codes on this order.");
+      setTimeout(() => setToast(null), 2500);
+      return;
+    }
+    setPrintingTags(true);
+    const res = await fetchTagsHtml(codes);
+    setPrintingTags(false);
+    if (!res.ok) {
+      setToast(`Couldn't build tags — ${res.error}`);
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    setTagsHtml(res.html);
+  }
 
   // Rebuild this whole order into the cart — resolve each line through the
   // catalog (for ADA + price), add it at the same quantity, then open the cart.
@@ -223,6 +248,32 @@ export function OrderDetailPage() {
         >
           {reordering ? "Adding to order…" : "Reorder into cart"}
         </button>
+      ) : null}
+
+      {lineItems.length > 0 ? (
+        <button
+          type="button"
+          className="btn secondary btn-block"
+          style={{ marginTop: 8 }}
+          disabled={printingTags}
+          onClick={() => void printAllTags(order.line_items)}
+        >
+          {printingTags
+            ? "Building tags…"
+            : `Print all shelf tags (${lineItems.length})`}
+        </button>
+      ) : null}
+
+      {tagsHtml ? (
+        <TagPrintPreview
+          html={tagsHtml}
+          mlccCode={
+            lineItems.find((li) => li.liquorCode)?.liquorCode
+              ? String(lineItems.find((li) => li.liquorCode)?.liquorCode)
+              : ""
+          }
+          onClose={() => setTagsHtml(null)}
+        />
       ) : null}
 
       {toast ? (
