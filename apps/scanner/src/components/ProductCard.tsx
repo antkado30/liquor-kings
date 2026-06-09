@@ -10,6 +10,7 @@ import {
 import { computeProductFreshness } from "../lib/product-freshness";
 import type { MlccProduct, ProductFamily } from "../types";
 import { pickInitialSizeByCode, ProductSizeSelector } from "./ProductSizeSelector";
+import { PlaceholderBottle, tintForCategory } from "./BottleArt";
 
 function money(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -282,7 +283,24 @@ export function ProductCard({
             alt=""
             onError={() => setImageFailed(true)}
           />
-        ) : null}
+        ) : (
+          <div
+            className="product-card__image product-card__image--placeholder"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              height: 150,
+              padding: "12px 0",
+            }}
+          >
+            <PlaceholderBottle
+              tint={tintForCategory(selectedProduct.category)}
+              name={family.baseName}
+              seed={selectedProduct.id}
+            />
+          </div>
+        )}
         <div className="product-card-header">
           <h2 id="product-card-title" className="product-card-brand">
             {family.baseName}
