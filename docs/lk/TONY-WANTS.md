@@ -109,11 +109,27 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
    already ⏳ "AI becomes a real page route".)
 3. ⏳ **AI accepts images** — send a photo from camera roll OR take one live,
    to the assistant. (Was already ⏳ "AI accepts images".)
-4. ⏳ **Catalog photos are ugly** — the silhouette placeholders look cheap.
-   Tony wants a REAL photo for every MLCC bottle in the whole catalog.
-   "On my life we're gonna figure out how to get every single picture."
-   (Locked plan A+C: Google Custom Search Image API ~$65 one-time + manual
-   top-SKU curation. The infra to consume image_url is already shipped.)
+4. **Catalog photos — every single bottle (13k+).**
+   - ✅ **Premium placeholder shipped 2026-06-08** — glass-bottle art with
+     brand monogram (apps/scanner/src/components/BottleArt.tsx), used in Browse
+     grid + ProductCard. Killed the "ugly silhouette" complaint. Real photos
+     render on top whenever image_url is set.
+   - ❌ **Google Custom Search JSON API = DEAD END (2026-06-08).** Spent ~15
+     turns: created project, enabled the API, linked billing, fresh unrestricted
+     keys, disable/re-enable, 1hr+ propagation. STILL returns 403 "This project
+     does not have the access to Custom Search JSON API" — even though the
+     dashboard shows it Enabled with requests arriving (100% errors). Tony's
+     config is CORRECT; it's a stuck/broken state on Google's side. DO NOT
+     re-chase Google CSE. Also: "search the entire web" is deprecated, so CSE
+     only ever covered curated retailer sites = partial coverage anyway. Script
+     exists (services/api/scripts/backfill-mlcc-item-images-google.mjs) but is
+     shelved.
+   - ⏳ **NEXT PATH = AI-generated bottle images** for true 100% coverage.
+     Feed each bottle's name+category to an image model (DALL-E / Imagen /
+     Stability) → consistent premium on-white render → re-host to Supabase
+     Storage → set image_url. ~$0.02-0.04/img × 13.8k ≈ $300-550 (cost decision
+     for Tony). Build a backfill script like the Google one but calling an
+     image-gen API. Most-scanned first.
 5. ⏳ **V1 must be ready for hundreds of stores — lightning fast + reliable
    as fuck — BEFORE launch.** Every feature, lightning fast. Scale + reliability
    bar. (Ties to the integrity doctrine + the known scale gaps: RPA

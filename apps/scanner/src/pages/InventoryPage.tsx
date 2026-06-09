@@ -14,6 +14,7 @@ import {
   getInventorySummary,
   listInventory,
   updateInventoryQuantity,
+  updateReorderSettings,
   type InventoryRow,
   type InventorySummary,
 } from "../api/inventory";
@@ -41,6 +42,7 @@ export function InventoryPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [reorderingId, setReorderingId] = useState<string | null>(null);
+  const [editingLevels, setEditingLevels] = useState<InventoryRow | null>(null);
 
   const listRes = useCachedResource<InventoryRow[]>(
     `inventory:list:${storeId}`,
@@ -195,17 +197,34 @@ export function InventoryPage() {
           const low = isLow(row);
           return (
             <li key={row.id} style={cardStyle}>
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <button
+                type="button"
+                onClick={() => setEditingLevels(row)}
+                title="Set reorder levels"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                  textAlign: "left",
+                  cursor: "pointer",
+                  color: "inherit",
+                }}
+              >
                 <div style={nameStyle}>
                   {row.bottles?.name ?? row.bottles?.mlcc_code ?? "Unknown bottle"}
                 </div>
                 <div style={metaStyle}>
                   {row.bottles?.size ??
                     (row.bottles?.size_ml ? `${row.bottles.size_ml} mL` : "")}
+                  {row.reorder_point != null
+                    ? ` · reorder at ${row.reorder_point}`
+                    : ""}
                   {row.location ? ` · ${row.location}` : ""}
                   {low ? <span style={lowBadgeStyle}>LOW</span> : null}
                 </div>
-              </div>
+              </button>
               <div style={stepperStyle}>
                 <button
                   type="button"
@@ -245,10 +264,210 @@ export function InventoryPage() {
         })}
       </ul>
 
+      {editingLevels ? (
+        <LevelsModal
+          row={editingLevels}
+          onClose={() => setEditingLevels(null)}
+          onSaved={() => {
+            setEditingLevels(null);
+            void listRes.refresh();
+            setToast("Reorder levels saved");
+            setTimeout(() => setToast(null), 2500);
+          }}
+        />
+      ) : null}
+
       {toast ? <div style={toastStyle}>{toast}</div> : null}
     </div>
   );
 }
+
+function LevelsModal({
+  row,
+  onClose,
+  onSaved,
+}: {
+  row: InventoryRow;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [lowStock, setLowStock] = useState(
+    row.low_stock_threshold != null ? String(row.low_stock_threshold) : "",
+  );
+  const [reorderPoint, setReorderPoint] = useState(
+    row.reorder_point != null ? String(row.reorder_point) : "",
+  );
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    setErr(null);
+    const parse = (s: string): number | null => {
+      const t = s.trim();
+      if (t === "") return null;
+      const n = Number(t);
+      return Number.isFinite(n) && n >= 0 ? Math.floor(n) : NaN;
+    };
+    const low = parse(lowStock);
+    const reorder = parse(reorderPoint);
+    if (Number.isNaN(low) || Number.isNaN(reorder)) {
+      setErr("Levels must be whole numbers (or left blank).");
+      return;
+    }
+    setSaving(true);
+    const res = await updateReorderSettings(row.id, {
+      lowStockThreshold: low,
+      reorderPoint: reorder,
+    });
+    setSaving(false);
+    if (!res.ok) {
+      setErr(res.error);
+      return;
+    }
+    onSaved();
+  }
+
+  return (
+    <div role="dialog" aria-modal="true" style={backdropStyle} onClick={onClose}>
+      <div style={levelsCardStyle} onClick={(e) => e.stopPropagation()}>
+        <h2 style={{ margin: "0 0 4px", fontSize: 19, fontWeight: 800 }}>
+          Reorder levels
+        </h2>
+        <p style={{ margin: "0 0 16px", fontSize: 13, color: "rgba(255,255,255,0.6)" }}>
+          {row.bottles?.name ?? row.bottles?.mlcc_code ?? "Bottle"}
+        </p>
+
+        <label style={levelsLabelStyle}>
+          Low-stock threshold
+          <input
+            type="number"
+            inputMode="numeric"
+            value={lowStock}
+            onChange={(e) => setLowStock(e.target.value)}
+            placeholder="e.g. 6"
+            style={levelsInputStyle}
+            disabled={saving}
+          />
+          <span style={levelsHintStyle}>
+            Flags the bottle as LOW when on-hand drops to this or below.
+          </span>
+        </label>
+
+        <label style={levelsLabelStyle}>
+          Reorder point
+          <input
+            type="number"
+            inputMode="numeric"
+            value={reorderPoint}
+            onChange={(e) => setReorderPoint(e.target.value)}
+            placeholder="e.g. 3"
+            style={levelsInputStyle}
+            disabled={saving}
+          />
+          <span style={levelsHintStyle}>
+            The level at which it should be reordered. Leave blank to ignore.
+          </span>
+        </label>
+
+        {err ? (
+          <div
+            style={{
+              background: "rgba(244,63,94,0.1)",
+              border: "1px solid rgba(244,63,94,0.3)",
+              color: "#fda4af",
+              padding: 10,
+              borderRadius: 10,
+              fontSize: 13,
+              marginBottom: 12,
+            }}
+          >
+            {err}
+          </div>
+        ) : null}
+
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            style={{
+              background: "transparent",
+              color: "#fff",
+              border: "1px solid rgba(255,255,255,0.16)",
+              borderRadius: 10,
+              padding: "10px 16px",
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={saving}
+            style={{
+              background: "#3a82f7",
+              color: "#fff",
+              border: "none",
+              borderRadius: 10,
+              padding: "10px 18px",
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const backdropStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(6, 8, 12, 0.85)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 200,
+  padding: 20,
+};
+const levelsCardStyle: React.CSSProperties = {
+  background: "#11141b",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: 16,
+  padding: 22,
+  maxWidth: 420,
+  width: "100%",
+  color: "#fff",
+};
+const levelsLabelStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  fontSize: 13,
+  fontWeight: 700,
+  color: "rgba(255,255,255,0.85)",
+  marginBottom: 16,
+};
+const levelsInputStyle: React.CSSProperties = {
+  background: "#0d1017",
+  border: "1px solid rgba(255,255,255,0.12)",
+  color: "#fff",
+  borderRadius: 8,
+  padding: "10px 12px",
+  fontSize: 15,
+  fontWeight: 500,
+};
+const levelsHintStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 400,
+  color: "rgba(255,255,255,0.45)",
+};
 
 const summaryRowStyle: React.CSSProperties = {
   display: "flex",
