@@ -15,6 +15,22 @@ export type AssistantResult =
   | { ok: true; answer: string; model: string }
   | { ok: false; error: string };
 
+/** Map raw API / network codes to copy suitable for the chat UI. */
+export function formatAssistantError(raw: string): string {
+  const code = raw.trim();
+  if (!code) return "Something went wrong. Please try again.";
+  if (code === "network_error") {
+    return "Couldn't reach the assistant. Check your connection and try again.";
+  }
+  if (/^HTTP 5\d\d/.test(code) || code === "HTTP 500" || code === "HTTP 503") {
+    return "The assistant is temporarily unavailable. Please try again.";
+  }
+  if (/timeout|timed out/i.test(code)) {
+    return "The request timed out. Try again with a shorter question.";
+  }
+  return code;
+}
+
 /**
  * Ask the Liquor Kings assistant a question.
  * storeId is included when available so store-scoped tools (order
@@ -57,19 +73,21 @@ export async function askAssistant(
       { maxRetries: 1, baseDelayMs: 600, timeoutMs: 30_000 },
     );
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: formatAssistantError(msg) };
   }
 
   let raw: Record<string, unknown>;
   try {
     raw = (await res.json()) as Record<string, unknown>;
   } catch {
-    return { ok: false, error: "network_error" };
+    return { ok: false, error: formatAssistantError("network_error") };
   }
 
   if (!res.ok || typeof raw.answer !== "string") {
-    const err = typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`;
-    return { ok: false, error: err };
+    const err =
+      typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`;
+    return { ok: false, error: formatAssistantError(err) };
   }
 
   return {

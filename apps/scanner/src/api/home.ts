@@ -176,3 +176,20 @@ export async function getAnalytics(): Promise<GetAnalyticsResult> {
   const { ok: _ok, ...rest } = raw as { ok: boolean; [k: string]: unknown };
   return { ok: true, data: rest as unknown as AnalyticsDashboard };
 }
+
+/** Throws on failure — for useCachedResource fetchers. */
+export async function fetchAnalyticsDashboard(): Promise<AnalyticsDashboard> {
+  const r = await getAnalytics();
+  if (!r.ok) throw new Error(r.error);
+  return r.data;
+}
+
+/** True when the store has no submitted order history in the lookback window. */
+export function isAnalyticsEmpty(data: AnalyticsDashboard): boolean {
+  return (
+    data.this_week.order_count === 0 &&
+    data.last_week.order_count === 0 &&
+    data.top_by_units.length === 0 &&
+    data.top_by_dollars.length === 0
+  );
+}

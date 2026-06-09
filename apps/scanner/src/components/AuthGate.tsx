@@ -1,16 +1,12 @@
 /**
  * AuthGate — wraps the scanner SPA and gates it behind Supabase Auth.
  *
- * Behavior:
- *   - On mount, checks supabase.auth.getSession()
- *   - If no session: shows a minimal email + password login form
- *   - If signed in: renders children (the actual scanner app)
- *   - Listens for auth state changes so sign-out from anywhere updates the UI
+ * Flow for new stores:
+ *   Step 1 — account (email, password, store basics)
+ *   Step 2 — MLCC credentials → POST /auth/signup
+ *   Activation probe → scanner
  *
- * Why minimal styling: this is V1 for a single store. The login screen is
- * mostly invisible after first use (sessions persist). When we add real
- * onboarding for multi-store, this gets replaced with a proper auth flow
- * (magic links, store-branded login pages, etc.).
+ * Returning verified users land in the scanner with no friction.
  */
 import {
   type FormEvent,
@@ -25,11 +21,25 @@ import {
   resolveCurrentStoreIdFromSession,
   setCurrentStoreId,
 } from "../lib/currentStore";
+import {
+  getMyStoreProfile,
+  humanizeLoginError,
+  humanizeNetworkError,
+  humanizeSignupError,
+} from "../api/me";
 import { OnboardingActivation } from "./OnboardingActivation";
+import {
+  IconAlert,
+  IconLoader,
+  IconSparkles,
+  IconStore,
+} from "./Icons";
 
 type AuthGateProps = {
   children: ReactNode;
 };
+
+type SignupStep = 1 | 2;
 
 export function AuthGate({ children }: AuthGateProps) {
   const [session, setSession] = useState<Session | null>(null);
@@ -38,18 +48,13 @@ export function AuthGate({ children }: AuthGateProps) {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // Mode toggle (task #78, 2026-06-06): "login" = existing dad/staff flow;
-  // "signup" = a new store owner creating their LK account from scratch.
-  // The signup mode opens up the full multi-store onboarding form.
-  // Initial default: respect URL hash so /scanner#signup lands on signup
-  // tab. Marketing CTAs link to /scanner#signup so the flow is seamless.
   const [mode, setMode] = useState<"login" | "signup">(() => {
     if (typeof window !== "undefined" && window.location.hash === "#signup") {
       return "signup";
     }
     return "login";
   });
-  // Signup form state.
+  const [signupStep, setSignupStep] = useState<SignupStep>(1);
   const [storeName, setStoreName] = useState("");
   const [liquorLicense, setLiquorLicense] = useState("");
   const [mlccUsername, setMlccUsername] = useState("");
@@ -58,69 +63,39 @@ export function AuthGate({ children }: AuthGateProps) {
   const [city, setCity] = useState("");
   const [stateAbbr, setStateAbbr] = useState("MI");
   const [postalCode, setPostalCode] = useState("");
-  /*
-   * Activation gate (task #84, 2026-06-06). When `pendingActivation`
-   * is true we render OnboardingActivation INSTEAD of children — the
-   * user just signed up and we want to verify their MLCC creds work
-   * via a real RPA probe before they touch the scanner.
-   *
-   * Set true on successful signup. Existing-user login leaves it
-   * false. After verification completes (succeed OR user skips),
-   * onComplete fires and we drop into the scanner.
-   *
-   * State is in-memory only — a refresh sends the user straight to
-   * the scanner (where their first Validate will surface real errors
-   * if creds are wrong). Persistent activation status is a follow-up.
-   */
   const [pendingActivation, setPendingActivation] = useState(false);
   const [pendingActivationStoreName, setPendingActivationStoreName] =
     useState<string>("");
-  /*
-   * Brand-new-signup store_id. Returned by /auth/signup and held only
-   * for the activation flow. We can't rely on VITE_SCANNER_STORE_ID
-   * (build-time, baked-in for dad's store) — the activation RPA needs
-   * to hit the *new* user's just-created store.
-   */
   const [pendingActivationStoreId, setPendingActivationStoreId] =
     useState<string | null>(null);
 
   useEffect(() => {
-    // Misconfigured build (missing Supabase env vars) — skip auth entirely
-    // and let the misconfig screen render. Calling getSession here would
-    // throw because supabase client points at a placeholder URL.
     if (scannerMisconfigured) {
       setLoading(false);
       return;
     }
 
-    // Initial session check on mount.
     supabase.auth.getSession().then(async ({ data }) => {
       setSession(data.session);
-      // If we already have a session (returning user, persisted via
-      // localStorage), resolve their store_id from store_users so the
-      // scanner uses the right tenant on first paint. Without this,
-      // the first API call after refresh sends the env-fallback store
-      // id and 403s on multi-tenant accounts.
       if (data.session) {
         await resolveCurrentStoreIdFromSession();
+        const profile = await getMyStoreProfile();
+        if (profile.ok && profile.mlcc_credentials_last_verified_at) {
+          setPendingActivation(false);
+        }
       }
       setLoading(false);
     });
 
-    // Subscribe to auth changes (sign-in, sign-out, token refresh).
     const { data: sub } = supabase.auth.onAuthStateChange(
       async (event, next) => {
         setSession(next);
         if (event === "SIGNED_OUT" || !next) {
           clearCurrentStoreId();
-        } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
-          // SIGNED_IN fires for fresh logins; we re-resolve in case the
-          // user just switched accounts in the same browser session.
-          // TOKEN_REFRESHED keeps the cached id but doesn't need a
-          // round-trip — guard against unnecessary work.
-          if (event === "SIGNED_IN") {
-            await resolveCurrentStoreIdFromSession();
-          }
+          setPendingActivation(false);
+          setPendingActivationStoreId(null);
+        } else if (event === "SIGNED_IN") {
+          await resolveCurrentStoreIdFromSession();
         }
       },
     );
@@ -130,31 +105,85 @@ export function AuthGate({ children }: AuthGateProps) {
     };
   }, []);
 
+  function resetErrors() {
+    setErrorMsg(null);
+  }
+
+  function validateSignupStep1(): string | null {
+    if (!storeName.trim()) return "Store name is required.";
+    if (!/^\d{5,10}$/.test(liquorLicense.trim())) {
+      return "Liquor license must be 5–10 digits.";
+    }
+    if (!email.trim() || !email.includes("@")) {
+      return "Enter a valid email address.";
+    }
+    if (password.length < 8) {
+      return "Password must be at least 8 characters.";
+    }
+    return null;
+  }
+
+  function validateSignupStep2(): string | null {
+    if (!mlccUsername.trim() || !mlccPassword) {
+      return "MLCC username and password are required.";
+    }
+    return null;
+  }
+
+  function goToSignupStep2(e: FormEvent) {
+    e.preventDefault();
+    resetErrors();
+    const err = validateSignupStep1();
+    if (err) {
+      setErrorMsg(err);
+      return;
+    }
+    setSignupStep(2);
+  }
+
   async function handleSignIn(e: FormEvent) {
     e.preventDefault();
-    setErrorMsg(null);
+    resetErrors();
     setSubmitting(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
-    setSubmitting(false);
-    if (error) {
-      setErrorMsg(error.message);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (error) {
+        setErrorMsg(humanizeLoginError(error.message));
+        return;
+      }
+      const profile = await getMyStoreProfile();
+      if (profile.ok && profile.mlcc_credentials_last_verified_at) {
+        setPendingActivation(false);
+      }
+    } catch (err) {
+      setErrorMsg(
+        humanizeNetworkError(
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  /*
-   * Sign-up handler (task #78). Posts to /auth/signup which provisions:
-   *   1. Supabase Auth user
-   *   2. stores row with encrypted MLCC creds
-   *   3. store_users link row
-   * On success: immediately signs the user in with the same email +
-   * password they just created. Drops them straight into their scanner.
-   */
   async function handleSignUp(e: FormEvent) {
     e.preventDefault();
-    setErrorMsg(null);
+    resetErrors();
+    const step1Err = validateSignupStep1();
+    if (step1Err) {
+      setSignupStep(1);
+      setErrorMsg(step1Err);
+      return;
+    }
+    const step2Err = validateSignupStep2();
+    if (step2Err) {
+      setErrorMsg(step2Err);
+      return;
+    }
+
     setSubmitting(true);
     try {
       const res = await fetch("/auth/signup", {
@@ -173,113 +202,138 @@ export function AuthGate({ children }: AuthGateProps) {
           postal_code: postalCode.trim() || undefined,
         }),
       });
-      const body = (await res.json()) as {
+
+      let body: {
         ok?: boolean;
         error?: string;
-        details?: string;
         store_id?: string;
       };
-      if (!res.ok || body.ok !== true) {
-        const msg = humanizeSignupError(body.error);
-        setErrorMsg(msg);
-        setSubmitting(false);
+      try {
+        body = (await res.json()) as typeof body;
+      } catch {
+        setErrorMsg(humanizeNetworkError("network_error"));
         return;
       }
-      // Auto-sign-in to land in the scanner immediately.
+
+      if (!res.ok || body.ok !== true) {
+        setErrorMsg(humanizeSignupError(body.error));
+        return;
+      }
+
       const { error: signInErr } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
-      setSubmitting(false);
       if (signInErr) {
         setErrorMsg(
-          `Account created but couldn't sign in: ${signInErr.message}. Switch to Sign in tab.`,
+          `Account created but couldn't sign in: ${humanizeLoginError(signInErr.message)}. Switch to Sign in.`,
         );
         return;
       }
-      // Seed the runtime store id IMMEDIATELY from the signup response.
-      // The auth-state listener will also call resolveCurrentStoreIdFromSession
-      // on SIGNED_IN, but that race is annoying — by setting it here we
-      // guarantee every API call after signup uses the new store, with
-      // zero round-trips and zero possibility of a stale env-fallback
-      // value bleeding through.
+
       if (body.store_id) setCurrentStoreId(body.store_id);
-      // Activation gate — verify MLCC creds via RPA probe before scanner.
       setPendingActivationStoreName(storeName.trim() || "your store");
       setPendingActivationStoreId(body.store_id ?? null);
       setPendingActivation(true);
-      // Auth state change subscription will flip session; with
-      // pendingActivation=true the render path will show the
-      // OnboardingActivation modal instead of children.
     } catch (err) {
+      setErrorMsg(
+        humanizeNetworkError(
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
+    } finally {
       setSubmitting(false);
-      setErrorMsg(err instanceof Error ? err.message : String(err));
     }
   }
 
   if (loading) {
     return (
-      <div style={loadingStyle}>
-        <div style={{ opacity: 0.7 }}>Loading…</div>
+      <div className="onboarding-shell onboarding-shell--loading">
+        <span className="settings-spinner" aria-hidden>
+          <IconLoader size={28} strokeWidth={2} />
+        </span>
+        <p className="onboarding-subtitle">Loading your account…</p>
       </div>
     );
   }
 
   if (scannerMisconfigured) {
     return (
-      <div style={shellStyle}>
-        <div style={cardStyle}>
-          <h1 style={titleStyle}>Scanner misconfigured</h1>
-          <p style={subtitleStyle}>
-            This build is missing required configuration. Please contact the
-            person who set up your scanner.
-          </p>
-          <p style={{ ...errorStyle, marginTop: 4 }}>
-            {scannerMisconfigured.reason}
+      <div className="onboarding-shell">
+        <div className="onboarding-card">
+          <div className="onboarding-brand">
+            <span className="onboarding-brand__icon" aria-hidden>
+              <IconAlert size={22} strokeWidth={2} />
+            </span>
+            <div>
+              <h1 className="onboarding-title">Scanner misconfigured</h1>
+              <p className="onboarding-subtitle">
+                This build is missing required configuration. Contact the person
+                who set up your scanner.
+              </p>
+            </div>
+          </div>
+          <p className="onboarding-error" role="alert">
+            <IconAlert size={16} strokeWidth={2} aria-hidden />
+            <span>{scannerMisconfigured.reason}</span>
           </p>
         </div>
       </div>
     );
   }
 
+  if (session && pendingActivation) {
+    return (
+      <OnboardingActivation
+        storeName={pendingActivationStoreName}
+        storeId={pendingActivationStoreId}
+        onComplete={() => {
+          setPendingActivation(false);
+          setPendingActivationStoreId(null);
+        }}
+      />
+    );
+  }
+
   if (!session) {
     return (
-      <div style={shellStyle}>
-        <form
-          onSubmit={mode === "login" ? handleSignIn : handleSignUp}
-          style={cardStyle}
-        >
-          <h1 style={titleStyle}>Liquor Kings</h1>
-          <p style={subtitleStyle}>
-            {mode === "login"
-              ? "Sign in to start scanning."
-              : "Sign your store up for Liquor Kings."}
-          </p>
+      <div className="onboarding-shell">
+        <div className="onboarding-card">
+          <div className="onboarding-brand">
+            <span className="onboarding-brand__icon" aria-hidden>
+              <IconSparkles size={22} strokeWidth={1.9} />
+            </span>
+            <div>
+              <h1 className="onboarding-title">Liquor Kings</h1>
+              <p className="onboarding-subtitle">
+                {mode === "login"
+                  ? "Sign in to start scanning and ordering."
+                  : "Create your store account in two quick steps."}
+              </p>
+            </div>
+          </div>
 
-          {/* Mode toggle — tabs */}
-          <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+          <div className="onboarding-tabs" role="tablist" aria-label="Account mode">
             <button
               type="button"
+              role="tab"
+              aria-selected={mode === "login"}
+              className={`onboarding-tab${mode === "login" ? " onboarding-tab--active" : ""}`}
               onClick={() => {
                 setMode("login");
-                setErrorMsg(null);
-              }}
-              style={{
-                ...tabStyle,
-                ...(mode === "login" ? tabActiveStyle : {}),
+                resetErrors();
               }}
             >
               Sign in
             </button>
             <button
               type="button"
+              role="tab"
+              aria-selected={mode === "signup"}
+              className={`onboarding-tab${mode === "signup" ? " onboarding-tab--active" : ""}`}
               onClick={() => {
                 setMode("signup");
-                setErrorMsg(null);
-              }}
-              style={{
-                ...tabStyle,
-                ...(mode === "signup" ? tabActiveStyle : {}),
+                resetErrors();
               }}
             >
               Sign up
@@ -287,131 +341,194 @@ export function AuthGate({ children }: AuthGateProps) {
           </div>
 
           {mode === "signup" ? (
-            <>
-              <label style={labelStyle}>
-                <span style={labelTextStyle}>Store name</span>
+            <div className="onboarding-progress" aria-label="Signup progress">
+              <span className="onboarding-progress__label">
+                Step {signupStep} of 2
+              </span>
+              <div className="onboarding-progress__track">
+                <div
+                  className="onboarding-progress__fill"
+                  style={{ width: signupStep === 1 ? "50%" : "100%" }}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          {mode === "login" ? (
+            <form className="onboarding-form" onSubmit={handleSignIn}>
+              <label className="onboarding-field">
+                <span className="onboarding-field__label">Email</span>
+                <input
+                  type="email"
+                  autoComplete="username"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="onboarding-input"
+                  placeholder="you@example.com"
+                  disabled={submitting}
+                />
+              </label>
+              <label className="onboarding-field">
+                <span className="onboarding-field__label">Password</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="onboarding-input"
+                  disabled={submitting}
+                />
+              </label>
+
+              {errorMsg ? (
+                <p className="onboarding-error" role="alert">
+                  <IconAlert size={16} strokeWidth={2} aria-hidden />
+                  <span>{errorMsg}</span>
+                </p>
+              ) : null}
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="onboarding-btn onboarding-btn--primary onboarding-btn--block"
+              >
+                {submitting ? "Signing in…" : "Sign in"}
+              </button>
+            </form>
+          ) : signupStep === 1 ? (
+            <form className="onboarding-form" onSubmit={goToSignupStep2}>
+              <p className="onboarding-section-title">Step 1 — Your account</p>
+              <label className="onboarding-field">
+                <span className="onboarding-field__label">Store name</span>
                 <input
                   type="text"
                   required
                   value={storeName}
                   onChange={(e) => setStoreName(e.target.value)}
-                  style={inputStyle}
+                  className="onboarding-input"
                   placeholder="Your store name"
+                  disabled={submitting}
                 />
               </label>
-              <label style={labelStyle}>
-                <span style={labelTextStyle}>Liquor license number</span>
+              <label className="onboarding-field">
+                <span className="onboarding-field__label">
+                  Liquor license number
+                </span>
                 <input
                   type="text"
                   inputMode="numeric"
                   required
                   value={liquorLicense}
                   onChange={(e) => setLiquorLicense(e.target.value)}
-                  style={inputStyle}
+                  className="onboarding-input"
                   placeholder="1234567"
+                  disabled={submitting}
                 />
               </label>
-            </>
-          ) : null}
+              <label className="onboarding-field">
+                <span className="onboarding-field__label">Email</span>
+                <input
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="onboarding-input"
+                  placeholder="you@example.com"
+                  disabled={submitting}
+                />
+              </label>
+              <label className="onboarding-field">
+                <span className="onboarding-field__label">Password</span>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                  minLength={8}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="onboarding-input"
+                  placeholder="Minimum 8 characters"
+                  disabled={submitting}
+                />
+              </label>
 
-          <label style={labelStyle}>
-            <span style={labelTextStyle}>Email</span>
-            <input
-              type="email"
-              autoComplete={mode === "login" ? "username" : "email"}
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              style={inputStyle}
-              placeholder="you@example.com"
-            />
-          </label>
+              {errorMsg ? (
+                <p className="onboarding-error" role="alert">
+                  <IconAlert size={16} strokeWidth={2} aria-hidden />
+                  <span>{errorMsg}</span>
+                </p>
+              ) : null}
 
-          <label style={labelStyle}>
-            <span style={labelTextStyle}>Password</span>
-            <input
-              type="password"
-              autoComplete={
-                mode === "login" ? "current-password" : "new-password"
-              }
-              required
-              minLength={mode === "signup" ? 8 : undefined}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              style={inputStyle}
-              placeholder={mode === "signup" ? "Minimum 8 characters" : ""}
-            />
-          </label>
-
-          {mode === "signup" ? (
-            <>
-              <p
-                style={{
-                  ...subtitleStyle,
-                  fontSize: 12,
-                  marginTop: 12,
-                  marginBottom: 6,
-                }}
+              <button
+                type="submit"
+                className="onboarding-btn onboarding-btn--primary onboarding-btn--block"
               >
-                MLCC (michigan.gov MILO) credentials — same login you use for
-                lara.michigan.gov to place orders. We encrypt and only use them
-                to place orders on your behalf.
+                Continue
+              </button>
+            </form>
+          ) : (
+            <form className="onboarding-form" onSubmit={handleSignUp}>
+              <p className="onboarding-section-title">
+                Step 2 — MLCC connection
               </p>
-              <label style={labelStyle}>
-                <span style={labelTextStyle}>MLCC username</span>
+              <p className="onboarding-hint">
+                Same username and password you use at lara.michigan.gov (MILO).
+                We encrypt them and only use them to place orders on your
+                behalf.
+              </p>
+              <label className="onboarding-field">
+                <span className="onboarding-field__label">MLCC username</span>
                 <input
                   type="text"
                   required
                   value={mlccUsername}
                   onChange={(e) => setMlccUsername(e.target.value)}
-                  style={inputStyle}
+                  className="onboarding-input"
                   autoComplete="off"
+                  disabled={submitting}
                 />
               </label>
-              <label style={labelStyle}>
-                <span style={labelTextStyle}>MLCC password</span>
+              <label className="onboarding-field">
+                <span className="onboarding-field__label">MLCC password</span>
                 <input
                   type="password"
                   required
                   value={mlccPassword}
                   onChange={(e) => setMlccPassword(e.target.value)}
-                  style={inputStyle}
+                  className="onboarding-input"
                   autoComplete="off"
+                  disabled={submitting}
                 />
               </label>
-              {/* Address — optional but useful for billing later */}
-              <details style={{ marginTop: 8 }}>
-                <summary
-                  style={{
-                    cursor: "pointer",
-                    fontSize: 12,
-                    opacity: 0.75,
-                    marginBottom: 8,
-                  }}
-                >
-                  Store address (optional)
-                </summary>
-                <label style={labelStyle}>
-                  <span style={labelTextStyle}>Street</span>
+
+              <details className="onboarding-details">
+                <summary>Store address (optional)</summary>
+                <label className="onboarding-field">
+                  <span className="onboarding-field__label">Street</span>
                   <input
                     type="text"
                     value={addressLine1}
                     onChange={(e) => setAddressLine1(e.target.value)}
-                    style={inputStyle}
+                    className="onboarding-input"
+                    disabled={submitting}
                   />
                 </label>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <label style={{ ...labelStyle, flex: 2 }}>
-                    <span style={labelTextStyle}>City</span>
+                <div className="onboarding-field-row">
+                  <label className="onboarding-field">
+                    <span className="onboarding-field__label">City</span>
                     <input
                       type="text"
                       value={city}
                       onChange={(e) => setCity(e.target.value)}
-                      style={inputStyle}
+                      className="onboarding-input"
+                      disabled={submitting}
                     />
                   </label>
-                  <label style={{ ...labelStyle, flex: 1 }}>
-                    <span style={labelTextStyle}>State</span>
+                  <label className="onboarding-field">
+                    <span className="onboarding-field__label">State</span>
                     <input
                       type="text"
                       maxLength={2}
@@ -419,179 +536,69 @@ export function AuthGate({ children }: AuthGateProps) {
                       onChange={(e) =>
                         setStateAbbr(e.target.value.toUpperCase())
                       }
-                      style={inputStyle}
+                      className="onboarding-input"
+                      disabled={submitting}
                     />
                   </label>
-                  <label style={{ ...labelStyle, flex: 1 }}>
-                    <span style={labelTextStyle}>ZIP</span>
+                  <label className="onboarding-field">
+                    <span className="onboarding-field__label">ZIP</span>
                     <input
                       type="text"
                       inputMode="numeric"
                       maxLength={10}
                       value={postalCode}
                       onChange={(e) => setPostalCode(e.target.value)}
-                      style={inputStyle}
+                      className="onboarding-input"
+                      disabled={submitting}
                     />
                   </label>
                 </div>
               </details>
-            </>
-          ) : null}
 
-          {errorMsg && <div style={errorStyle}>{errorMsg}</div>}
+              {errorMsg ? (
+                <p className="onboarding-error" role="alert">
+                  <IconAlert size={16} strokeWidth={2} aria-hidden />
+                  <span>{errorMsg}</span>
+                </p>
+              ) : null}
 
-          <button type="submit" disabled={submitting} style={buttonStyle}>
-            {submitting
-              ? mode === "login"
-                ? "Signing in…"
-                : "Creating account…"
-              : mode === "login"
-                ? "Sign in"
-                : "Create account"}
-          </button>
-        </form>
+              <div className="onboarding-actions">
+                <button
+                  type="button"
+                  className="onboarding-btn onboarding-btn--secondary"
+                  disabled={submitting}
+                  onClick={() => {
+                    resetErrors();
+                    setSignupStep(1);
+                  }}
+                >
+                  Back
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="onboarding-btn onboarding-btn--primary"
+                >
+                  {submitting ? "Creating account…" : "Create account"}
+                </button>
+              </div>
+
+              <p className="onboarding-hint">
+                <IconStore
+                  size={14}
+                  strokeWidth={1.8}
+                  style={{ verticalAlign: "middle", marginRight: 6 }}
+                  aria-hidden
+                />
+                Next we&apos;ll verify your MLCC connection (~30–60s) before
+                opening the scanner.
+              </p>
+            </form>
+          )}
+        </div>
       </div>
     );
   }
 
-  return (
-    <>
-      {children}
-      {pendingActivation ? (
-        <OnboardingActivation
-          storeName={pendingActivationStoreName}
-          storeId={pendingActivationStoreId}
-          onComplete={() => {
-            setPendingActivation(false);
-            setPendingActivationStoreId(null);
-          }}
-        />
-      ) : null}
-    </>
-  );
+  return <>{children}</>;
 }
-
-function humanizeSignupError(code?: string): string {
-  switch (code) {
-    case "invalid_email":
-      return "That email looks invalid.";
-    case "password_too_short_min_8":
-      return "Password must be at least 8 characters.";
-    case "store_name_required":
-      return "Store name is required.";
-    case "liquor_license_invalid":
-      return "Liquor license must be 5–10 digits.";
-    case "mlcc_credentials_required":
-      return "MLCC username and password are required.";
-    case "email_in_use":
-      return "An account already exists with that email. Try signing in.";
-    case "credential_encryption_failed":
-      return "We couldn't securely save your MLCC credentials. Please try again.";
-    default:
-      return code ? `Sign-up failed: ${code}` : "Sign-up failed.";
-  }
-}
-
-// Inline styles to avoid adding a CSS dependency for the gate alone. The
-// scanner uses its own global CSS for the main app; this login screen is
-// rarely seen after first use.
-const shellStyle = {
-  minHeight: "100vh",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "#0b0d12",
-  color: "#fff",
-  padding: 16,
-  fontFamily:
-    "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-} as const;
-
-const loadingStyle = {
-  ...shellStyle,
-} as const;
-
-const cardStyle = {
-  width: "100%",
-  maxWidth: 360,
-  background: "#15181f",
-  borderRadius: 12,
-  padding: 24,
-  boxShadow: "0 10px 30px rgba(0, 0, 0, 0.4)",
-  display: "flex",
-  flexDirection: "column",
-  gap: 14,
-} as const;
-
-const titleStyle = {
-  fontSize: 22,
-  fontWeight: 700,
-  margin: 0,
-  letterSpacing: -0.2,
-} as const;
-
-const subtitleStyle = {
-  fontSize: 14,
-  opacity: 0.7,
-  margin: "0 0 6px 0",
-} as const;
-
-const labelStyle = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-} as const;
-
-const labelTextStyle = {
-  fontSize: 13,
-  opacity: 0.85,
-} as const;
-
-const inputStyle = {
-  background: "#0b0d12",
-  border: "1px solid #2a2f3a",
-  color: "#fff",
-  borderRadius: 8,
-  padding: "12px 14px",
-  fontSize: 16, // 16px prevents iOS Safari from zooming the page on focus
-  outline: "none",
-} as const;
-
-const errorStyle = {
-  color: "#ff7a7a",
-  fontSize: 13,
-  background: "rgba(255, 122, 122, 0.08)",
-  border: "1px solid rgba(255, 122, 122, 0.3)",
-  padding: "8px 10px",
-  borderRadius: 6,
-} as const;
-
-const buttonStyle = {
-  background: "#3a82f7",
-  color: "#fff",
-  border: "none",
-  borderRadius: 8,
-  padding: "12px 14px",
-  fontSize: 16,
-  fontWeight: 600,
-  cursor: "pointer",
-  marginTop: 4,
-} as const;
-
-const tabStyle = {
-  flex: 1,
-  background: "transparent",
-  color: "rgba(255,255,255,0.6)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 6,
-  padding: "8px 10px",
-  fontSize: 13,
-  fontWeight: 600,
-  cursor: "pointer",
-} as const;
-
-const tabActiveStyle = {
-  background: "rgba(58, 130, 247, 0.18)",
-  color: "#fff",
-  borderColor: "rgba(58, 130, 247, 0.6)",
-} as const;

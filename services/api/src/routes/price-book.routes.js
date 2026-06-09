@@ -1282,15 +1282,25 @@ router.get("/items/:code/family", async (req, res) => {
       return res.status(400).json({ ok: false, error: "code_required" });
     }
 
-    const { data: anchor, error: aErr } = await supabase
+    // NOTE: mlcc_items.code is NOT unique — the same code can appear under
+    // multiple ADAs (unique index is on (code, ada_number)). So a plain
+    // .maybeSingle() ERRORS with "multiple rows returned" for any SKU sold by
+    // 2+ distributors, which 500'd this endpoint and silently broke the product
+    // card (Tony hit this on a double-shot Smirnoff at Colony, 2026-06-09).
+    // Take the first matching row as the anchor — all rows share name/brand/
+    // category, and filterToFamily() gathers the siblings anyway.
+    const { data: anchorRows, error: aErr } = await supabase
       .from("mlcc_items")
       .select("*")
       .eq("code", code)
-      .maybeSingle();
+      .order("ada_number", { ascending: true })
+      .limit(1);
 
     if (aErr) {
       return res.status(500).json({ ok: false, error: aErr.message });
     }
+    const anchor =
+      Array.isArray(anchorRows) && anchorRows.length > 0 ? anchorRows[0] : null;
     if (!anchor) {
       return res.json({ ok: false, error: "mlcc_code_not_found" });
     }

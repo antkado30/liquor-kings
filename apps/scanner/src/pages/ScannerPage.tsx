@@ -196,17 +196,22 @@ export function ScannerPage() {
   }, [search.query, upcBeingMapped, upcMappingExpectedQuery]);
 
   const openFamily = useCallback(async (p: MlccProduct, opts?: { upcForFlag?: string | null }) => {
-    const fam = await getProductFamily(p.code);
-    if (fam) {
-      setProductCardInitialCode(p.code);
-      if (opts?.upcForFlag != null && String(opts.upcForFlag).trim() !== "") {
-        setUpcScanContext({ upc: String(opts.upcForFlag).trim() });
-      } else {
-        setUpcScanContext(null);
-      }
-      setCurrentFamily(fam);
-      setShowProductCard(true);
+    // Try to load the full size-family for this brand. If that lookup fails
+    // (transient error, OR a SKU the server can't group — e.g. Tony's
+    // double-shot Smirnoff at Colony), DON'T silently drop the tap: we already
+    // have the full product `p` from the scan/vision/search, so open the card
+    // with a single-size fallback family. The card must ALWAYS open so the
+    // user can add the bottle to their order. (Doctrine: no silent failures.)
+    const fam: ProductFamily =
+      (await getProductFamily(p.code)) ?? { baseName: p.name, sizes: [p] };
+    setProductCardInitialCode(p.code);
+    if (opts?.upcForFlag != null && String(opts.upcForFlag).trim() !== "") {
+      setUpcScanContext({ upc: String(opts.upcForFlag).trim() });
+    } else {
+      setUpcScanContext(null);
     }
+    setCurrentFamily(fam);
+    setShowProductCard(true);
   }, []);
 
   /*
@@ -426,9 +431,20 @@ export function ScannerPage() {
 
       <SmartCards
         onTapProduct={(code) => {
-          void getProductByCode(code).then((p) => {
-            if (p) void openFamily(p);
-          });
+          void getProductByCode(code)
+            .then((p) => {
+              if (p) {
+                void openFamily(p);
+              } else {
+                // Doctrine: no silent failures. Tell the user instead of a dead tap.
+                setToast("Couldn't open that bottle — try again.");
+                setTimeout(() => setToast(null), 2500);
+              }
+            })
+            .catch(() => {
+              setToast("Couldn't open that bottle — check your connection.");
+              setTimeout(() => setToast(null), 2500);
+            });
         }}
         onStoreMeta={setStoreMeta}
         refreshKey={verifyRefreshKey}
@@ -739,7 +755,15 @@ export function ScannerPage() {
           onCancel={() => {
             setVisionResult(null);
             setVisionError(null);
-            const el = document.querySelector<HTMLInputElement>(".scanner-manual-input");
+          }}
+          onSearchByName={(q) => {
+            // The barcode failed + AI couldn't pin an exact catalog match, so
+            // drop what the photo showed into the search bar — the user finds
+            // it by name and taps it. Completes the scan-fallback loop.
+            setVisionResult(null);
+            setVisionError(null);
+            search.setQuery(q);
+            const el = document.querySelector<HTMLInputElement>(".search-bar-input");
             el?.focus();
             el?.scrollIntoView({ behavior: "smooth", block: "center" });
           }}

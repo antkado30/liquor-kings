@@ -24,6 +24,8 @@ type VisionCandidatePickerProps = {
   onSelect: (product: MlccProduct) => void;
   onRetake: () => void;
   onCancel: () => void;
+  /** Prefill the scanner search bar with what the photo showed. */
+  onSearchByName: (query: string) => void;
 };
 
 export function VisionCandidatePicker({
@@ -33,6 +35,7 @@ export function VisionCandidatePicker({
   onSelect,
   onRetake,
   onCancel,
+  onSearchByName,
 }: VisionCandidatePickerProps) {
   const seenLabel = [extracted.brand, extracted.product_name]
     .filter((s) => s && s.trim())
@@ -105,7 +108,7 @@ export function VisionCandidatePicker({
           </ul>
         ) : (
           <p className="muted small" style={{ marginTop: 12 }}>
-            No catalog matches. Try a clearer photo or type the MLCC code from the bottle.
+            No exact catalog match. Try a clearer photo, or search by name below.
           </p>
         )}
 
@@ -113,8 +116,12 @@ export function VisionCandidatePicker({
           <button type="button" className="btn secondary btn-block" onClick={onRetake}>
             Try a different photo
           </button>
-          <button type="button" className="btn btn-block" onClick={onCancel}>
-            Type code instead
+          <button
+            type="button"
+            className="btn btn-block"
+            onClick={() => (seenLabel ? onSearchByName(seenLabel) : onCancel())}
+          >
+            {seenLabel ? `Search "${seenLabel}"` : "Close"}
           </button>
         </div>
       </div>

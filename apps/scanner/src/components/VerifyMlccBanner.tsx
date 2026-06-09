@@ -1,21 +1,15 @@
 /**
  * VerifyMlccBanner — task #88, 2026-06-06.
  *
- * Shown on the scanner home when the current store's
- * `mlcc_credentials_last_verified_at` is null. Lets the user verify
- * their MLCC connection in one tap without going through full
- * onboarding activation again — useful when:
- *   - They skipped the activation modal at signup
- *   - They updated their MLCC creds and want to confirm the new
- *     ones work
- *   - A failed activation never finished a probe
- *
- * The probe itself reuses the same `cart_reset_only` execution-run
- * type as onboarding activation. On success the home re-fetches
- * smart cards and the banner naturally disappears because the
- * backend has stamped last_verified_at.
+ * Shown on the scanner home when mlcc_credentials_last_verified_at is null.
  */
 import { useMlccVerifyProbe } from "../hooks/useMlccVerifyProbe";
+import {
+  IconAlert,
+  IconCheck,
+  IconLoader,
+  IconPlug,
+} from "./Icons";
 
 type Props = {
   onVerified: () => void;
@@ -24,73 +18,59 @@ type Props = {
 export function VerifyMlccBanner({ onVerified }: Props) {
   const { state, runProbe } = useMlccVerifyProbe(onVerified);
 
+  const isRunning = state.kind === "running";
+  const isFailed = state.kind === "failed";
+  const isSuccess = state.kind === "succeeded";
+
   return (
-    <div style={bannerStyle}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={titleStyle}>
-          {state.kind === "running"
-            ? "Verifying MLCC connection…"
-            : "Verify your MLCC connection"}
+    <div
+      className={`verify-mlcc-banner${isSuccess ? " verify-mlcc-banner--success" : ""}`}
+      role={isFailed ? "alert" : "status"}
+    >
+      <span className="verify-mlcc-banner__icon" aria-hidden>
+        {isSuccess ? (
+          <IconCheck size={20} strokeWidth={2.2} />
+        ) : isRunning ? (
+          <span className="verify-mlcc-banner__spinner">
+            <IconLoader size={20} strokeWidth={2} />
+          </span>
+        ) : isFailed ? (
+          <IconAlert size={20} strokeWidth={2} />
+        ) : (
+          <IconPlug size={20} strokeWidth={1.9} />
+        )}
+      </span>
+
+      <div className="verify-mlcc-banner__body">
+        <div className="verify-mlcc-banner__title">
+          {isSuccess
+            ? "MLCC connection verified"
+            : isRunning
+              ? "Verifying MLCC connection…"
+              : isFailed
+                ? "Verification failed"
+                : "Verify your MLCC connection"}
         </div>
-        <div style={subtitleStyle}>
-          {state.kind === "failed"
-            ? state.message
-            : state.kind === "running"
-              ? "Logging into MILO. Usually takes 30-60 seconds."
-              : "We haven't confirmed your MILO login works yet. One-tap test."}
+        <div className="verify-mlcc-banner__subtitle">
+          {isSuccess
+            ? "You're connected to MILO. This banner will disappear shortly."
+            : isFailed
+              ? state.message
+              : isRunning
+                ? "Signing into MILO — usually takes 30–60 seconds. Keep the app open."
+                : "We haven't confirmed your MILO login yet. One tap to test it."}
         </div>
       </div>
-      {state.kind === "running" ? (
-        <div style={spinnerStyle} aria-hidden>
-          …
-        </div>
-      ) : (
-        <button type="button" onClick={runProbe} style={btnStyle}>
-          {state.kind === "failed" ? "Retry" : "Verify"}
+
+      {!isRunning && !isSuccess ? (
+        <button
+          type="button"
+          className="verify-mlcc-banner__btn"
+          onClick={() => void runProbe()}
+        >
+          {isFailed ? "Retry" : "Verify"}
         </button>
-      )}
+      ) : null}
     </div>
   );
 }
-
-const bannerStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 14,
-  padding: "12px 14px",
-  margin: "10px 0",
-  background: "rgba(245, 158, 11, 0.08)",
-  border: "1px solid rgba(245, 158, 11, 0.32)",
-  borderRadius: 10,
-};
-
-const titleStyle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 700,
-  color: "#fde6b3",
-  lineHeight: 1.3,
-};
-
-const subtitleStyle: React.CSSProperties = {
-  fontSize: 12,
-  color: "rgba(253, 230, 179, 0.7)",
-  marginTop: 2,
-  lineHeight: 1.4,
-};
-
-const btnStyle: React.CSSProperties = {
-  background: "#f59e0b",
-  color: "#1a1208",
-  border: "none",
-  borderRadius: 8,
-  padding: "9px 16px",
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-
-const spinnerStyle: React.CSSProperties = {
-  fontSize: 20,
-  padding: "6px 12px",
-};

@@ -111,12 +111,13 @@ export function BrowsePage() {
   const [initialCode, setInitialCode] = useState<string | undefined>(undefined);
 
   const openProduct = useCallback(async (p: MlccProduct) => {
-    const fam = await getProductFamily(p.code);
-    if (fam) {
-      setInitialCode(p.code);
-      setCurrentFamily(fam);
-      setShowProductCard(true);
-    }
+    // Never silently drop the tap if the family lookup fails — we already have
+    // the full product, so fall back to a single-size family so the card opens.
+    const fam: ProductFamily =
+      (await getProductFamily(p.code)) ?? { baseName: p.name, sizes: [p] };
+    setInitialCode(p.code);
+    setCurrentFamily(fam);
+    setShowProductCard(true);
   }, []);
 
   const loadMore = useCallback(async () => {

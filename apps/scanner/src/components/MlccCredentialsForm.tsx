@@ -1,45 +1,18 @@
 /**
  * MlccCredentialsForm (task #86, 2026-06-06).
  *
- * Reusable form for updating MLCC creds. Used in two places:
- *   1. Inline inside OnboardingActivation's failure state, so a
- *      brand-new signup who fat-fingered their MLCC password can
- *      fix it and retry the probe without leaving the modal.
- *   2. Standalone on the scanner Settings page, so any signed-in
- *      user can rotate MLCC creds (e.g. password expired at MILO).
- *
- * Both username and password are optional — leave a field blank to
- * keep the existing value. We never display the existing password
- * (never read it back from the server; only ever write a new one).
+ * Reusable form for updating MLCC creds. Used in onboarding failure
+ * recovery and on the Settings page.
  */
 import { useState, type FormEvent } from "react";
 import { updateMlccCredentials } from "../api/me";
+import { IconAlert } from "./Icons";
 
 type Props = {
-  /**
-   * Optional. If provided, sent as X-Store-Id instead of the runtime
-   * resolver's value. Needed in the activation flow because the user
-   * may not yet have the runtime cache populated when retrying.
-   */
   overrideStoreId?: string;
-  /**
-   * Called with the new updated_at timestamp on success. Caller is
-   * responsible for any post-save behavior (close modal, retry probe,
-   * show toast, etc).
-   */
   onSaved: (updatedAt: string | null) => void;
-  /**
-   * Optional. If set, both fields show this as the placeholder hint
-   * ("Leave blank to keep current"). Defaults to a generic hint.
-   */
   blankToKeepHint?: string;
-  /** Optional. Label on the submit button. Defaults to "Save credentials". */
   submitLabel?: string;
-  /**
-   * When true, the password field is required. Use this in the
-   * activation-retry flow where the whole point is to overwrite a
-   * known-wrong password. Default false (rotation case).
-   */
   passwordRequired?: boolean;
 };
 
@@ -61,8 +34,12 @@ export function MlccCredentialsForm({
     setError(null);
     const u = username.trim();
     const p = password;
+    if (passwordRequired && !u) {
+      setError("Enter your MLCC username.");
+      return;
+    }
     if (passwordRequired && !p) {
-      setError("Enter a new MLCC password.");
+      setError("Enter your MLCC password.");
       return;
     }
     if (!u && !p) {
@@ -86,118 +63,66 @@ export function MlccCredentialsForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} style={formStyle}>
-      <label style={labelStyle}>
-        MLCC username
+    <form className="mlcc-creds-form" onSubmit={handleSubmit}>
+      <label className="onboarding-field">
+        <span className="onboarding-field__label">MLCC username</span>
         <input
           type="text"
+          className="onboarding-input"
           value={username}
           autoComplete="username"
           onChange={(e) => setUsername(e.target.value)}
-          placeholder={passwordRequired ? "Your MLCC username" : blankToKeepHint}
-          style={inputStyle}
+          placeholder={
+            passwordRequired ? "Your MLCC username" : blankToKeepHint
+          }
           disabled={submitting}
         />
       </label>
-      <label style={labelStyle}>
-        MLCC password
-        <div style={{ position: "relative" }}>
+      <label className="onboarding-field">
+        <span className="onboarding-field__label">MLCC password</span>
+        <div className="mlcc-creds-form__pw-wrap">
           <input
             type={showPw ? "text" : "password"}
+            className="onboarding-input mlcc-creds-form__input--pw"
             value={password}
             autoComplete="new-password"
             onChange={(e) => setPassword(e.target.value)}
-            placeholder={passwordRequired ? "Your MLCC password" : blankToKeepHint}
-            style={{ ...inputStyle, paddingRight: 56 }}
+            placeholder={
+              passwordRequired ? "Your MLCC password" : blankToKeepHint
+            }
             disabled={submitting}
           />
           <button
             type="button"
+            className="mlcc-creds-form__pw-toggle"
             onClick={() => setShowPw((v) => !v)}
-            style={showPwBtnStyle}
             tabIndex={-1}
+            aria-label={showPw ? "Hide password" : "Show password"}
           >
             {showPw ? "Hide" : "Show"}
           </button>
         </div>
       </label>
-      {error ? <div style={errorStyle}>{error}</div> : null}
-      <button type="submit" disabled={submitting} style={submitBtnStyle}>
+
+      {error ? (
+        <p className="onboarding-error" role="alert">
+          <IconAlert size={16} strokeWidth={2} aria-hidden />
+          <span>{error}</span>
+        </p>
+      ) : null}
+
+      <button
+        type="submit"
+        disabled={submitting}
+        className="onboarding-btn onboarding-btn--primary onboarding-btn--block"
+      >
         {submitting ? "Saving…" : submitLabel}
       </button>
-      <p style={hintStyle}>
-        We re-encrypt your password with AES-256-GCM before storing it.
-        It&apos;s only used to place orders on your behalf.
+
+      <p className="onboarding-hint">
+        We encrypt your password with AES-256-GCM before storing it. It&apos;s
+        only used to place orders on your behalf.
       </p>
     </form>
   );
 }
-
-const formStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-  textAlign: "left",
-};
-
-const labelStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  fontSize: 13,
-  fontWeight: 600,
-  color: "rgba(255,255,255,0.85)",
-};
-
-const inputStyle: React.CSSProperties = {
-  background: "#0d1017",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 8,
-  padding: "10px 12px",
-  color: "#fff",
-  fontSize: 15,
-  fontWeight: 500,
-  width: "100%",
-  boxSizing: "border-box",
-};
-
-const showPwBtnStyle: React.CSSProperties = {
-  position: "absolute",
-  right: 8,
-  top: "50%",
-  transform: "translateY(-50%)",
-  background: "transparent",
-  border: "none",
-  color: "rgba(255,255,255,0.55)",
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: "pointer",
-  padding: 4,
-};
-
-const errorStyle: React.CSSProperties = {
-  background: "rgba(255, 80, 80, 0.12)",
-  border: "1px solid rgba(255, 80, 80, 0.35)",
-  color: "#ffb3b3",
-  padding: 10,
-  borderRadius: 8,
-  fontSize: 13,
-};
-
-const submitBtnStyle: React.CSSProperties = {
-  background: "#3a82f7",
-  color: "#fff",
-  border: "none",
-  borderRadius: 8,
-  padding: "12px 14px",
-  fontSize: 15,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const hintStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: "rgba(255,255,255,0.45)",
-  margin: 0,
-  lineHeight: 1.5,
-};
