@@ -35,6 +35,7 @@ import { useCart } from "../hooks/useCart";
 import { IconCalendar, IconTrash } from "../components/Icons";
 import { useCachedResource } from "../lib/swr";
 import { getCurrentStoreId } from "../lib/currentStore";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -312,6 +313,7 @@ function EditTemplateModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  useLockBodyScroll();
   const [name, setName] = useState(template.name);
   const [scheduleDow, setScheduleDow] = useState<number | null>(
     template.schedule_dow ?? null,
@@ -398,17 +400,22 @@ function EditTemplateModal({
       return;
     }
     setSubmitting(true);
-    const r = await updateOrderTemplate(template.id, {
-      name: trimmed,
-      schedule_dow: scheduleDow,
-      items,
-    });
-    setSubmitting(false);
-    if (!r.ok) {
-      setErr(r.error);
-      return;
+    try {
+      const r = await updateOrderTemplate(template.id, {
+        name: trimmed,
+        schedule_dow: scheduleDow,
+        items,
+      });
+      if (!r.ok) {
+        setErr(r.error);
+        return;
+      }
+      onSaved();
+    } finally {
+      // Never leave Save spinning if the call throws. (Stuck-spinner
+      // sweep, 2026-06-09.)
+      setSubmitting(false);
     }
-    onSaved();
   }
 
   return (

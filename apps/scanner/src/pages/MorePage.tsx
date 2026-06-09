@@ -55,8 +55,8 @@ export function MorePage() {
     },
     {
       Icon: IconBarChart,
-      label: "Dashboard",
-      blurb: "Weekly spend, top SKUs, biggest movers",
+      label: "Analytics",
+      blurb: "Spend, top sellers, distributors, biggest movers",
       onTap: () => navigate("/?view=dashboard"),
     },
     {

@@ -1035,6 +1035,10 @@ export async function priceBookUpcHandler(req, res) {
         .from("mlcc_items")
         .select("*")
         .eq("code", mapping.mlccCode)
+        // code is not unique alone (code+ada_number is) — pin to lowest ADA so
+        // a multi-distributor SKU on the scan path can't 500 .maybeSingle().
+        .order("ada_number", { ascending: true })
+        .limit(1)
         .maybeSingle();
       if (mapItemErr) {
         console.log("[price-book-upc] upc_mappings mlcc_items fetch error", mapItemErr.message);

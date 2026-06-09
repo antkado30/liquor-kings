@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { confirmUpcMapping } from "../api/catalog";
 import type { MlccProduct } from "../types";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 function money(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -39,6 +40,7 @@ export function UpcCandidatePicker({
   onNoneMatch,
   onCancel,
 }: UpcCandidatePickerProps) {
+  useLockBodyScroll();
   const subtitleParts = [upcBrand, upcProductName].filter((s) => s && String(s).trim());
   const subtitle = subtitleParts.length > 0 ? subtitleParts.join(" ") : "—";
 

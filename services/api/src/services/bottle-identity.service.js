@@ -22,6 +22,10 @@ async function fetchMlccItemByPrimaryCode(supabase, code) {
     .from("mlcc_items")
     .select("id, code, name, size_ml, mlcc_item_no")
     .eq("code", trimmed)
+    // code is not unique alone (code+ada_number is) — pin to lowest ADA so a
+    // multi-distributor SKU can't 500 .maybeSingle() during identity resolve.
+    .order("ada_number", { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   if (e1) return { data: null, error: e1 };

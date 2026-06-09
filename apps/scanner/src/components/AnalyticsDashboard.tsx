@@ -15,6 +15,7 @@ import {
 import { useHideTabBar } from "../hooks/useHideTabBar";
 import { getCurrentStoreId } from "../lib/currentStore";
 import { useCachedResource } from "../lib/swr";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import {
   IconBarChart,
   IconCalendar,
@@ -384,6 +385,7 @@ function DashboardBody({ data }: { data: DashData }) {
 
 export function AnalyticsDashboard({ onClose }: { onClose: () => void }) {
   useHideTabBar();
+  useLockBodyScroll();
   const storeId = getCurrentStoreId() ?? "none";
 
   const analyticsRes = useCachedResource<DashData>(

@@ -114,6 +114,10 @@ router.post("/nrs-review/:reviewId/resolve", express.json(), async (req, res) =>
     .from("mlcc_items")
     .select("code, name")
     .eq("code", mlccCode)
+    // code is not unique alone (code+ada_number is) — pin to lowest ADA so a
+    // multi-distributor SKU can't 500 .maybeSingle().
+    .order("ada_number", { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (mlccErr) return res.status(500).json({ ok: false, error: mlccErr.message });
   if (!mlccItem) {

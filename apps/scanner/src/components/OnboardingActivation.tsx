@@ -15,6 +15,7 @@ import {
 import { humanizeNetworkError } from "../api/me";
 import { MlccCredentialsForm } from "./MlccCredentialsForm";
 import { IconAlert, IconCheck, IconLoader } from "./Icons";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 const STAGES: Array<{ id: string; label: string }> = [
   { id: "rpa_login", label: "Signing into MLCC" },
@@ -40,6 +41,7 @@ export function OnboardingActivation({
   storeName: string;
   storeId: string | null;
 }) {
+  useLockBodyScroll();
   const [state, setState] = useState<ActivationState>({ kind: "starting" });
   const startedRef = useRef(false);
   const cancelledRef = useRef(false);

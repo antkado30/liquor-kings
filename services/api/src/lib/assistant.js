@@ -349,6 +349,11 @@ async function toolPriceQuote(input, { supabase }) {
       "code,name,size_ml,case_size,state_min_price,licensee_price,base_price,price_changed_at",
     )
     .eq("code", code)
+    // code is NOT unique alone (unique key is code+ada_number); a multi-
+    // distributor SKU returns >1 row and .maybeSingle() would 500. Pin to the
+    // canonical lowest-ADA row. (Smirnoff-bug class sweep, 2026-06-09.)
+    .order("ada_number", { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (error) return { error: `price lookup failed: ${error.message}` };
   if (!data) return { error: `no catalog item found for code ${code}` };
@@ -469,6 +474,10 @@ async function toolCheckOrderQuantity(input, { supabase }) {
       .from("mlcc_items")
       .select("code,name,size_ml,case_size")
       .eq("code", code)
+      // code is not unique alone (code+ada_number is) — pin to lowest ADA so a
+      // multi-distributor SKU can't 500 .maybeSingle().
+      .order("ada_number", { ascending: true })
+      .limit(1)
       .maybeSingle();
     if (error) return { error: `catalog lookup failed: ${error.message}` };
     if (!data) return { error: `no catalog item found for code ${code}` };

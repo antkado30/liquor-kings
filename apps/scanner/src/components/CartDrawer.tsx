@@ -41,6 +41,7 @@ import {
 } from "../api/orderTemplates";
 import { cartLineId, type CartContextValue } from "../hooks/useCart";
 import { useSubmission } from "../hooks/useSubmission";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
 import { useHideTabBar } from "../hooks/useHideTabBar";
 import { SubmitConfirmationModal } from "./SubmitConfirmationModal";
@@ -219,6 +220,7 @@ export function CartDrawer({
    * not reach it. This kills the overlap.
    */
   useHideTabBar();
+  useLockBodyScroll();
   const {
     items,
     groupedByAda,

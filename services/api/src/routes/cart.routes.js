@@ -353,6 +353,12 @@ router.post("/:storeId/items", async (req, res) => {
     .select("*")
     .eq("cart_id", cart.id)
     .eq("bottle_id", resolvedBottleId)
+    // (cart_id, bottle_id) has NO unique constraint, so a race (two fast adds)
+    // can leave dup rows — .maybeSingle() would then 500 on the next add.
+    // Take the oldest row deterministically. (TODO: add a unique index +
+    // dedupe migration to prevent the dup at the source.)
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   if (existingItemError) {

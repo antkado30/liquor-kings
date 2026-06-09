@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import supabase from "../config/supabase.js";
 import { logSystemDiagnostic, DIAGNOSTIC_KIND } from "../services/diagnostics.service.js";
+import { verifySupabaseAccessToken } from "../lib/access-token.js";
 
 function timingSafeEqualStrings(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false;
@@ -41,29 +42,37 @@ export async function resolveAuthenticatedStore(req, res, next) {
     return next();
   }
 
-  const { data: userData, error: userErr } =
-    await supabase.auth.getUser(token);
+  // Fast path: verify the Supabase JWT locally (no network hop) when the JWT
+  // secret is configured. Falls back to the authoritative getUser() call on any
+  // miss, so this is a pure speedup with identical security semantics.
+  // (Instant-feel: removes a per-request round-trip to GoTrue, 2026-06-09.)
+  let authUserId = verifySupabaseAccessToken(token)?.userId ?? null;
 
-  if (userErr || !userData?.user) {
-    await logSystemDiagnostic({
-      kind: DIAGNOSTIC_KIND.UNAUTHORIZED,
-      payload: {
-        path: req.path,
-        reason: "invalid_token",
-        message: userErr?.message,
-      },
-    });
-    return res.status(401).json({ error: "Invalid or expired token" });
+  if (!authUserId) {
+    const { data: userData, error: userErr } =
+      await supabase.auth.getUser(token);
+
+    if (userErr || !userData?.user) {
+      await logSystemDiagnostic({
+        kind: DIAGNOSTIC_KIND.UNAUTHORIZED,
+        payload: {
+          path: req.path,
+          reason: "invalid_token",
+          message: userErr?.message,
+        },
+      });
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+    authUserId = userData.user.id;
   }
 
-  const user = userData.user;
   req.auth_mode = "user";
-  req.auth_user_id = user.id;
+  req.auth_user_id = authUserId;
 
   const { data: memberships, error: memErr } = await supabase
     .from("store_users")
     .select("store_id")
-    .eq("user_id", user.id)
+    .eq("user_id", authUserId)
     .eq("is_active", true);
 
   if (memErr) {
@@ -73,7 +82,7 @@ export async function resolveAuthenticatedStore(req, res, next) {
   if (!memberships?.length) {
     await logSystemDiagnostic({
       kind: DIAGNOSTIC_KIND.MISSING_STORE,
-      userId: user.id,
+      userId: authUserId,
       payload: { path: req.path, reason: "no_active_store_users_row" },
     });
     return res.status(403).json({ error: "No store membership for user" });
@@ -86,7 +95,7 @@ export async function resolveAuthenticatedStore(req, res, next) {
     if (headerStore && headerStore !== req.store_id) {
       await logSystemDiagnostic({
         kind: DIAGNOSTIC_KIND.STORE_MISMATCH,
-        userId: user.id,
+        userId: authUserId,
         storeId: req.store_id,
         payload: {
           path: req.path,
@@ -109,7 +118,7 @@ export async function resolveAuthenticatedStore(req, res, next) {
   if (!allowed) {
     await logSystemDiagnostic({
       kind: DIAGNOSTIC_KIND.STORE_MISMATCH,
-      userId: user.id,
+      userId: authUserId,
       payload: {
         path: req.path,
         reason: "header_store_not_in_memberships",

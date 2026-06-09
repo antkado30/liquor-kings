@@ -11,6 +11,7 @@ import { computeProductFreshness } from "../lib/product-freshness";
 import type { MlccProduct, ProductFamily } from "../types";
 import { pickInitialSizeByCode, ProductSizeSelector } from "./ProductSizeSelector";
 import { PlaceholderBottle, tintForCategory } from "./BottleArt";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 function money(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -47,6 +48,7 @@ export function ProductCard({
   latestPriceBookDate = null,
   onToast,
 }: ProductCardProps) {
+  useLockBodyScroll();
   const [selectedProduct, setSelectedProduct] = useState<MlccProduct>(() =>
     pickInitialSizeByCode(family.sizes, initialSelectedCode),
   );

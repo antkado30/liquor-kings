@@ -10,6 +10,16 @@ import { getProductFamily } from "../api/catalog";
 import { fetchTagsHtml } from "../api/tags";
 import { useCart } from "../hooks/useCart";
 import { TagPrintPreview } from "../components/TagPrintPreview";
+import {
+  IconAlert,
+  IconBarChart,
+  IconCalendar,
+  IconChevronLeft,
+  IconClipboardList,
+  IconLoader,
+  IconPackage,
+  IconStore,
+} from "../components/Icons";
 
 function money(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(Number(n))) return "—";
@@ -30,6 +40,31 @@ function shortDate(iso: string | null | undefined): string {
   });
 }
 
+function formatSize(ml: number | null | undefined): string | null {
+  if (ml == null || !Number.isFinite(Number(ml))) return null;
+  return `${ml} mL`;
+}
+
+function DetailShell({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="page-shell order-detail-page">
+      <header className="page-header">
+        <Link to="/orders" className="page-header__back" aria-label="Back to orders">
+          <IconChevronLeft size={20} strokeWidth={2} />
+        </Link>
+        <h1>{title}</h1>
+      </header>
+      {children}
+    </div>
+  );
+}
+
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -42,7 +77,6 @@ export function OrderDetailPage() {
   const [tagsHtml, setTagsHtml] = useState<string | null>(null);
   const [printingTags, setPrintingTags] = useState(false);
 
-  // Collect every line's MLCC code and render all shelf tags at once.
   async function printAllTags(items: MiloOrderDetail["line_items"]) {
     const codes = (Array.isArray(items) ? items : [])
       .map((li) => (li.liquorCode ? String(li.liquorCode) : ""))
@@ -63,8 +97,6 @@ export function OrderDetailPage() {
     setTagsHtml(res.html);
   }
 
-  // Rebuild this whole order into the cart — resolve each line through the
-  // catalog (for ADA + price), add it at the same quantity, then open the cart.
   async function reorderAll(items: MiloOrderDetail["line_items"]) {
     const lines = (Array.isArray(items) ? items : []).filter(
       (li) => li.liquorCode && Number(li.quantity) > 0,
@@ -109,81 +141,83 @@ export function OrderDetailPage() {
 
   if (loading) {
     return (
-      <div className="page-shell">
-        <header className="page-header">
-          <Link to="/orders" className="page-header__back" aria-label="Back to orders">
-            ←
-          </Link>
-          <h1>Order</h1>
-        </header>
-        <p className="muted small" style={{ padding: 24 }}>
-          Loading order…
-        </p>
-      </div>
+      <DetailShell title="Order">
+        <div className="order-detail-loading">
+          <span className="settings-spinner" aria-hidden>
+            <IconLoader size={28} strokeWidth={2} />
+          </span>
+          <p className="muted">Loading order…</p>
+        </div>
+      </DetailShell>
     );
   }
 
   if (error || !order) {
     return (
-      <div className="page-shell">
-        <header className="page-header">
-          <Link to="/orders" className="page-header__back" aria-label="Back to orders">
-            ←
-          </Link>
-          <h1>Order</h1>
-        </header>
-        <div className="banner banner-err">
-          {error ?? "Order not found."}
+      <DetailShell title="Order">
+        <div className="order-detail-error">
+          <p className="banner banner-err" role="alert">
+            <IconAlert
+              size={16}
+              strokeWidth={2}
+              style={{ verticalAlign: "middle", marginRight: 8 }}
+              aria-hidden
+            />
+            {error ?? "Order not found."}
+          </p>
+          <button
+            type="button"
+            className="btn secondary btn-block"
+            onClick={() => navigate("/orders")}
+          >
+            Back to orders
+          </button>
         </div>
-        <button
-          type="button"
-          className="btn secondary btn-block"
-          onClick={() => navigate("/orders")}
-        >
-          Back to orders
-        </button>
-      </div>
+      </DetailShell>
     );
   }
 
   const lineItems = Array.isArray(order.line_items) ? order.line_items : [];
+  const adaLabel = order.ada_name || order.distributor_raw || "Unknown ADA";
 
   return (
-    <div className="page-shell">
-      <header className="page-header">
-        <Link to="/orders" className="page-header__back" aria-label="Back to orders">
-          ←
-        </Link>
-        <h1>Order</h1>
-      </header>
-
-      <section className="order-detail-summary">
-        <div className="order-detail-summary__ada">
-          {order.ada_name || order.distributor_raw || "Unknown ADA"}
+    <DetailShell title={`Conf #${order.confirmation_number}`}>
+      <section className="order-detail-hero" aria-label="Order summary">
+        <div className="order-detail-hero__ada">
+          <span className="order-detail-hero__ada-icon" aria-hidden>
+            <IconStore size={18} strokeWidth={1.9} />
+          </span>
+          {adaLabel}
         </div>
-        <dl className="order-detail-meta">
-          <div>
-            <dt>Confirmation #</dt>
+        <dl className="order-detail-hero__meta">
+          <div className="order-detail-hero__field">
+            <dt>
+              <IconClipboardList size={12} strokeWidth={2} aria-hidden />
+              Confirmation
+            </dt>
             <dd className="mono">{order.confirmation_number}</dd>
           </div>
           {order.order_number ? (
-            <div>
+            <div className="order-detail-hero__field">
               <dt>Order #</dt>
               <dd className="mono">{order.order_number}</dd>
             </div>
           ) : null}
-          <div>
-            <dt>Placed</dt>
+          <div className="order-detail-hero__field">
+            <dt>
+              <IconCalendar size={12} strokeWidth={2} aria-hidden />
+              Placed
+            </dt>
             <dd>{shortDate(order.placed_at ?? order.submitted_at)}</dd>
           </div>
           {order.delivery_date ? (
-            <div>
+            <div className="order-detail-hero__field">
               <dt>Delivery</dt>
               <dd>{shortDate(order.delivery_date)}</dd>
             </div>
           ) : null}
           {order.status_at_placement ? (
-            <div>
+            <div className="order-detail-hero__field">
               <dt>Status</dt>
               <dd>{order.status_at_placement}</dd>
             </div>
@@ -191,77 +225,125 @@ export function OrderDetailPage() {
         </dl>
       </section>
 
-      <section className="order-detail-totals">
-        <div>
-          <span className="muted">Gross</span>
-          <strong>{money(order.gross_total)}</strong>
+      <section className="orders-stats order-detail-spend" aria-label="Spend summary">
+        <div className="orders-stat orders-stat--highlight">
+          <div className="orders-stat__head">
+            <IconBarChart size={14} strokeWidth={2} aria-hidden />
+            Net total
+          </div>
+          <div className="orders-stat__value">{money(order.net_total)}</div>
+          <div className="orders-stat__meta">After tax &amp; discounts</div>
         </div>
-        {order.discount != null ? (
-          <div>
-            <span className="muted">Discount</span>
-            <strong>{money(order.discount)}</strong>
+        <div className="orders-stat">
+          <div className="orders-stat__head">Gross</div>
+          <div className="orders-stat__value">{money(order.gross_total)}</div>
+          <div className="orders-stat__meta">Before adjustments</div>
+        </div>
+        <div className="orders-stat">
+          <div className="orders-stat__head">
+            <IconPackage size={14} strokeWidth={2} aria-hidden />
+            Lines
           </div>
-        ) : null}
-        {order.liquor_tax != null ? (
-          <div>
-            <span className="muted">Tax</span>
-            <strong>{money(order.liquor_tax)}</strong>
+          <div className="orders-stat__value">{lineItems.length}</div>
+          <div className="orders-stat__meta">
+            {order.discount != null
+              ? `Discount ${money(order.discount)}`
+              : order.liquor_tax != null
+                ? `Tax ${money(order.liquor_tax)}`
+                : "Line items"}
           </div>
-        ) : null}
-        <div className="order-detail-totals__net">
-          <span className="muted">Net</span>
-          <strong>{money(order.net_total)}</strong>
         </div>
       </section>
 
-      <h2 className="order-detail-section-title">
-        Line items ({lineItems.length})
-      </h2>
-      <ul className="order-detail-lines">
-        {lineItems.map((li, i) => (
-          <li key={i} className="order-detail-line">
-            <div className="order-detail-line__main">
-              <div className="order-detail-line__name">
-                {li.productName ?? li.liquorCode ?? "Unknown"}
+      {(order.discount != null || order.liquor_tax != null) ? (
+        <div className="order-detail-adjustments">
+          {order.discount != null ? (
+            <span className="order-detail-adjustments__item">
+              Discount <strong>{money(order.discount)}</strong>
+            </span>
+          ) : null}
+          {order.liquor_tax != null ? (
+            <span className="order-detail-adjustments__item">
+              Liquor tax <strong>{money(order.liquor_tax)}</strong>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="order-detail-lines-head">
+        <h2 className="order-detail-lines-head__title">
+          <IconPackage size={16} strokeWidth={2} aria-hidden />
+          Line items
+        </h2>
+        <span className="order-detail-lines-head__count">{lineItems.length}</span>
+      </div>
+
+      <ul className="order-detail-line-list">
+        {lineItems.map((li, i) => {
+          const size = formatSize(li.bottleSizeMl);
+          const qty = li.quantity ? Number(li.quantity) : null;
+          return (
+            <li key={i} className="order-detail-line-card">
+              <div className="order-detail-line-card__main">
+                <div className="order-detail-line-card__name">
+                  {li.productName ?? li.liquorCode ?? "Unknown"}
+                </div>
+                <div className="order-detail-line-card__meta muted small">
+                  {li.liquorCode ? (
+                    <span className="mono">#{li.liquorCode}</span>
+                  ) : null}
+                  {size ? (
+                    <>
+                      {li.liquorCode ? (
+                        <span className="order-detail-line-card__dot" aria-hidden>
+                          ·
+                        </span>
+                      ) : null}
+                      <span>{size}</span>
+                    </>
+                  ) : null}
+                  {qty != null && qty > 0 ? (
+                    <>
+                      <span className="order-detail-line-card__dot" aria-hidden>
+                        ·
+                      </span>
+                      <span>
+                        Qty {qty}
+                        {li.unitPrice ? ` × ${money(li.unitPrice)}` : ""}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
               </div>
-              <div className="muted small">
-                {li.liquorCode ? `#${li.liquorCode}` : ""}
-                {li.bottleSizeMl ? ` · ${li.bottleSizeMl} mL` : ""}
-                {li.quantity ? ` · qty ${li.quantity}` : ""}
-                {li.unitPrice ? ` · ${money(li.unitPrice)} ea` : ""}
+              <div className="order-detail-line-card__total">
+                {money(li.lineTotal)}
               </div>
-            </div>
-            <div className="order-detail-line__total">
-              {money(li.lineTotal)}
-            </div>
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ul>
 
       {lineItems.length > 0 ? (
-        <button
-          type="button"
-          className="btn primary btn-block"
-          style={{ marginTop: 16 }}
-          disabled={reordering}
-          onClick={() => void reorderAll(order.line_items)}
-        >
-          {reordering ? "Adding to order…" : "Reorder into cart"}
-        </button>
-      ) : null}
-
-      {lineItems.length > 0 ? (
-        <button
-          type="button"
-          className="btn secondary btn-block"
-          style={{ marginTop: 8 }}
-          disabled={printingTags}
-          onClick={() => void printAllTags(order.line_items)}
-        >
-          {printingTags
-            ? "Building tags…"
-            : `Print all shelf tags (${lineItems.length})`}
-        </button>
+        <div className="order-detail-actions">
+          <button
+            type="button"
+            className="btn primary btn-block"
+            disabled={reordering}
+            onClick={() => void reorderAll(order.line_items)}
+          >
+            {reordering ? "Adding to order…" : "Reorder into cart"}
+          </button>
+          <button
+            type="button"
+            className="btn secondary btn-block"
+            disabled={printingTags}
+            onClick={() => void printAllTags(order.line_items)}
+          >
+            {printingTags
+              ? "Building tags…"
+              : `Print all shelf tags (${lineItems.length})`}
+          </button>
+        </div>
       ) : null}
 
       {tagsHtml ? (
@@ -277,27 +359,10 @@ export function OrderDetailPage() {
       ) : null}
 
       {toast ? (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 100,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "rgba(11, 13, 18, 0.96)",
-            color: "#fff",
-            padding: "12px 18px",
-            borderRadius: 999,
-            fontSize: 13,
-            fontWeight: 600,
-            border: "1px solid rgba(255,255,255,0.12)",
-            zIndex: 95,
-            maxWidth: "90%",
-            textAlign: "center",
-          }}
-        >
+        <div className="order-detail-toast" role="status">
           {toast}
         </div>
       ) : null}
-    </div>
+    </DetailShell>
   );
 }

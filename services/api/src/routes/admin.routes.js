@@ -221,6 +221,10 @@ router.get("/upc-audit/suspicious", async (req, res) => {
         .select("id,name")
         .eq("upc", row.upc)
         .eq("code", row.matched_mlcc_code)
+        // (upc, code) isn't guaranteed unique across ADAs — pin to one row so a
+        // multi-distributor SKU can't 500 .maybeSingle().
+        .order("ada_number", { ascending: true })
+        .limit(1)
         .maybeSingle();
 
       suspicious.push({

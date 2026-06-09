@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getAuthBearer } from "../lib/supabase";
 import { getCurrentStoreId } from "../lib/currentStore";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 type TagPrintPreviewProps = {
   /** Server-rendered HTML page (from POST /tags/render). */
@@ -31,6 +32,7 @@ type TagPrintPreviewProps = {
 };
 
 export function TagPrintPreview({ html, mlccCode, onClose }: TagPrintPreviewProps) {
+  useLockBodyScroll();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [printing, setPrinting] = useState(false);
   const [ready, setReady] = useState(false);

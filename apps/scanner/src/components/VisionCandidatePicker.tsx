@@ -11,6 +11,7 @@
  */
 import type { MlccProduct } from "../types";
 import type { VisionExtracted } from "../api/catalog-vision";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 function money(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -37,6 +38,7 @@ export function VisionCandidatePicker({
   onCancel,
   onSearchByName,
 }: VisionCandidatePickerProps) {
+  useLockBodyScroll();
   const seenLabel = [extracted.brand, extracted.product_name]
     .filter((s) => s && s.trim())
     .join(" ")

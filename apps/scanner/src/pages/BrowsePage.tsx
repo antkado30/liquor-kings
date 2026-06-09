@@ -123,20 +123,32 @@ export function BrowsePage() {
   const loadMore = useCallback(async () => {
     if (!cursor || loadingMore) return;
     setLoadingMore(true);
-    const r = await browseProducts({
-      filters: { ...filters, q: query || null },
-      sort,
-      limit: 30,
-      cursor,
-    });
-    if (r.ok) {
-      // Append into the cache so the longer list survives a tab switch.
-      listRes.mutate({
-        products: [...products, ...r.products],
-        cursor: r.nextCursor,
+    try {
+      const r = await browseProducts({
+        filters: { ...filters, q: query || null },
+        sort,
+        limit: 30,
+        cursor,
       });
+      if (r.ok) {
+        // Append into the cache so the longer list survives a tab switch.
+        listRes.mutate({
+          products: [...products, ...r.products],
+          cursor: r.nextCursor,
+        });
+      } else {
+        // Don't fail silently — the user tapped "Load more" and deserves
+        // to know why nothing happened. (Stuck-spinner / silent-failure
+        // sweep, 2026-06-09.)
+        setToast(
+          r.error === "session_expired"
+            ? "Session expired — refresh to keep browsing."
+            : "Couldn't load more bottles. Check your connection and try again.",
+        );
+      }
+    } finally {
+      setLoadingMore(false);
     }
-    setLoadingMore(false);
   }, [cursor, loadingMore, filters, sort, query, products, listRes]);
 
   /*

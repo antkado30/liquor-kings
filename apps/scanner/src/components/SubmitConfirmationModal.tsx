@@ -29,6 +29,7 @@
  *   #8 MILO confirmation mismatch       → covered by post-submit delta-check
  */
 import type { CartItem } from "../types";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 type Props = {
   /** Cart lines the user is about to submit. */
@@ -71,6 +72,7 @@ export function SubmitConfirmationModal({
   onConfirm,
   onCancel,
 }: Props) {
+  useLockBodyScroll();
   const totalQty = items.reduce((s, i) => s + i.quantity, 0);
   // Prefer MLCC's authoritative totals when we have them — those are
   // what MILO will charge. Fall back to our local subtotal only.
