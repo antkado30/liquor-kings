@@ -6,6 +6,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getOrder, type MiloOrderDetail } from "../api/orders";
+import { getProductFamily } from "../api/catalog";
+import { useCart } from "../hooks/useCart";
 
 function money(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(Number(n))) return "—";
@@ -29,9 +31,45 @@ function shortDate(iso: string | null | undefined): string {
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const cart = useCart();
   const [order, setOrder] = useState<MiloOrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reordering, setReordering] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Rebuild this whole order into the cart — resolve each line through the
+  // catalog (for ADA + price), add it at the same quantity, then open the cart.
+  async function reorderAll(items: MiloOrderDetail["line_items"]) {
+    const lines = (Array.isArray(items) ? items : []).filter(
+      (li) => li.liquorCode && Number(li.quantity) > 0,
+    );
+    setReordering(true);
+    let added = 0;
+    let skipped = (Array.isArray(items) ? items.length : 0) - lines.length;
+    const resolved = await Promise.all(
+      lines.map(async (li) => {
+        const code = String(li.liquorCode);
+        const fam = await getProductFamily(code);
+        const product = fam?.sizes.find((s) => s.code === code) ?? null;
+        return { product, qty: Number(li.quantity) };
+      }),
+    );
+    for (const r of resolved) {
+      if (r.product) {
+        cart.addItem(r.product, r.qty);
+        added += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+    setReordering(false);
+    setToast(
+      `Added ${added} item${added === 1 ? "" : "s"} to your order` +
+        (skipped > 0 ? ` · ${skipped} no longer in catalog` : ""),
+    );
+    setTimeout(() => navigate("/?view=cart"), 900);
+  }
 
   useEffect(() => {
     if (!id) return;
@@ -174,6 +212,41 @@ export function OrderDetailPage() {
           </li>
         ))}
       </ul>
+
+      {lineItems.length > 0 ? (
+        <button
+          type="button"
+          className="btn primary btn-block"
+          style={{ marginTop: 16 }}
+          disabled={reordering}
+          onClick={() => void reorderAll(order.line_items)}
+        >
+          {reordering ? "Adding to order…" : "Reorder into cart"}
+        </button>
+      ) : null}
+
+      {toast ? (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 100,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(11, 13, 18, 0.96)",
+            color: "#fff",
+            padding: "12px 18px",
+            borderRadius: 999,
+            fontSize: 13,
+            fontWeight: 600,
+            border: "1px solid rgba(255,255,255,0.12)",
+            zIndex: 95,
+            maxWidth: "90%",
+            textAlign: "center",
+          }}
+        >
+          {toast}
+        </div>
+      ) : null}
     </div>
   );
 }
