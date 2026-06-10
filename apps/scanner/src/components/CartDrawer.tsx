@@ -46,6 +46,16 @@ import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
 import { useHideTabBar } from "../hooks/useHideTabBar";
 import { SubmitConfirmationModal } from "./SubmitConfirmationModal";
 import {
+  IconAlert,
+  IconCalendar,
+  IconCheck,
+  IconClipboardList,
+  IconFileText,
+  IconLoader,
+  IconTrash,
+  IconX,
+} from "./Icons";
+import {
   generateValidQuantities,
   getOrderingRuleDisplay,
 } from "../lib/mlcc-ordering-rules";
@@ -652,11 +662,20 @@ export function CartDrawer({
 
   return (
     <div className="drawer-backdrop" onClick={handleClose} role="presentation">
-      <div className="drawer" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Cart">
-        <div className="drawer-header">
-          <h2>Cart</h2>
+      <div className="drawer drawer--cart" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Cart">
+        <div className="drawer-grab" aria-hidden="true" />
+        <div className="drawer-header drawer-header--cart">
+          <div className="drawer-header__titles">
+            <h2>Cart</h2>
+            {items.length > 0 && state.kind !== "submitDone" ? (
+              <span className="drawer-header__meta">
+                {items.length} product{items.length === 1 ? "" : "s"} ·{" "}
+                {money(totalCost)}
+              </span>
+            ) : null}
+          </div>
           <button type="button" className="drawer-close" onClick={handleClose} aria-label="Close cart" disabled={isBusy}>
-            ×
+            <IconX size={20} />
           </button>
         </div>
 
@@ -818,7 +837,7 @@ export function CartDrawer({
                                     aria-label={`Remove ${line.product.name} from cart`}
                                     title="Remove from cart"
                                   >
-                                    <span aria-hidden>🗑️</span>
+                                    <IconTrash size={16} />
                                   </button>
                                 </div>
                                 {lineError ? (
@@ -875,10 +894,6 @@ export function CartDrawer({
                 ))}
               </ul>
             ) : null}
-            <div className="drawer-total">
-              <span>Total</span>
-              <strong>{money(totalCost)}</strong>
-            </div>
           </>
         ) : null}
 
@@ -896,9 +911,12 @@ export function CartDrawer({
           state.kind === "validatePolling") &&
         validationResult?.ok &&
         validationResult.valid ? (
-          <div className="banner banner-ok" style={{ marginBottom: 8 }}>
-            ✓ Your cart passes MLCC rules — now confirming live availability
-            with MLCC.
+          <div className="banner banner-ok banner--flex" style={{ marginBottom: 8 }}>
+            <IconCheck size={15} strokeWidth={2.25} className="banner__icon" />
+            <span>
+              Your cart passes MLCC rules — now confirming live availability
+              with MLCC.
+            </span>
           </div>
         ) : null}
 
@@ -965,65 +983,57 @@ export function CartDrawer({
               prompt sits next to the cart contents, not buried with
               destructive actions.
             */}
-            {items.length > 0 ? (
-              <button
-                type="button"
-                className="btn secondary btn-block"
-                disabled={isBusy}
-                onClick={() => {
-                  // Pre-fill name with day-of-week (e.g. "Thursday order")
-                  // — matches dad's actual weekly pattern.
-                  const day = new Date().toLocaleDateString("en-US", {
-                    weekday: "long",
-                  });
-                  setSaveTemplateName(`${day} order`);
-                  setShowSaveTemplate(true);
-                }}
-                style={{ marginBottom: 6 }}
-              >
-                Save as template
-              </button>
-            ) : null}
-            {templates.length > 0 ? (
-              <button
-                type="button"
-                className="btn secondary btn-block"
-                disabled={isBusy || templateLoading !== null}
-                onClick={() => setShowTemplatePicker(true)}
-                style={{ marginBottom: 8 }}
-              >
-                Load saved template
-                {templates.length > 1 ? ` (${templates.length})` : ""}
-              </button>
-            ) : null}
+            <div className="drawer-tools">
+              {items.length > 0 ? (
+                <button
+                  type="button"
+                  className="drawer-tool"
+                  disabled={isBusy}
+                  onClick={() => {
+                    // Pre-fill name with day-of-week (e.g. "Thursday order")
+                    // — matches dad's actual weekly pattern.
+                    const day = new Date().toLocaleDateString("en-US", {
+                      weekday: "long",
+                    });
+                    setSaveTemplateName(`${day} order`);
+                    setShowSaveTemplate(true);
+                  }}
+                >
+                  <IconFileText size={15} />
+                  <span>Save template</span>
+                </button>
+              ) : null}
+              {templates.length > 0 ? (
+                <button
+                  type="button"
+                  className="drawer-tool"
+                  disabled={isBusy || templateLoading !== null}
+                  onClick={() => setShowTemplatePicker(true)}
+                >
+                  <IconClipboardList size={15} />
+                  <span>
+                    Load template
+                    {templates.length > 1 ? ` (${templates.length})` : ""}
+                  </span>
+                </button>
+              ) : null}
+            </div>
             {templateLoadResult ? (
-              <p
-                className="muted small"
-                style={{
-                  marginTop: 0,
-                  marginBottom: 8,
-                  textAlign: "center",
-                  color: "#bbf7d0",
-                }}
-              >
-                ✓ Loaded &quot;{templateLoadResult.name}&quot; — added{" "}
-                {templateLoadResult.addedCount} items
-                {templateLoadResult.missingCount > 0
-                  ? `, skipped ${templateLoadResult.missingCount} no longer in MLCC catalog`
-                  : ""}
+              <p className="drawer-note drawer-note--ok">
+                <IconCheck size={14} strokeWidth={2.25} />
+                <span>
+                  Loaded &quot;{templateLoadResult.name}&quot; — added{" "}
+                  {templateLoadResult.addedCount} items
+                  {templateLoadResult.missingCount > 0
+                    ? `, skipped ${templateLoadResult.missingCount} no longer in MLCC catalog`
+                    : ""}
+                </span>
               </p>
             ) : null}
             {templateError ? (
-              <p
-                className="muted small"
-                style={{
-                  marginTop: 0,
-                  marginBottom: 8,
-                  textAlign: "center",
-                  color: "#fca5a5",
-                }}
-              >
-                Template error: {templateError}
+              <p className="drawer-note drawer-note--err">
+                <IconAlert size={14} />
+                <span>Template error: {templateError}</span>
               </p>
             ) : null}
             {/*
@@ -1037,64 +1047,95 @@ export function CartDrawer({
             */}
             <button
               type="button"
-              className="btn secondary btn-block"
+              className="drawer-clear-btn"
               disabled={mlccResetState.kind === "running"}
               onClick={() => void handleMlccReset()}
-              style={{ marginBottom: 8 }}
             >
-              {mlccResetState.kind === "running"
-                ? "Clearing cart…"
-                : "Clear cart"}
+              <IconTrash size={14} />
+              <span>
+                {mlccResetState.kind === "running"
+                  ? "Clearing cart…"
+                  : "Clear cart"}
+              </span>
             </button>
             {mlccResetState.kind === "running" ? (
-              <p className="muted small" style={{ marginTop: 0, marginBottom: 8, textAlign: "center" }}>
+              <p className="drawer-note">
                 Your cart is already empty. We&apos;re finishing up on MILO&apos;s
                 side — keep working, this will finish on its own.
               </p>
             ) : null}
             {mlccResetState.kind === "done" ? (
-              <p className="muted small" style={{ marginTop: 0, marginBottom: 8, textAlign: "center", color: "#bbf7d0" }}>
-                ✓ MLCC cart {mlccResetState.cleared ? `emptied (${mlccResetState.itemCount} item${mlccResetState.itemCount === 1 ? "" : "s"})` : "was already empty"}
+              <p className="drawer-note drawer-note--ok">
+                <IconCheck size={14} strokeWidth={2.25} />
+                <span>
+                  MLCC cart {mlccResetState.cleared ? `emptied (${mlccResetState.itemCount} item${mlccResetState.itemCount === 1 ? "" : "s"})` : "was already empty"}
+                </span>
               </p>
             ) : null}
             {mlccResetState.kind === "error" ? (
-              <div style={{ marginTop: 0, marginBottom: 8, padding: "8px 12px", borderRadius: 6, background: "rgba(239,68,68,0.12)", color: "#fca5a5", fontSize: 13 }}>
-                {mlccResetState.message}
-                <button
-                  type="button"
-                  onClick={() => setMlccResetState({ kind: "idle" })}
-                  style={{ marginLeft: 8, background: "none", border: "none", color: "inherit", textDecoration: "underline", cursor: "pointer" }}
-                >
-                  Dismiss
-                </button>
+              <div className="drawer-note drawer-note--err">
+                <IconAlert size={14} />
+                <span>
+                  {mlccResetState.message}
+                  <button
+                    type="button"
+                    className="drawer-note__dismiss"
+                    onClick={() => setMlccResetState({ kind: "idle" })}
+                  >
+                    Dismiss
+                  </button>
+                </span>
               </div>
             ) : null}
-            <button
-              type="button"
-              className="btn secondary btn-block"
-              disabled={validateDisabled}
-              onClick={() => void startValidate(items)}
-            >
-              {isCheckingValidation
-                ? "Checking…"
-                : state.kind === "validateDone"
-                ? "Re-validate against MLCC"
-                : "Validate against MLCC"}
-            </button>
-            <button
-              type="button"
-              className="btn primary btn-block"
-              disabled={submitDisabled}
-              onClick={() => setConfirmSubmit(true)}
-              title={
-                !mlccValidatePassed
-                  ? "Validate against MLCC first"
-                  : undefined
-              }
-            >
-              {mlccValidatePassed ? "Submit Order" : "Submit Order (validate first)"}
-            </button>
           </>
+        ) : null}
+
+        {/* ─── Sticky checkout footer: total + Validate / Submit ─────────────
+          *
+          * Premium overhaul 2026-06-10. The total + the two CTAs live in a
+          * sticky footer pinned to the bottom of the sheet, checkout-style.
+          * Render conditions preserve the prior behavior exactly:
+          *   - footer (total) shows whenever the cart has items and we're
+          *     not in the submit-done terminal state
+          *   - the Validate / Submit buttons render ONLY in idle /
+          *     validateDone — same as the old stacked-button block
+          */}
+        {items.length > 0 && state.kind !== "submitDone" ? (
+          <div className="drawer-footer">
+            <div className="drawer-footer__total">
+              <span className="drawer-footer__total-label">Total</span>
+              <strong className="drawer-footer__total-value">{money(totalCost)}</strong>
+            </div>
+            {state.kind === "idle" || state.kind === "validateDone" ? (
+              <>
+                <button
+                  type="button"
+                  className="btn secondary btn-block"
+                  disabled={validateDisabled}
+                  onClick={() => void startValidate(items)}
+                >
+                  {isCheckingValidation
+                    ? "Checking…"
+                    : state.kind === "validateDone"
+                    ? "Re-validate against MLCC"
+                    : "Validate against MLCC"}
+                </button>
+                <button
+                  type="button"
+                  className="btn primary btn-block"
+                  disabled={submitDisabled}
+                  onClick={() => setConfirmSubmit(true)}
+                  title={
+                    !mlccValidatePassed
+                      ? "Validate against MLCC first"
+                      : undefined
+                  }
+                >
+                  {mlccValidatePassed ? "Submit Order" : "Submit Order (validate first)"}
+                </button>
+              </>
+            ) : null}
+          </div>
         ) : null}
 
         {/* ─── Submit terminal states ─────────────────────────────────────── */}
@@ -1177,11 +1218,11 @@ export function CartDrawer({
               "ready to review" every matching day, and a banner shows
               up on the scanner home.
             */}
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 13, marginBottom: 6, opacity: 0.8 }}>
+            <div className="tpl-schedule">
+              <div className="tpl-schedule__label">
                 Auto-prepare this template every:
               </div>
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              <div className="tpl-schedule__chips">
                 <button
                   type="button"
                   className={`browse-chip${saveTemplateDow === null ? " browse-chip--active" : ""}`}
@@ -1268,30 +1309,23 @@ export function CartDrawer({
                 ? " Existing cart items stay; quantities of overlapping codes add together."
                 : ""}
             </p>
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+            <ul className="tpl-list">
               {templates.map((tpl) => (
-                <li
-                  key={tpl.id}
-                  style={{
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    borderRadius: 8,
-                    padding: 12,
-                    background: "rgba(255,255,255,0.02)",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-                    <strong style={{ fontSize: 15 }}>{tpl.name}</strong>
+                <li key={tpl.id} className="tpl-item">
+                  <div className="tpl-item__head">
+                    <strong>{tpl.name}</strong>
                     <span className="muted small">
                       {tpl.items.length} item{tpl.items.length === 1 ? "" : "s"}
                     </span>
                   </div>
-                  <div className="muted small" style={{ marginBottom: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <div className="tpl-item__meta muted small">
                     {tpl.last_loaded_at ? (
                       <span>Last used {new Date(tpl.last_loaded_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
                     ) : null}
                     {tpl.schedule_dow !== null ? (
-                      <span style={{ color: "#c4b5fd" }}>
-                        📅 Auto every{" "}
+                      <span className="tpl-badge tpl-badge--auto">
+                        <IconCalendar size={12} />
+                        Auto every{" "}
                         {[
                           "Sun",
                           "Mon",
@@ -1304,15 +1338,17 @@ export function CartDrawer({
                       </span>
                     ) : null}
                     {tpl.needs_review ? (
-                      <span style={{ color: "#bbf7d0" }}>● Ready to review</span>
+                      <span className="tpl-badge tpl-badge--ready">
+                        <span className="tpl-dot" aria-hidden="true" />
+                        Ready to review
+                      </span>
                     ) : null}
                   </div>
                   <button
                     type="button"
-                    className="btn primary"
+                    className="btn primary btn-block"
                     onClick={() => void handleLoadTemplate(tpl.id)}
                     disabled={templateLoading !== null}
-                    style={{ width: "100%" }}
                   >
                     {templateLoading === tpl.id ? "Loading…" : "Load into cart"}
                   </button>
@@ -1505,11 +1541,18 @@ function ValidateResultPanel({
 
   return (
     <div className={`banner ${canCheckout ? "banner-ok" : "banner-warn"}`}>
-      <strong>
-        {canCheckout
-          ? "MLCC says: cart is ready for checkout."
-          : "MLCC validate completed — review issues below before submitting."}
-      </strong>
+      <div className="vr-headline">
+        {canCheckout ? (
+          <IconCheck size={16} strokeWidth={2.25} className="vr-headline__icon" />
+        ) : (
+          <IconAlert size={16} className="vr-headline__icon" />
+        )}
+        <strong>
+          {canCheckout
+            ? "MLCC says: cart is ready for checkout."
+            : "MLCC validate completed — review issues below before submitting."}
+        </strong>
+      </div>
       {/*
         Note: do NOT use .drawer-validation-errors here. That class is
         hard-styled with color: #fecaca (light red) because it was built
@@ -1535,7 +1578,7 @@ function ValidateResultPanel({
       ) : null}
       {oos.length > 0 ? (
         <>
-          <div style={{ marginTop: 12, fontWeight: 600 }}>
+          <div className="vr-heading">
             Out of stock at MLCC ({oos.length} item{oos.length === 1 ? "" : "s"}):
           </div>
           {/* OOS items DO use the red error class — they're real problems */}
@@ -1607,7 +1650,7 @@ function ValidateResultPanel({
               <>
                 {timedOut.length > 0 ? (
                   <>
-                    <div style={{ marginTop: 12, fontWeight: 600 }}>
+                    <div className="vr-heading">
                       MLCC didn&apos;t finish adding ({timedOut.length} item
                       {timedOut.length === 1 ? "" : "s"}):
                     </div>
@@ -1628,7 +1671,7 @@ function ValidateResultPanel({
                 ) : null}
                 {hard.length > 0 ? (
                   <>
-                    <div style={{ marginTop: 12, fontWeight: 600 }}>
+                    <div className="vr-heading">
                       Rejected by MLCC ({hard.length} item
                       {hard.length === 1 ? "" : "s"}):
                     </div>
@@ -1659,7 +1702,7 @@ function ValidateResultPanel({
       */}
       {inferredOos.length > 0 ? (
         <>
-          <div style={{ marginTop: 12, fontWeight: 600 }}>
+          <div className="vr-heading">
             Likely out of stock at MLCC ({inferredOos.length} item{inferredOos.length === 1 ? "" : "s"}):
           </div>
           <ul className="drawer-validation-errors">
@@ -1688,7 +1731,7 @@ function ValidateResultPanel({
       */}
       {adaProgress.length > 0 ? (
         <>
-          <div style={{ marginTop: 12, fontWeight: 600 }}>
+          <div className="vr-heading">
             Distributors below 9 L minimum:
           </div>
           <ul className="banner-content-list">
@@ -1710,7 +1753,7 @@ function ValidateResultPanel({
       */}
       {milccErrorList.length > 0 && adaProgress.length === 0 ? (
         <>
-          <div style={{ marginTop: 12, fontWeight: 600 }}>
+          <div className="vr-heading">
             MLCC reported:
           </div>
           <ul className="banner-content-list">
@@ -1721,13 +1764,13 @@ function ValidateResultPanel({
         </>
       ) : null}
       {summary ? (
-        <div style={{ marginTop: 12 }}>
-          <div>
-            <span className="muted">MLCC subtotal: </span>
+        <div className="vr-summary">
+          <div className="vr-summary__row">
+            <span className="muted">MLCC subtotal</span>
             <strong>{money(Number(summary.grossTotal ?? 0))}</strong>
           </div>
-          <div>
-            <span className="muted">Net total: </span>
+          <div className="vr-summary__row">
+            <span className="muted">Net total</span>
             <strong>{money(Number(summary.netTotal ?? 0))}</strong>
           </div>
         </div>
@@ -1743,7 +1786,7 @@ function ValidateResultPanel({
  * done, and what's coming.
  *
  * Each stage is one row with:
- *   - icon: ✓ (done) / ⏳ (active, pulsing) / ○ (pending)
+ *   - icon: SVG check (done) / SVG spinner (active, pulsing) / empty ring (pending)
  *   - label
  *
  * Headline at top of the panel shows the overall operation + the worker's
@@ -1796,7 +1839,11 @@ function RpaProgressPanel({
               aria-current={status === "active" ? "step" : undefined}
             >
               <span className="rpa-progress__icon" aria-hidden>
-                {status === "done" ? "✓" : status === "active" ? "●" : "○"}
+                {status === "done" ? (
+                  <IconCheck size={12} strokeWidth={2.75} />
+                ) : status === "active" ? (
+                  <IconLoader size={12} strokeWidth={2.75} className="rpa-progress__spin" />
+                ) : null}
               </span>
               <span className="rpa-progress__label">{stage.label}</span>
             </li>

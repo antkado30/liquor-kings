@@ -116,6 +116,24 @@ export const lookupInventoryForStore = async (
 ) => {
   const capped = clampLookupLimit(limit, 25);
   const like = `%${query}%`;
+  /*
+    Punctuation/spacing-proof name match (Tito's class, swept 2026-06-10):
+    raw name ilike OR the generated bottles.name_searchable column
+    (migration 20260610230000) against a fully-stripped term — "Titos",
+    "Tito's", and iOS curly-apostrophe input all hit. Commas/parens are
+    stripped from the raw side so PostgREST .or() syntax stays intact.
+    When the stripped term is too short (pure-punctuation query), fall
+    back to the plain name ilike.
+  */
+  const safeRawLike = `%${String(query).replace(/[,()]/g, " ").replace(/\s+/g, " ").trim()}%`;
+  const strippedQuery = String(query).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const nameQuery =
+    strippedQuery.length >= 2
+      ? supabase
+          .from("bottles")
+          .select("id")
+          .or(`name.ilike.${safeRawLike},name_searchable.ilike.%${strippedQuery}%`)
+      : supabase.from("bottles").select("id").ilike("name", like);
 
   const [locationRes, locationNoteRes, nameRes, mlccRes, upcRes] = await Promise.all(
     [
@@ -129,10 +147,7 @@ export const lookupInventoryForStore = async (
         .select(INVENTORY_SELECT)
         .eq("store_id", storeId)
         .ilike("location_note", like),
-      supabase
-        .from("bottles")
-        .select("id")
-        .ilike("name", like),
+      nameQuery,
       supabase
         .from("bottles")
         .select("id")

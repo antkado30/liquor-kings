@@ -20,6 +20,7 @@ import nrsImportRouter from "./routes/nrs-import.routes.js";
 import nrsReviewRouter from "./routes/nrs-review.routes.js";
 import assistantRouter from "./routes/assistant.routes.js";
 import catalogVisionRouter from "./routes/catalog-vision.routes.js";
+import catalogPhotoRouter from "./routes/catalog-photo.routes.js";
 import ordersRouter from "./routes/orders.routes.js";
 import tagsRouter from "./routes/tags.routes.js";
 import homeRouter from "./routes/home.routes.js";
@@ -95,6 +96,12 @@ app.use("/assistant", assistantRouter);
  * money via the Anthropic API.
  */
 app.use("/catalog", resolveAuthenticatedStore, catalogVisionRouter);
+/**
+ * Catalog photo truth layer: POST /catalog/items/:code/photo (in-store
+ * capture = highest-precedence image) + /photo-report ("wrong photo?" —
+ * clears a lying image immediately). 2026-06-10.
+ */
+app.use("/catalog", resolveAuthenticatedStore, catalogPhotoRouter);
 /**
  * Orders: GET /orders, GET /orders/:id, GET /orders/summary/recent
  * MILO order confirmations persisted by the Stage 5 worker.

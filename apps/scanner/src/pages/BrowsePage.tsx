@@ -14,7 +14,7 @@
  *   - Product grid below — name, size, price, ADA. Tap → ProductCard.
  *   - "Load more" button at the bottom paginates via cursor.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   browseProducts,
@@ -26,7 +26,9 @@ import {
 import { getProductFamily } from "../api/catalog";
 import { ProductCard } from "../components/ProductCard";
 import { PlaceholderBottle, tintForCategory } from "../components/BottleArt";
+import { IconCheck, IconChevronRight } from "../components/Icons";
 import { useCart } from "../hooks/useCart";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import { useCachedResource } from "../lib/swr";
 import { getCurrentStoreId } from "../lib/currentStore";
 import type { MlccProduct, ProductFamily } from "../types";
@@ -39,13 +41,13 @@ function money(n: number | null | undefined): string {
   }).format(Number(n));
 }
 
-const SORT_OPTIONS: Array<{ value: BrowseSort; label: string }> = [
-  { value: "name", label: "Name A→Z" },
-  { value: "price_asc", label: "Price low→high" },
-  { value: "price_desc", label: "Price high→low" },
-  { value: "newest", label: "Newest" },
-  { value: "proof_asc", label: "Proof low→high" },
-  { value: "proof_desc", label: "Proof high→low" },
+const SORT_OPTIONS: Array<{ value: BrowseSort; sheet: string; chip: string }> = [
+  { value: "name", sheet: "Featured", chip: "Sort" },
+  { value: "price_asc", sheet: "Price: Low to High", chip: "Price ↑" },
+  { value: "price_desc", sheet: "Price: High to Low", chip: "Price ↓" },
+  { value: "proof_desc", sheet: "Proof: High to Low", chip: "Proof ↓" },
+  { value: "proof_asc", sheet: "Proof: Low to High", chip: "Proof ↑" },
+  { value: "newest", sheet: "Newest", chip: "Newest" },
 ];
 
 export function BrowsePage() {
@@ -60,6 +62,8 @@ export function BrowsePage() {
   const [openPicker, setOpenPicker] = useState<
     null | "category" | "ada" | "size" | "sort" | "price" | "proof"
   >(null);
+  const listEndRef = useRef<HTMLDivElement>(null);
+  const [scrollFab, setScrollFab] = useState<"up" | "down" | null>(null);
 
   // Facets rarely change — cache them so reopening Browse is instant.
   const facetsRes = useCachedResource<BrowseFacets>(
@@ -162,7 +166,7 @@ export function BrowsePage() {
   const sizeChipLabel =
     facets?.sizes.find((s) => s.ml === filters.bottle_size_ml)?.label ?? "Size";
   const sortChipLabel =
-    SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "Sort";
+    SORT_OPTIONS.find((o) => o.value === sort)?.chip ?? "Sort";
 
   // Range chip labels — show "Price" when unset, "$20-$50" etc. when bounded.
   const priceChipLabel =
@@ -183,6 +187,7 @@ export function BrowsePage() {
           ? `≤ ${filters.max_proof} proof`
           : "Proof";
 
+  const hasActiveSort = sort !== "name";
   const hasAnyFilter =
     !!filters.category ||
     !!filters.ada_number ||
@@ -191,10 +196,12 @@ export function BrowsePage() {
     filters.max_price != null ||
     filters.min_proof != null ||
     filters.max_proof != null ||
-    !!query.trim();
+    !!query.trim() ||
+    hasActiveSort;
 
   const clearAll = () => {
     setFilters({});
+    setSort("name");
     setQuery("");
     setPriceMinInput("");
     setPriceMaxInput("");
@@ -224,6 +231,33 @@ export function BrowsePage() {
     setOpenPicker(null);
   };
 
+  const scrollToTop = useCallback(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    listEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, []);
+
+  useEffect(() => {
+    const manyItemsMin = 12;
+    const onScroll = () => {
+      const y = window.scrollY;
+      const vh = window.innerHeight;
+      const many = products.length >= manyItemsMin;
+      if (y > vh * 2) {
+        setScrollFab("up");
+      } else if (many && y < vh * 0.5) {
+        setScrollFab("down");
+      } else {
+        setScrollFab(null);
+      }
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [products.length]);
+
   return (
     <div className="page-shell browse-shell">
       <header className="page-header">
@@ -243,64 +277,52 @@ export function BrowsePage() {
         autoComplete="off"
       />
 
-      <div className="browse-chips" role="group" aria-label="Filters">
-        <button
-          type="button"
-          className={`browse-chip${filters.category ? " browse-chip--active" : ""}`}
+      <div className="browse-chips browse-chips-v2" role="group" aria-label="Filters">
+        <BrowseFilterChip
+          label={sortChipLabel}
+          active={hasActiveSort}
+          onClick={() => setOpenPicker("sort")}
+        />
+        <BrowseFilterChip
+          label={categoryChipLabel}
+          active={!!filters.category}
           onClick={() => setOpenPicker("category")}
-        >
-          {categoryChipLabel} ▾
-        </button>
-        <button
-          type="button"
-          className={`browse-chip${filters.ada_number ? " browse-chip--active" : ""}`}
+        />
+        <BrowseFilterChip
+          label={adaChipLabel}
+          active={!!filters.ada_number}
           onClick={() => setOpenPicker("ada")}
-        >
-          {adaChipLabel} ▾
-        </button>
-        <button
-          type="button"
-          className={`browse-chip${filters.bottle_size_ml != null ? " browse-chip--active" : ""}`}
+        />
+        <BrowseFilterChip
+          label={sizeChipLabel}
+          active={filters.bottle_size_ml != null}
           onClick={() => setOpenPicker("size")}
-        >
-          {sizeChipLabel} ▾
-        </button>
-        <button
-          type="button"
-          className={`browse-chip${filters.min_price != null || filters.max_price != null ? " browse-chip--active" : ""}`}
+        />
+        <BrowseFilterChip
+          label={priceChipLabel}
+          active={filters.min_price != null || filters.max_price != null}
           onClick={() => {
             setPriceMinInput(filters.min_price?.toString() ?? "");
             setPriceMaxInput(filters.max_price?.toString() ?? "");
             setOpenPicker("price");
           }}
-        >
-          {priceChipLabel} ▾
-        </button>
-        <button
-          type="button"
-          className={`browse-chip${filters.min_proof != null || filters.max_proof != null ? " browse-chip--active" : ""}`}
+        />
+        <BrowseFilterChip
+          label={proofChipLabel}
+          active={filters.min_proof != null || filters.max_proof != null}
           onClick={() => {
             setProofMinInput(filters.min_proof?.toString() ?? "");
             setProofMaxInput(filters.max_proof?.toString() ?? "");
             setOpenPicker("proof");
           }}
-        >
-          {proofChipLabel} ▾
-        </button>
-        <button
-          type="button"
-          className="browse-chip browse-chip--sort"
-          onClick={() => setOpenPicker("sort")}
-        >
-          {sortChipLabel} ▾
-        </button>
+        />
         {hasAnyFilter ? (
           <button
             type="button"
-            className="browse-chip browse-chip--clear"
+            className="browse-chip browse-chip-v2 browse-chip-v2--clear"
             onClick={clearAll}
           >
-            Clear ×
+            Clear all
           </button>
         ) : null}
       </div>
@@ -358,154 +380,166 @@ export function BrowsePage() {
         </button>
       ) : null}
 
-      {/* Picker drawer — bottom sheet style */}
+      <div ref={listEndRef} className="browse-list-end" aria-hidden />
+
+      <button
+        type="button"
+        className={`browse-fab${scrollFab ? ` browse-fab--visible browse-fab--${scrollFab}` : ""}`}
+        onClick={() => {
+          if (scrollFab === "up") scrollToTop();
+          else if (scrollFab === "down") scrollToBottom();
+        }}
+        aria-label={scrollFab === "up" ? "Scroll to top" : "Scroll to bottom"}
+        tabIndex={scrollFab ? 0 : -1}
+        aria-hidden={!scrollFab}
+      >
+        <IconChevronRight size={20} strokeWidth={2} className="browse-fab__chevron" />
+      </button>
+
+      {/* Picker drawer — premium dark bottom sheet */}
       {openPicker ? (
-        <div
-          className="browse-picker-backdrop"
-          onClick={() => setOpenPicker(null)}
-          role="presentation"
-        >
+        <>
+          <PickerScrollLock />
           <div
-            className="browse-picker"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Pick ${openPicker}`}
+            className="browse-sheet-backdrop"
+            onClick={() => setOpenPicker(null)}
+            role="presentation"
           >
-            <div className="browse-picker__header">
-              <h2>
-                {openPicker === "category"
-                  ? "Category"
-                  : openPicker === "ada"
-                    ? "Distributor"
-                    : openPicker === "size"
-                      ? "Bottle size"
-                      : openPicker === "price"
-                        ? "Price range"
-                        : openPicker === "proof"
-                          ? "Proof range"
-                          : "Sort"}
-              </h2>
-              <button
-                type="button"
-                className="product-card-close product-card-close--labeled"
-                onClick={() => setOpenPicker(null)}
-              >
-                Done
-              </button>
-            </div>
-            <ul className="browse-picker__list">
-              {openPicker === "category" ? (
-                <>
-                  <li>
-                    <button
-                      type="button"
-                      className={`browse-picker__row${!filters.category ? " browse-picker__row--active" : ""}`}
-                      onClick={() => {
-                        setFilters((f) => ({ ...f, category: null }));
-                        setOpenPicker(null);
-                      }}
-                    >
-                      All categories
-                    </button>
-                  </li>
-                  {facets?.categories.map((c) => (
-                    <li key={c.name}>
-                      <button
-                        type="button"
-                        className={`browse-picker__row${filters.category === c.name ? " browse-picker__row--active" : ""}`}
+            <div
+              className="browse-sheet"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Pick ${openPicker}`}
+            >
+              <div className="browse-sheet__grab" aria-hidden="true" />
+              <div className="browse-sheet__header">
+                <h2>
+                  {openPicker === "category"
+                    ? "Category"
+                    : openPicker === "ada"
+                      ? "Distributor"
+                      : openPicker === "size"
+                        ? "Bottle size"
+                        : openPicker === "price"
+                          ? "Price range"
+                          : openPicker === "proof"
+                            ? "Proof range"
+                            : "Sort"}
+                </h2>
+                <button
+                  type="button"
+                  className="product-card-close product-card-close--labeled"
+                  onClick={() => setOpenPicker(null)}
+                >
+                  Done
+                </button>
+              </div>
+              <ul className="browse-sheet__list">
+                {openPicker === "category" ? (
+                  <>
+                    <li>
+                      <BrowseSheetRow
+                        selected={!filters.category}
                         onClick={() => {
-                          setFilters((f) => ({ ...f, category: c.name }));
+                          setFilters((f) => ({ ...f, category: null }));
                           setOpenPicker(null);
                         }}
                       >
-                        <span>{c.name}</span>
-                        <span className="muted small">{c.count}</span>
-                      </button>
+                        All categories
+                      </BrowseSheetRow>
                     </li>
-                  ))}
-                </>
-              ) : null}
-              {openPicker === "ada" ? (
-                <>
-                  <li>
-                    <button
-                      type="button"
-                      className={`browse-picker__row${!filters.ada_number ? " browse-picker__row--active" : ""}`}
-                      onClick={() => {
-                        setFilters((f) => ({ ...f, ada_number: null }));
-                        setOpenPicker(null);
-                      }}
-                    >
-                      All distributors
-                    </button>
-                  </li>
-                  {facets?.adas.map((a) => (
-                    <li key={a.number}>
-                      <button
-                        type="button"
-                        className={`browse-picker__row${filters.ada_number === a.number ? " browse-picker__row--active" : ""}`}
+                    {facets?.categories.map((c) => (
+                      <li key={c.name}>
+                        <BrowseSheetRow
+                          selected={filters.category === c.name}
+                          onClick={() => {
+                            setFilters((f) => ({ ...f, category: c.name }));
+                            setOpenPicker(null);
+                          }}
+                        >
+                          <span>{c.name}</span>
+                          <span className="muted small">{c.count}</span>
+                        </BrowseSheetRow>
+                      </li>
+                    ))}
+                  </>
+                ) : null}
+                {openPicker === "ada" ? (
+                  <>
+                    <li>
+                      <BrowseSheetRow
+                        selected={!filters.ada_number}
                         onClick={() => {
-                          setFilters((f) => ({ ...f, ada_number: a.number }));
+                          setFilters((f) => ({ ...f, ada_number: null }));
                           setOpenPicker(null);
                         }}
                       >
-                        <span>{a.name}</span>
-                        <span className="muted small">{a.count}</span>
-                      </button>
+                        All distributors
+                      </BrowseSheetRow>
                     </li>
-                  ))}
-                </>
-              ) : null}
-              {openPicker === "size" ? (
-                <>
-                  <li>
-                    <button
-                      type="button"
-                      className={`browse-picker__row${filters.bottle_size_ml == null ? " browse-picker__row--active" : ""}`}
-                      onClick={() => {
-                        setFilters((f) => ({ ...f, bottle_size_ml: null }));
-                        setOpenPicker(null);
-                      }}
-                    >
-                      All sizes
-                    </button>
-                  </li>
-                  {facets?.sizes.map((s) => (
-                    <li key={s.ml}>
-                      <button
-                        type="button"
-                        className={`browse-picker__row${filters.bottle_size_ml === s.ml ? " browse-picker__row--active" : ""}`}
+                    {facets?.adas.map((a) => (
+                      <li key={a.number}>
+                        <BrowseSheetRow
+                          selected={filters.ada_number === a.number}
+                          onClick={() => {
+                            setFilters((f) => ({ ...f, ada_number: a.number }));
+                            setOpenPicker(null);
+                          }}
+                        >
+                          <span>{a.name}</span>
+                          <span className="muted small">{a.count}</span>
+                        </BrowseSheetRow>
+                      </li>
+                    ))}
+                  </>
+                ) : null}
+                {openPicker === "size" ? (
+                  <>
+                    <li>
+                      <BrowseSheetRow
+                        selected={filters.bottle_size_ml == null}
                         onClick={() => {
-                          setFilters((f) => ({ ...f, bottle_size_ml: s.ml }));
+                          setFilters((f) => ({ ...f, bottle_size_ml: null }));
                           setOpenPicker(null);
                         }}
                       >
-                        <span>{s.label}</span>
-                        <span className="muted small">{s.count}</span>
-                      </button>
+                        All sizes
+                      </BrowseSheetRow>
                     </li>
-                  ))}
-                </>
-              ) : null}
-              {openPicker === "sort" ? (
-                <>
-                  {SORT_OPTIONS.map((o) => (
-                    <li key={o.value}>
-                      <button
-                        type="button"
-                        className={`browse-picker__row${sort === o.value ? " browse-picker__row--active" : ""}`}
-                        onClick={() => {
-                          setSort(o.value);
-                          setOpenPicker(null);
-                        }}
-                      >
-                        {o.label}
-                      </button>
-                    </li>
-                  ))}
-                </>
-              ) : null}
+                    {facets?.sizes.map((s) => (
+                      <li key={s.ml}>
+                        <BrowseSheetRow
+                          selected={filters.bottle_size_ml === s.ml}
+                          onClick={() => {
+                            setFilters((f) => ({ ...f, bottle_size_ml: s.ml }));
+                            setOpenPicker(null);
+                          }}
+                        >
+                          <span>{s.label}</span>
+                          <span className="muted small">{s.count}</span>
+                        </BrowseSheetRow>
+                      </li>
+                    ))}
+                  </>
+                ) : null}
+                {openPicker === "sort" ? (
+                  <>
+                    {SORT_OPTIONS.map((o) => (
+                      <li key={o.value}>
+                        <BrowseSheetRow
+                          selected={sort === o.value}
+                          onClick={() => {
+                            setSort(o.value);
+                            setOpenPicker(null);
+                          }}
+                        >
+                          {o.sheet}
+                        </BrowseSheetRow>
+                      </li>
+                    ))}
+                  </>
+                ) : null}
               {openPicker === "price" ? (
                 <li style={{ padding: 12 }}>
                   <p className="muted small" style={{ margin: "0 0 12px 0" }}>
@@ -644,9 +678,10 @@ export function BrowsePage() {
                   </div>
                 </li>
               ) : null}
-            </ul>
+              </ul>
+            </div>
           </div>
-        </div>
+        </>
       ) : null}
 
       {showProductCard && currentFamily ? (
@@ -689,6 +724,55 @@ export function BrowsePage() {
  * Tiny invisible component that clears a toast string after a delay.
  * Encapsulates the timer so the parent doesn't need to manage refs.
  */
+function BrowseFilterChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`browse-chip browse-chip-v2${active ? " browse-chip-v2--active" : ""}`}
+      onClick={onClick}
+    >
+      <span>{label}</span>
+      <IconChevronRight size={14} className="browse-chip-v2__chevron" aria-hidden />
+    </button>
+  );
+}
+
+function BrowseSheetRow({
+  selected,
+  onClick,
+  children,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={`browse-sheet__row${selected ? " browse-sheet__row--selected" : ""}`}
+      onClick={onClick}
+    >
+      <span className="browse-sheet__row-main">{children}</span>
+      {selected ? (
+        <IconCheck size={18} className="browse-sheet__row-check" aria-hidden />
+      ) : null}
+    </button>
+  );
+}
+
+function PickerScrollLock() {
+  useLockBodyScroll();
+  return null;
+}
+
 function ToastClearer({
   toast,
   onClear,
@@ -728,7 +812,7 @@ function BrowseCardImage({ product }: { product: MlccProduct }) {
   const url = product.imageUrl;
   const showImage = !!url && !errored;
   return (
-    <div className="browse-card__img">
+    <div className="browse-card__img browse-card-img-slot">
       {showImage ? (
         <img
           src={url ?? undefined}

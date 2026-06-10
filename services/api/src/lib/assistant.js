@@ -308,7 +308,24 @@ async function toolQueryCatalog(input, { supabase }) {
     query = query.eq("code", String(input.code).trim());
   } else {
     if (input.search) {
-      query = query.ilike("name", `%${String(input.search).trim()}%`);
+      /*
+        Punctuation/spacing-proof search (Tito's class, swept 2026-06-10).
+        "Titos" / "Tito's" / curly-apostrophe "Tito’s" must all find
+        "TITO'S HANDMADE VODKA". Match raw name AND the generated
+        space/punct-free name_searchable column — same pattern as
+        /catalog/browse. Commas/parens stripped from the raw term to
+        keep PostgREST .or() syntax safe.
+      */
+      const rawTerm = String(input.search).trim();
+      const stripped = rawTerm.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (stripped.length >= 2) {
+        const safeRaw = rawTerm.replace(/[,()]/g, " ").replace(/\s+/g, " ").trim();
+        query = query.or(
+          `name.ilike.%${safeRaw}%,name_searchable.ilike.%${stripped}%`,
+        );
+      } else {
+        query = query.ilike("name", `%${rawTerm}%`);
+      }
     }
     if (input.category) {
       query = query.ilike("category", `%${String(input.category).trim()}%`);
@@ -444,17 +461,35 @@ async function toolQueryInventory(input, { supabase, storeId }) {
     .from("bottles")
     .select("name,mlcc_code,upc,size_ml,category,shelf_price,is_active")
     .eq("store_id", storeId);
-  if (input.search) {
-    query = query.ilike("name", `%${String(input.search).trim()}%`);
-  }
-  query = query.limit(clampLimit(input.limit, 25, 100));
+  /*
+    Punctuation/spacing-proof search (Tito's class, swept 2026-06-10).
+    `bottles` has NO name_searchable generated column (that's on
+    mlcc_items only), so normalize in JS instead: pull the store's
+    inventory (small per store) and filter on a stripped name. Keeps
+    "Titos" matching "Tito's" without a migration.
+  */
+  const searchTermRaw = input.search ? String(input.search).trim() : "";
+  const searchStripped = searchTermRaw.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const wantLimit = clampLimit(input.limit, 25, 100);
+  query = query.limit(searchStripped ? 500 : wantLimit);
   const { data, error } = await query;
   if (error) return { error: `inventory query failed: ${error.message}` };
+  let items = data ?? [];
+  if (searchStripped) {
+    items = items
+      .filter((row) =>
+        String(row.name ?? "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "")
+          .includes(searchStripped),
+      )
+      .slice(0, wantLimit);
+  }
   return {
-    count: data?.length ?? 0,
-    items: data ?? [],
+    count: items.length,
+    items,
     note:
-      (data?.length ?? 0) === 0
+      items.length === 0
         ? "This store has no tracked bottle inventory yet."
         : undefined,
   };

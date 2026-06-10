@@ -19,7 +19,6 @@ import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import {
   IconBarChart,
   IconCalendar,
-  IconLoader,
   IconPackage,
   IconStore,
   IconX,
@@ -47,17 +46,62 @@ function fmtPct(pct: number | null): string {
   return `${sign}${pct.toFixed(0)}%`;
 }
 
-function trendClass(pct: number | null): string {
-  if (pct == null) return "analytics-stat__trend--flat";
-  if (pct > 5) return "analytics-stat__trend--up";
-  if (pct < -5) return "analytics-stat__trend--down";
-  return "analytics-stat__trend--flat";
+function trendTone(pct: number | null): "up" | "down" | "flat" {
+  if (pct == null) return "flat";
+  if (pct > 5) return "up";
+  if (pct < -5) return "down";
+  return "flat";
 }
 
-function moverTrendClass(pct: number): string {
-  if (pct > 5) return "analytics-stat__trend--up";
-  if (pct < -5) return "analytics-stat__trend--down";
-  return "analytics-stat__trend--flat";
+function moverTone(pct: number): "up" | "down" | "flat" {
+  if (pct > 5) return "up";
+  if (pct < -5) return "down";
+  return "flat";
+}
+
+function IconTrendUp({ size = 12 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 12 12"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M6 2.5 2.5 7h7L6 2.5z" />
+    </svg>
+  );
+}
+
+function IconTrendDown({ size = 12 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 12 12"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M6 9.5 9.5 5h-7L6 9.5z" />
+    </svg>
+  );
+}
+
+function TrendBadge({
+  pct,
+  label,
+}: {
+  pct: number | null;
+  label?: string;
+}) {
+  const tone = trendTone(pct);
+  return (
+    <div className={`andash-trend andash-trend--${tone}`}>
+      {tone === "up" ? <IconTrendUp /> : tone === "down" ? <IconTrendDown /> : null}
+      <span>{fmtPct(pct)}</span>
+      {label ? <span className="andash-trend__label">{label}</span> : null}
+    </div>
+  );
 }
 
 function WeeklySpendChart({
@@ -79,9 +123,9 @@ function WeeklySpendChart({
   const baseY = 120;
 
   return (
-    <div className="analytics-chart">
+    <div className="andash-chart">
       <svg
-        className="analytics-chart__svg"
+        className="andash-chart__svg"
         viewBox={`0 0 ${w} 140`}
         role="img"
         aria-label={`Spend comparison: last week ${moneyPrecise(lastWeek)}, this week ${moneyPrecise(thisWeek)}`}
@@ -151,21 +195,44 @@ function WeeklySpendChart({
           This week
         </text>
       </svg>
-      <div className="analytics-chart__legend">
-        <span className="analytics-chart__legend-item">
+      <div className="andash-chart__legend">
+        <span className="andash-chart__legend-item">
           <span
-            className="analytics-chart__swatch"
+            className="andash-chart__swatch"
             style={{ background: "rgba(148, 163, 184, 0.55)" }}
           />
           Last week
         </span>
-        <span className="analytics-chart__legend-item">
+        <span className="andash-chart__legend-item">
           <span
-            className="analytics-chart__swatch"
+            className="andash-chart__swatch"
             style={{ background: "var(--accent)" }}
           />
           This week
         </span>
+      </div>
+    </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="andash-body andash-body--skeleton" aria-hidden>
+      <div className="andash-stats">
+        <div className="andash-stat andash-stat--highlight andash-shimmer" />
+        <div className="andash-stat andash-shimmer" />
+        <div className="andash-stat andash-shimmer" />
+        <div className="andash-stat andash-shimmer" />
+      </div>
+      <div className="andash-section">
+        <div className="andash-shimmer andash-shimmer--line" />
+        <div className="andash-shimmer andash-shimmer--block" />
+      </div>
+      <div className="andash-section">
+        <div className="andash-shimmer andash-shimmer--line" />
+        <div className="andash-shimmer andash-shimmer--row" />
+        <div className="andash-shimmer andash-shimmer--row" />
+        <div className="andash-shimmer andash-shimmer--row" />
       </div>
     </div>
   );
@@ -183,12 +250,12 @@ function DashboardBody({ data }: { data: DashData }) {
 
   if (empty) {
     return (
-      <div className="analytics-empty">
-        <span className="analytics-empty__icon" aria-hidden>
+      <div className="andash-empty">
+        <span className="andash-empty__icon" aria-hidden>
           <IconBarChart size={26} strokeWidth={1.9} />
         </span>
-        <h3 className="analytics-empty__title">No order history yet</h3>
-        <p className="analytics-empty__copy">
+        <h3 className="andash-empty__title">No order history yet</h3>
+        <p className="andash-empty__copy">
           Your data shows up here after your first order through Liquor Kings.
         </p>
       </div>
@@ -196,53 +263,51 @@ function DashboardBody({ data }: { data: DashData }) {
   }
 
   return (
-    <div className="analytics-dashboard">
-      <div className="analytics-stats">
-        <div className="analytics-stat analytics-stat--highlight">
-          <div className="analytics-stat__head">
+    <div className="andash-body">
+      <section className="andash-stats" aria-label="This week summary">
+        <div className="andash-stat andash-stat--highlight">
+          <div className="andash-stat__head">
             <IconBarChart size={14} strokeWidth={2} aria-hidden />
-            This week
+            This week&apos;s spend
           </div>
-          <div className="analytics-stat__value">
+          <div className="andash-stat__value">
             {moneyPrecise(data.this_week.spend)}
           </div>
-          <div className={`analytics-stat__trend ${trendClass(data.wow_change_pct)}`}>
-            {fmtPct(data.wow_change_pct)} vs last week
-          </div>
+          <TrendBadge pct={data.wow_change_pct} label="vs last week" />
         </div>
 
-        <div className="analytics-stat">
-          <div className="analytics-stat__head">
+        <div className="andash-stat">
+          <div className="andash-stat__head">
             <IconCalendar size={14} strokeWidth={2} aria-hidden />
             Orders
           </div>
-          <div className="analytics-stat__value">{data.this_week.order_count}</div>
-          <div className="analytics-stat__meta">Submitted this week</div>
+          <div className="andash-stat__value">{data.this_week.order_count}</div>
+          <div className="andash-stat__meta">Submitted this week</div>
         </div>
 
-        <div className="analytics-stat">
-          <div className="analytics-stat__head">
+        <div className="andash-stat">
+          <div className="andash-stat__head">
             <IconPackage size={14} strokeWidth={2} aria-hidden />
             Bottles
           </div>
-          <div className="analytics-stat__value">{data.this_week.bottle_count}</div>
-          <div className="analytics-stat__meta">Units ordered this week</div>
+          <div className="andash-stat__value">{data.this_week.bottle_count}</div>
+          <div className="andash-stat__meta">Units ordered this week</div>
         </div>
 
-        <div className="analytics-stat">
-          <div className="analytics-stat__head">
+        <div className="andash-stat">
+          <div className="andash-stat__head">
             <IconStore size={14} strokeWidth={2} aria-hidden />
             Distributors
           </div>
-          <div className="analytics-stat__value">{activeDistributors}</div>
-          <div className="analytics-stat__meta">Active ADAs this week</div>
+          <div className="andash-stat__value">{activeDistributors}</div>
+          <div className="andash-stat__meta">Active ADAs this week</div>
         </div>
-      </div>
+      </section>
 
       {hasWeeklySpend ? (
-        <section className="analytics-section" aria-label="Weekly spend trend">
-          <div className="analytics-section__head">
-            <h3 className="analytics-section__title">Weekly spend</h3>
+        <section className="andash-section" aria-label="Weekly spend trend">
+          <div className="andash-section__head">
+            <h3 className="andash-section__title">Weekly spend</h3>
           </div>
           <WeeklySpendChart
             thisWeek={data.this_week.spend}
@@ -251,35 +316,120 @@ function DashboardBody({ data }: { data: DashData }) {
         </section>
       ) : null}
 
-      {data.this_week.ada_breakdown.length > 0 ? (
-        <section className="analytics-section" aria-label="Distributor breakdown">
-          <div className="analytics-section__head">
-            <h3 className="analytics-section__title">By distributor</h3>
-            <span className="analytics-section__subtitle">This week</span>
+      {data.top_by_units.length > 0 ? (
+        <section className="andash-section" aria-label="Top SKUs by units">
+          <div className="andash-section__head">
+            <h3 className="andash-section__title">Top SKUs</h3>
+            <span className="andash-section__subtitle">Last 90 days · by units</span>
           </div>
-          <ul className="analytics-ada-list">
+          <ul className="andash-sku-list">
+            {data.top_by_units.map((sku, i) => (
+              <li key={sku.code} className="andash-sku-row">
+                <span className="andash-sku-row__rank">{i + 1}</span>
+                <div className="andash-sku-row__main">
+                  <div className="andash-sku-row__name">{sku.name}</div>
+                  <div className="andash-sku-row__meta">
+                    {sku.orders} order{sku.orders === 1 ? "" : "s"}
+                  </div>
+                </div>
+                <div className="andash-sku-row__nums">
+                  <span className="andash-sku-row__qty">{sku.units} units</span>
+                  <span className="andash-sku-row__dollars">
+                    {moneyPrecise(sku.dollars)}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {data.top_by_dollars.length > 0 ? (
+        <section className="andash-section" aria-label="Top SKUs by spend">
+          <div className="andash-section__head">
+            <h3 className="andash-section__title">Top spend</h3>
+            <span className="andash-section__subtitle">Last 90 days · by dollars</span>
+          </div>
+          <ul className="andash-sku-list">
+            {data.top_by_dollars.map((sku, i) => (
+              <li key={`${sku.code}-$`} className="andash-sku-row">
+                <span className="andash-sku-row__rank">{i + 1}</span>
+                <div className="andash-sku-row__main">
+                  <div className="andash-sku-row__name">{sku.name}</div>
+                  <div className="andash-sku-row__meta">
+                    {sku.units} units · {sku.orders} order
+                    {sku.orders === 1 ? "" : "s"}
+                  </div>
+                </div>
+                <div className="andash-sku-row__nums">
+                  <span className="andash-sku-row__qty">{sku.units} units</span>
+                  <span className="andash-sku-row__dollars">
+                    {moneyPrecise(sku.dollars)}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {data.biggest_movers.length > 0 ? (
+        <section className="andash-section" aria-label="Biggest movers">
+          <div className="andash-section__head">
+            <h3 className="andash-section__title">Biggest movers</h3>
+            <span className="andash-section__subtitle">Vs 4-week average</span>
+          </div>
+          <ul className="andash-mover-list">
+            {data.biggest_movers.map((m) => {
+              const tone = moverTone(m.change_pct);
+              return (
+                <li key={m.code} className="andash-mover-row">
+                  <div className="andash-mover-row__main">
+                    <div className="andash-mover-row__name">{m.name}</div>
+                    <div className="andash-mover-row__meta">
+                      {m.this_week_units} this week · avg {m.avg_weekly_units}/wk
+                    </div>
+                  </div>
+                  <span className={`andash-mover-row__change andash-mover-row__change--${tone}`}>
+                    {tone === "up" ? <IconTrendUp /> : tone === "down" ? <IconTrendDown /> : null}
+                    {fmtPct(m.change_pct)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
+      {data.this_week.ada_breakdown.length > 0 ? (
+        <section className="andash-section" aria-label="Distributor breakdown">
+          <div className="andash-section__head">
+            <h3 className="andash-section__title">ADA breakdown</h3>
+            <span className="andash-section__subtitle">This week</span>
+          </div>
+          <ul className="andash-ada-list">
             {data.this_week.ada_breakdown.map((ada) => {
               const pct =
                 adaTotal > 0
                   ? Math.round((ada.net_total / adaTotal) * 100)
                   : 0;
               return (
-                <li key={ada.ada_number} className="analytics-ada-row">
-                  <div className="analytics-ada-row__top">
-                    <span className="analytics-ada-row__name">
+                <li key={ada.ada_number} className="andash-ada-row">
+                  <div className="andash-ada-row__top">
+                    <span className="andash-ada-row__name">
                       {ada.ada_name || `ADA ${ada.ada_number}`}
                     </span>
-                    <span className="analytics-ada-row__amount">
+                    <span className="andash-ada-row__amount">
                       {moneyPrecise(ada.net_total)}
                     </span>
                   </div>
-                  <div className="analytics-ada-row__meta">
+                  <div className="andash-ada-row__meta">
                     {ada.orders} order{ada.orders === 1 ? "" : "s"} · {pct}% of
                     spend
                   </div>
-                  <div className="analytics-ada-row__track">
+                  <div className="andash-ada-row__track">
                     <div
-                      className="analytics-ada-row__fill"
+                      className="andash-ada-row__fill"
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -290,85 +440,7 @@ function DashboardBody({ data }: { data: DashData }) {
         </section>
       ) : null}
 
-      {data.top_by_units.length > 0 ? (
-        <section className="analytics-section" aria-label="Top SKUs by units">
-          <div className="analytics-section__head">
-            <h3 className="analytics-section__title">Top bottles</h3>
-            <span className="analytics-section__subtitle">Last 90 days · by units</span>
-          </div>
-          <ul className="analytics-sku-list">
-            {data.top_by_units.map((sku, i) => (
-              <li key={sku.code} className="analytics-sku-row">
-                <span className="analytics-sku-row__rank">{i + 1}</span>
-                <div className="analytics-sku-row__main">
-                  <div className="analytics-sku-row__name">{sku.name}</div>
-                  <div className="analytics-sku-row__meta">
-                    {moneyPrecise(sku.dollars)} spend · {sku.orders} order
-                    {sku.orders === 1 ? "" : "s"}
-                  </div>
-                </div>
-                <span className="analytics-sku-row__metric">
-                  {sku.units} units
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {data.top_by_dollars.length > 0 ? (
-        <section className="analytics-section" aria-label="Top SKUs by spend">
-          <div className="analytics-section__head">
-            <h3 className="analytics-section__title">Top spend</h3>
-            <span className="analytics-section__subtitle">Last 90 days · by dollars</span>
-          </div>
-          <ul className="analytics-sku-list">
-            {data.top_by_dollars.map((sku, i) => (
-              <li key={`${sku.code}-$`} className="analytics-sku-row">
-                <span className="analytics-sku-row__rank">{i + 1}</span>
-                <div className="analytics-sku-row__main">
-                  <div className="analytics-sku-row__name">{sku.name}</div>
-                  <div className="analytics-sku-row__meta">
-                    {sku.units} units · {sku.orders} order
-                    {sku.orders === 1 ? "" : "s"}
-                  </div>
-                </div>
-                <span className="analytics-sku-row__metric">
-                  {moneyPrecise(sku.dollars)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {data.biggest_movers.length > 0 ? (
-        <section className="analytics-section" aria-label="Biggest movers">
-          <div className="analytics-section__head">
-            <h3 className="analytics-section__title">Biggest movers</h3>
-            <span className="analytics-section__subtitle">Vs 4-week average</span>
-          </div>
-          <ul className="analytics-mover-list">
-            {data.biggest_movers.map((m) => (
-              <li key={m.code} className="analytics-mover-row">
-                <div className="analytics-mover-row__main">
-                  <div className="analytics-mover-row__name">{m.name}</div>
-                  <div className="analytics-mover-row__meta">
-                    {m.this_week_units} this week · avg {m.avg_weekly_units}/wk
-                  </div>
-                </div>
-                <span
-                  className={`analytics-mover-row__change ${moverTrendClass(m.change_pct)}`}
-                >
-                  {fmtPct(m.change_pct)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      <p className="analytics-footnote">
+      <p className="andash-footnote">
         Based on your last 90 days of LK-submitted orders
         {data.generated_at
           ? ` · updated ${new Date(data.generated_at).toLocaleString("en-US", {
@@ -403,28 +475,28 @@ export function AnalyticsDashboard({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="drawer-backdrop"
+      className="andash-backdrop"
       onClick={onClose}
       role="presentation"
     >
       <div
-        className="drawer"
+        className="andash-sheet"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label="Analytics dashboard"
-        style={{ overflowY: "auto" }}
       >
-        <div className="drawer-header">
-          <h2>
-            <span className="analytics-dashboard__header-icon" aria-hidden>
+        <div className="andash-sheet__grab" aria-hidden="true" />
+        <div className="andash-sheet__header">
+          <h2 className="andash-sheet__title">
+            <span className="andash-sheet__icon" aria-hidden>
               <IconBarChart size={18} strokeWidth={2} />
             </span>
             Dashboard
           </h2>
           <button
             type="button"
-            className="drawer-close"
+            className="andash-sheet__close"
             onClick={onClose}
             aria-label="Close dashboard"
           >
@@ -432,32 +504,29 @@ export function AnalyticsDashboard({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {analyticsRes.loading ? (
-          <div className="analytics-loading">
-            <span className="settings-spinner" aria-hidden>
-              <IconLoader size={28} strokeWidth={2} />
-            </span>
-            <p className="muted">Loading your business snapshot…</p>
-          </div>
-        ) : error ? (
-          <div style={{ padding: "0 16px 24px" }}>
-            <div className="banner banner-err">
-              Couldn&apos;t load dashboard: {error}
+        <div className="andash-sheet__scroll">
+          {analyticsRes.loading ? (
+            <DashboardSkeleton />
+          ) : error ? (
+            <div className="andash-error">
+              <div className="banner banner-err">
+                Couldn&apos;t load dashboard: {error}
+              </div>
+              <div className="andash-error__actions">
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={() => void analyticsRes.refresh()}
+                  disabled={analyticsRes.isValidating}
+                >
+                  {analyticsRes.isValidating ? "Retrying…" : "Retry"}
+                </button>
+              </div>
             </div>
-            <div className="analytics-error-actions">
-              <button
-                type="button"
-                className="btn secondary"
-                onClick={() => void analyticsRes.refresh()}
-                disabled={analyticsRes.isValidating}
-              >
-                {analyticsRes.isValidating ? "Retrying…" : "Retry"}
-              </button>
-            </div>
-          </div>
-        ) : analyticsRes.data ? (
-          <DashboardBody data={analyticsRes.data} />
-        ) : null}
+          ) : analyticsRes.data ? (
+            <DashboardBody data={analyticsRes.data} />
+          ) : null}
+        </div>
       </div>
     </div>
   );

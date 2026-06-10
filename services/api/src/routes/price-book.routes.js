@@ -29,6 +29,7 @@ import { BRAND_ALIAS_MAP, resolveSearchAliases } from "../mlcc/mlcc-brand-aliase
 import {
   familyNameSearchPrefix,
   filterToFamily,
+  isMlccComboName,
   normalizeMlccNameBaseForFamily,
   sanitizeIlikeForFamily,
 } from "../mlcc/mlcc-product-family.js";
@@ -1379,7 +1380,14 @@ router.get("/items/:code/family", async (req, res) => {
 
     return res.json({
       ok: true,
-      baseName: anchor.name,
+      /*
+        Combo anchors (".. W/50ML REPO W/") display the clean base product
+        name as the card title — the combo's own row is still in `sizes`
+        with its real name/price. Tony's Casamigos bug, 2026-06-10.
+      */
+      baseName: isMlccComboName(anchor.name)
+        ? normalizeMlccNameBaseForFamily(anchor.name) || anchor.name
+        : anchor.name,
       sizes: dedup,
     });
   } catch (e) {

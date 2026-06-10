@@ -10,11 +10,34 @@ export function sanitizeIlikeForFamily(s) {
 }
 
 /**
+ * Gift-combo SKU detector (Tony's Casamigos bug, 2026-06-10).
+ *
+ * MLCC names combo/value-added SKUs with "W/<extra>" segments, e.g.
+ *   "CASAMIGOS REPOSADO W/50ML REPO W/"
+ *   "CROWN ROYAL W/HOLIDAY BAG W/"
+ *   "BLACK VELVET APPLE/50ML PEACH W/"   (slash+digit form)
+ *   "REDNECK RIVIERIA/2 MASON JARS W/"
+ * These are real, orderable SKUs but they are NOT their own product line —
+ * scanning one must still show the base product's full size family.
+ * @param {string | null | undefined} name
+ */
+export function isMlccComboName(name) {
+  const s = String(name ?? "");
+  return /\sW\//i.test(s) || /\/\s*\d/.test(s);
+}
+
+/**
  * Strip trailing size-only tokens; keep (HOL), flavor words, and core line name.
+ * Combo "W/..." segments are cut FIRST so a gift-combo SKU normalizes to its
+ * base product line ("CASAMIGOS REPOSADO W/50ML REPO W/" → "CASAMIGOS
+ * REPOSADO") and groups with the real size family.
  * @param {string | null | undefined} name
  */
 export function normalizeMlccNameBaseForFamily(name) {
   let s = String(name ?? "").trim();
+  // Cut at the first combo marker: " W/<anything>" or "/<digit><anything>".
+  s = s.replace(/\sW\/.*$/i, "");
+  s = s.replace(/\/\s*\d.*$/, "");
   s = s.replace(/\s+(PT|FTH|LTR|QTR|50ML|375ML|750ML|1000ML|1750ML)$/gi, "");
   s = s.replace(/\s+\d+(?:\.\d+)?\s*ML\s*$/i, "");
   s = s.replace(/\s+\d+(?:\.\d+)?\s*L\s*$/i, "");
@@ -64,10 +87,19 @@ export function rowInSameFamilyAsAnchor(anchor, row) {
  * @param {Record<string, unknown>[]} rows
  */
 export function filterToFamily(anchor, rows) {
+  /*
+    Combo exclusion (2026-06-10): gift-combo SKUs ("...W/50ML REPO W/")
+    normalize to the same base as the regular bottle, which is what lets a
+    combo SCAN open the full size family. But the reverse must not happen —
+    a regular Tito's card should NOT grow extra 750ML tabs for every gift
+    combo. Combo rows only appear in a family when they ARE the anchor.
+  */
+  const keepRow = (r) => !isMlccComboName(r?.name) || r?.id === anchor?.id;
   const bf = String(anchor.brand_family ?? "").trim();
   if (bf) {
     const cat = String(anchor.category ?? "").trim();
     return rows.filter((r) => {
+      if (!keepRow(r)) return false;
       if (String(r.brand_family ?? "").trim() !== bf) return false;
       if (cat) {
         const rc = String(r.category ?? "").trim();
@@ -76,5 +108,5 @@ export function filterToFamily(anchor, rows) {
       return true;
     });
   }
-  return rows.filter((r) => rowInSameFamilyAsAnchor(anchor, r));
+  return rows.filter((r) => keepRow(r) && rowInSameFamilyAsAnchor(anchor, r));
 }

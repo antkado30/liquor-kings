@@ -22,6 +22,7 @@ import {
   type OrderTemplate,
 } from "../api/orderTemplates";
 import type { CartContextValue } from "../hooks/useCart";
+import { IconClipboardList } from "./Icons";
 
 export function ScheduledTemplateBanner({
   cart,
@@ -91,7 +92,9 @@ export function ScheduledTemplateBanner({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 22 }}>📋</span>
+        <span style={{ display: "inline-flex", color: "#c4b5fd" }}>
+          <IconClipboardList size={22} />
+        </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>
             Your {head.name} is ready to review

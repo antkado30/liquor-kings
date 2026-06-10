@@ -1,157 +1,245 @@
-# Next-Chat Bootstrapping Prompt for Liquor Kings
+# Liquor Kings — System Review & New-Chat Bootstrap
 
-> **Tony — paste the block below into your new chat as your first message.**
-> It tells the new Claude exactly where things are, what's broken,
-> what's queued, and how you like to work. Everything load-bearing is
-> in persistent files; this prompt just makes sure the new chat reads
-> them in the right order.
+> **Tony:** paste the COPY-PASTE BLOCK below as your first message in a new
+> chat. Everything after it is the full, current system review — the new
+> Claude can read this whole file to know exactly what LK is and where it
+> stands. Last rewritten **2026-06-10** (prod app version **142**, live + healthy).
 
 ---
 
 ## COPY-PASTE THIS BLOCK 👇
 
 ```
-We're picking up Liquor Kings — multi-tenant SaaS for Michigan liquor
-stores that places MLCC orders via Playwright RPA. I'm Tony, the 19yo
-solo founder. You and I have been building this for months. The last
-chat (Opus 4.7) hit its context limit so I'm switching to a fresh
-session.
+We're picking up Liquor Kings — a multi-tenant B2B SaaS for Michigan liquor
+stores that places MLCC spirits orders automatically via Playwright RPA. I'm
+Tony, the 19-year-old solo founder. We've been building this for months.
+I'm now on Claude Fable 5 (switched from Opus 4.8). You and I work fast.
 
-BEFORE YOU RESPOND TO ANYTHING, read these files in this order:
+BEFORE responding to anything, read these in order:
+1. MEMORY.md (auto-loads — the memory index; lists every memory file)
+2. The TOP entry of project_journal.md (memory) — current state, read it FIRST
+3. project_next_session.md (memory) — exact pickup point + deploy checklist
+4. /Users/tonecapone/dev/liquor-kings/docs/lk/TONY-WANTS.md — what I want (✅/⏳/💡)
+5. /Users/tonecapone/dev/liquor-kings/docs/lk/INTEGRITY-DOCTRINE.md — the bar
+6. /Users/tonecapone/dev/liquor-kings/docs/lk/NEXT-CHAT-PROMPT.md — THIS file
+   (the full system review is in the second half — read it)
+7. /Users/tonecapone/dev/liquor-kings/docs/lk/BLUEPRINT.md — the vision
 
-1. The memory index: ~/Library/Application Support/Claude/local-agent-mode-sessions/.../memory/MEMORY.md
-   (this should auto-load — it lists everything else)
+Then skim these behavior-governing feedback memories (MEMORY.md links them):
+feedback_hold_the_roadmap, feedback_premium_feel (no emoji UI — inline SVG only),
+feedback_build_immediately_and_parallelize, feedback_batch_deploys,
+feedback_eod_journal_closeout, feedback_scan_for_similar_bugs,
+feedback_ai_tone_premium, feedback_fly_deploy_flags, feedback_instant_feel.
 
-2. /Users/tonecapone/dev/liquor-kings/docs/lk/TONY-WANTS.md
-   Permanent list of what I want. Has ✅ shipped / ⏳ in-progress /
-   💡 future. Update this any time I state a new want.
+Repo: /Users/tonecapone/dev/liquor-kings. Prod: https://liquor-kings.fly.dev
+(scanner at /scanner/). I deploy from my Mac with `npm run deploy`. The
+codebase + git history is the source of truth for what currently ships.
 
-3. /Users/tonecapone/dev/liquor-kings/docs/lk/INTEGRITY-DOCTRINE.md
-   The 12 disciplines. "Bugs can't survive" is the standard. This
-   governs every code/product decision.
-
-4. The latest entry in project_journal.md (memory file)
-   The session-by-session log. The TOP entry has "current state of
-   things" — read THAT entry first before anything else.
-
-5. /Users/tonecapone/dev/liquor-kings/docs/lk/BLUEPRINT.md
-   Vision doc. What LK is, why, where it's going.
-
-THEN read these feedback memories (they govern your behavior):
-
-- feedback_hold_the_roadmap.md (my memory is unreliable — YOU hold the
-  roadmap, capture wants immediately, surface next ⏳ proactively)
-- feedback_premium_feel.md (no emoji UI ever — inline SVG only;
-  Stripe/Linear/Notion is the bar)
-- feedback_no_placeholder_commands.md
-- feedback_deadline_speed.md
-- feedback_fly_deploy_flags.md
-- feedback_cursor_briefs.md
-- feedback_probe_before_promising.md
-- feedback_cron_routes_bypass_auth.md
-
-The repo is at /Users/tonecapone/dev/liquor-kings. Prod is at
-liquor-kings.fly.dev. I deploy via `npm run deploy` from my Mac.
-Codebase + git history is the source of truth for what currently
-ships.
-
-CURRENT TOP CONCERNS (the bug list from last smoke test):
-
-1. PERFORMANCE IS THE #1 ISSUE. Dashboard "Loading your week" hangs
-   2+ minutes. Orders page hangs. Templates page hangs. Validate took
-   5 minutes when it's supposed to be instant (background pre-validate
-   should serve from cache). I want everything INSTANT. This needs
-   diagnosis — either backend (slow queries on Fly machine? Supabase
-   slow? home/analytics endpoint slow?) or frontend (is the runtime
-   storeId resolving correctly? is the pre-validate cache populating?).
-   Maybe Fly machine is undersized. Check fly.toml + add measurement.
-
-2. AI Assistant should be its own dedicated page at /assistant, not a
-   modal overlay over the scanner. When I tap the AI tab I want a
-   full-page chat experience, not the scanner peeking through behind.
-   Refactor AssistantPanel from modal → standalone AssistantPage.
-
-3. AI Assistant scope is too narrow. The current prompt is store-only.
-   I want it to answer ANY liquor question (general knowledge,
-   pairing, history, brand trivia) AND store-specific (orders,
-   inventory, MLCC rules, my catalog). Update services/api/src/services/assistant.js
-   prompt + tool-use.
-
-4. AI Assistant accepts images. Send a photo of a bottle, AI helps
-   identify and discuss it. Vision API wiring. Make sure cost is
-   reasonable — if it's too expensive we skip.
-
-5. Validate needs a Cancel button. Once it starts, I should be able
-   to bail without waiting 5 minutes.
-
-6. Post-validate cart drawer UI feels crammed and emoji-tacky. Need
-   a premium polish pass: more spacing, no emoji on buttons, better
-   button hierarchy (Submit is the primary action, others are
-   secondary).
-
-7. The "Clear cart" button now opens a confirm modal that says it
-   empties both scanner + MILO. That just shipped last commit.
-   Verify it works correctly.
-
-8. Real bottle photos for the 13K-item catalog. We agreed on PLAN
-   A + C: Google Custom Search Image API for automated lookup (~$65
-   one-time) + improve /admin/images for hand-curating top SKUs.
-   This is a setup task — needs me to provide an API key.
-
-9. Templates page: edit items inside (add/remove bottles, change qty).
-   Currently edit only changes name + schedule.
-
-10. Search → continuous dropdown of bottles with Load More. Amazon-
-    style typeahead on the scan page search bar.
-
-11. Inventory tracking — par levels, on-hand qty, reorder alerts.
-    Currently a "Coming Soon" badge in More. Should be a real
-    feature that promotes to its own bottom tab when shipped.
-
-HOW I WORK:
-
-- High energy when in flow. "Lets keep going baby" mode.
-- Take the L when you mess up. Don't deflect with "nobody finished it"
-  type framing. That's your job.
-- Hold the roadmap for me. My working memory is unreliable. Capture
-  every want into TONY-WANTS.md immediately. Surface the next ⏳ item
-  proactively when something ships. Never ask me to recall.
-- Direct edits over Cursor briefs. You write the code, I run the deploy.
-- Tab bar shape is locked: 🏠 Scan · 📚 Catalog · 🛒 Cart · ✨ AI · ☷ More
-- No emoji UI icons. Inline SVG. Premium feel always.
-- Bugs can't survive. Don't ship features without thinking about edge
-  cases, error states, slow networks, empty data.
-- Family motivation is real. The end goal is retire my parents this
-  summer. We don't have time for shoddy work.
-
-If you've read all the files above, acknowledge briefly (one sentence)
-and tell me the FIRST thing you'd do. My guess is performance
-diagnosis (open Fly metrics, check Supabase query log, look for
-slow endpoints). But take a position.
+When you've read the above, acknowledge in ONE sentence and tell me the first
+thing you'd pick up (my journal's "next entry point" has my current pick).
 ```
 
 ---
 
-## When the new chat starts
+# FULL SYSTEM REVIEW
 
-The new chat will:
-1. Read the persistent files (MEMORY.md auto-loads, then the others
-   you've pointed at).
-2. Know who you are, what LK is, what's shipped, what's broken.
-3. Likely take a position on what to do first (probably the
-   performance dig).
-4. Be slightly less in tune with your specific vibe for the first
-   message or two — that catches up fast.
+## What Liquor Kings is
 
-## What you've already shipped today (2026-06-07)
+A multi-tenant SaaS that lets a Michigan liquor-store owner **scan bottles to
+reorder**, then **automatically places the order through MLCC's MILO website**
+(Michigan is a control state — all spirits go through MLCC; there is no other
+wholesaler). The owner reviews/approves the cart; LK logs into MILO via browser
+automation, builds the cart, validates MLCC's rules, submits, and returns the
+confirmation number. Public-launch target: **Nov 21, 2026**. The near-term play:
+modernize the family store ("Colony Party Store", MLCC license 430342), sell it
+summer 2026, scale the SaaS.
 
-- 6 features (#84–#94): activation flow, runtime store-id, cred
-  recovery, ToS/Privacy, persistent activation, pre-submit modal
-- Bottom tab bar redesign (5 tabs)
-- Premium SVG icon pass (no emojis)
-- AI promotion to hero card + tab swap
-- Hide tab bar in modals
-- Cart tab fix
-- Combined Clear cart button + confirm
+## The four V1 pillars
+1. **Ordering automation (RPA)** — the moat's hard part. DONE + hardened.
+2. **Scanner** — the customer-facing PWA (scan → cart → submit).
+3. **Shelf-tag printing** — Brother QL-810W MLCC price tags.
+4. **AI assistant** — data-grounded liquor + store expert. The differentiator.
 
-That's a real day's work. Don't undersell what got done.
+## Repo layout (monorepo, npm workspaces)
+```
+liquor-kings/
+├─ apps/scanner/      → customer PWA (React 19 + Vite + react-router v7, base /scanner/)
+├─ apps/admin/        → operator "Command Deck" (base /operator-review/app/)
+├─ services/api/      → Express API + serves both SPAs + RPA code
+├─ supabase/migrations/ → 42 SQL migrations (the DB schema)
+├─ docs/lk/           → all the docs (this file, BLUEPRINT, doctrine, specs, runbooks)
+├─ scripts/           → audit/verify/seed/doctor tooling (see `npm run audit:lk*`, `verify:lk*`)
+├─ Dockerfile         → slim web/API image (node:22-bookworm-slim, ~117 MB)
+├─ Dockerfile.worker  → Playwright/Chromium image for the RPA worker
+├─ fly.toml           → app `liquor-kings` (web/API)
+└─ fly.worker.toml    → app `liquor-kings-worker` (RPA)
+```
+
+## Architecture — TWO Fly apps (worker split, shipped 2026-06-08)
+- **`liquor-kings`** — web + API. Slim image (~117 MB), `node:22-bookworm-slim`,
+  no Chromium. Serves the API, the scanner SPA (`/scanner/*`), and the admin SPA
+  (`/operator-review/app/*`). Fly machine: shared CPU, 1 vCPU, **1024 MB**, region
+  **ord**, `auto_stop_machines = "off"`, `min_machines_running = 1`. Deploy: `npm run deploy`.
+- **`liquor-kings-worker`** — the RPA worker. Playwright image. Polls the API for
+  queued execution runs over HTTP, claims them atomically, drives MILO with a warm
+  Playwright session. Scale with `fly scale count N -a liquor-kings-worker` (atomic
+  claim makes concurrency double-order-safe). Deploy: `npm run deploy:worker`.
+  Worker entry: `services/api/src/workers/run-rpa-worker.js`.
+
+## The RPA pipeline (Pillar 1 — DONE + hardened)
+Worker claims a queued `execution_runs` row → `services/api/src/workers/execution-worker.js`
+runs 5 stages against MILO (`services/api/src/rpa/stages/`):
+1. **login.js** — sign into MILO (retries transient network errors, never bad creds).
+2. **navigate-to-products.js** — reach the products page.
+3. **add-items-to-cart.js** — add each line; v2 cart verification (active/OOS split,
+   quantity match); auto-clears a stale cart pre-flight.
+4. **validate-cart.js** — MLCC rule validation; typed errors (BELOW_9L_MINIMUM,
+   INVALID_SPLIT_QUANTITIES) + banner extraction.
+5. **checkout.js** — real submission. **Triple-gated** before any real order:
+   `payload.metadata.mode === 'submit'` AND `LK_ALLOW_ORDER_SUBMISSION === 'yes'` (Fly
+   env kill-switch) AND `stores.allow_order_submission === true` (per-store arming).
+   Any gate off → dry_run.
+- **Warm session reuse** (`rpa-session-manager.js`, `LK_RPA_PERSIST_SESSION=yes`):
+  same-store re-runs skip re-login.
+- **Orphaned-run reaper**: `reapStaleExecutionRuns` marks `running` rows with a
+  >15-min-stale heartbeat as `failed` (never auto-requeued — a crashed worker may
+  have partially submitted; double-order risk). Self-heals on every `/claim-next` poll.
+- MLCC ordering rules: ≥9 L **per ADA** (distributor) per order; split-case quantities
+  vary by bottle size; one bad line blocks the whole cart. ADA 221 = General Wine &
+  Liquor, ADA 321 = NWS Michigan. Rules live in `mlcc_rules` (29 rows) + the runtime
+  engine `services/api/src/mlcc/milo-ordering-rules.js` / `lib/mlcc-rules.js`.
+
+## Database (Supabase — prod project `eamoozfhqolshdztbrez`)
+⚠️ A second project `vgilembychlcldhzqqeq` exists and is NOT prod — always confirm
+against Fly's `SUPABASE_URL` before any DB work. The API connects with the
+service-role key (bypasses RLS). 42 migrations.
+
+Key tables: `stores`, `store_users` (multi-tenant membership, role+is_active),
+`mlcc_items` (the ~13K-SKU catalog), `bottles`, `carts`, `cart_items`,
+`execution_runs` (+ `_attempts`, `_operator_actions`), `order_templates`,
+`inventory`, `milo_order_confirmations`, `mlcc_rules`, `mlcc_brand_aliases`,
+`mlcc_price_book_runs`, `upc_lookups`, `pilot_ops_*` (operator workflow).
+
+Notable schema details:
+- `mlcc_items` unique key is **(code, ada_number)** — `code` ALONE is NOT unique
+  (a SKU can have multiple distributor rows). Querying by `code` with `.single()`/
+  `.maybeSingle()` 500s on multi-ADA SKUs — the "Smirnoff bug" class. Always
+  `.order("ada_number").limit(1).maybeSingle()`.
+- Generated columns on `mlcc_items`: `name_normalized` (punctuation-stripped, keeps
+  spaces) and **`name_searchable`** (fully space/punctuation-free — added 2026-06-09
+  so "RumChata" ⇄ "Rum Chata" match). Both have btree + trigram (pg_trgm) indexes.
+- `cart_items` now has **UNIQUE (cart_id, bottle_id)** + an atomic
+  **`add_cart_item(...)` RPC** (INSERT…ON CONFLICT DO UPDATE += qty). Add-to-cart
+  goes through that RPC — race-safe, no dup rows.
+- Price book: `mlcc-price-book-ingestor.js` ingests MLCC's xlsx, detects price
+  changes, stamps `price_changed_at`. Auto-update via `POST /price-book/check-updates`
+  (gated by `LK_CRON_SECRET`; needs a cron-job.org daily ping).
+
+## API (Express — `services/api/src`)
+- Entry: `index.js` → `app.js`. Auth middleware: `middleware/resolve-store.middleware.js`
+  (`resolveAuthenticatedStore`) — reads the Supabase JWT or a service-role bearer,
+  resolves `store_id` via `store_users`, attaches `req.store_id`. As of 2026-06-09 it
+  **verifies the JWT locally** (`lib/access-token.js`, HS256, dependency-free) when
+  `SUPABASE_JWT_SECRET` is set, falling back to `supabase.auth.getUser()`. **The
+  secret is NOT set yet** — set it to remove a per-request network hop (instant-feel).
+- Route files (`routes/`): admin, assistant, auth, bottles, browse, cart, cart-lifecycle,
+  cart-summary, catalog-vision, execution-runs, home, inventory, nrs-import, nrs-review,
+  operator-review, order-templates, orders, price-book, store-mlcc-credentials, tags.
+- AI assistant: `lib/assistant.js` (Claude tool-use, 7 tools: query_catalog, query_rules,
+  price_quote, query_order_history, query_inventory, check_order_quantity, validate_cart)
+  + `routes/assistant.routes.js` (`POST /assistant/ask`). System prompt retuned 2026-06-09
+  to be SHORT, table-free, premium (see feedback_ai_tone_premium). Vision bottle-ID:
+  `routes/catalog-vision.routes.js` (`POST /catalog/identify-from-image`, Claude vision →
+  ranked `mlcc_items` candidates; returns `extracted{brand,product_name,size_label,size_ml}`).
+- Credential encryption: `lib/credential-encryption.js` (MLCC passwords; key in
+  `LK_CREDENTIAL_ENCRYPTION_KEY` env — **KMS is the last named scale gap**, still TODO).
+
+## Scanner frontend (`apps/scanner/src`)
+- 10 pages: Scanner (home), Browse (catalog), Cart, Orders, OrderDetail, Templates,
+  Inventory, Settings, Assistant, More. Routed in `App.tsx` — all lazy-loaded +
+  idle-prefetched (Scanner eager).
+- Key components: BottomTabBar (🏠 Scan · 📚 Catalog · 🛒 Cart · ✨ AI · ☷ More — shape
+  is LOCKED), CartDrawer, ProductCard, BarcodeScanner (native BarcodeDetector + ZXing
+  fallback, any-angle + scan-from-photo), VisionCandidatePicker, AssistantChat,
+  AnalyticsDashboard, OnboardingActivation, MlccCredentialsForm, BottleArt (premium
+  SVG bottle placeholder), Icons (all inline SVG — NO emoji UI, ever).
+- API clients in `api/`, hooks in `hooks/` (useCart, useSubmission, useCatalogSearch,
+  useBackgroundPreValidate, useMlccVerifyProbe, useLockBodyScroll, useHideTabBar,
+  useOnlineStatus), lib in `lib/` (supabase, currentStore, **swr.ts** = the
+  stale-while-revalidate cache that makes tab switches instant, downscaleImage,
+  mlcc-ordering-rules, product-freshness).
+- Auth: real Supabase Auth (`lib/supabase.ts` + `AuthGate.tsx`). Multi-tenant via
+  `store_users`; the active store id lives in `lib/currentStore.ts` + `X-Store-Id`.
+
+## Admin app (`apps/admin`)
+Operator "Command Deck" at `/operator-review/app/` — for reviewing UPC→MLCC mappings,
+ambiguous matches, pilot-ops. Not customer-facing.
+
+## Deploy & ops
+- **Deploy:** `npm run deploy` (web/API) = `fly deploy -a liquor-kings --strategy rolling
+  --wait-timeout 900`. `npm run deploy:worker` for the RPA app. ALWAYS use these (the
+  default 120s timeout fails on this image — see feedback_fly_deploy_flags).
+- **Migrations BEFORE code:** if a change references a new column/RPC, run the migration
+  in the prod Supabase SQL editor FIRST, then deploy. (Claude's Supabase MCP can't write
+  prod — permission-denied — so Tony runs migrations by hand.)
+- The deploy CLI often prints scary `health check timeout` / `not listening on 8080`
+  warnings that are just mid-rollout snapshots — ALWAYS verify with
+  `fly status -a liquor-kings` (look for the new version + checks passing) and a curl.
+- **Build from the working tree** — `fly deploy` doesn't need a git commit, but commit
+  for hygiene. Committing from Claude's sandbox can leave a stale `.git/index.lock`;
+  Tony runs `rm -f .git/index.lock` before committing.
+- Secrets (Fly, names only — never commit values): `SUPABASE_URL`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`, `LK_CREDENTIAL_ENCRYPTION_KEY`,
+  `ANTHROPIC_API_KEY`, `LK_ALLOW_ORDER_SUBMISSION`, `LK_RPA_PERSIST_SESSION`,
+  `LK_CRON_SECRET`, and (to set) `SUPABASE_JWT_SECRET`. Scanner build-time:
+  `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_SCANNER_STORE_ID`.
+
+## Current prod state (2026-06-10)
+App version **142**, image `…JJ3Y3E`, 1/1 healthy. The 2026-06-09 batch is LIVE:
+premium AI tone, vision size-extraction, spacing-proof search + photo-ID
+(name_searchable), atomic cart-dup fix (add_cart_item RPC), MorePage cleanup, and
+premium Orders / Order Detail / Inventory / Settings / Assistant pages, plus the
+smart vision picker and any-angle barcode. Two migrations were applied first.
+
+## What's pending / next (read project_journal + project_next_session for the live list)
+- **CartDrawer premium overhaul — BUILT 2026-06-10, in the undeployed batch.**
+  Sticky checkout footer, drawer-tools row, SVG-only icons, scoped `.drawer--cart`
+  CSS. Behavior preserved + verified.
+- **Set `SUPABASE_JWT_SECRET`** — lights up the dormant local-JWT auth speedup.
+- **AI-generated catalog photos** — 13K SKUs still have no real images; Google Custom
+  Search image API was a DEAD END (persistent 403). Open problem.
+- **Multi-page tag PDF** — do WITH Tony at the Brother printer (tag code is finicky).
+- **KMS** for credential encryption — last named scale gap (key currently in env).
+- **Phone smoke-tests** of the latest batch when convenient.
+
+## Doctrines & how Tony works
+- **Integrity Doctrine:** "No leaks, no breaks, no nothing. Bugs can't survive." 12
+  disciplines (INTEGRITY-DOCTRINE.md). Verify everything (tsc/build/node --check/logic
+  proofs) before claiming done.
+- **Scan for similar bugs:** one bug found = grep the whole codebase for that class and
+  fix every instance in the same pass.
+- **Premium feel:** NO emoji UI — inline SVG only. Stripe/Linear/Notion bar. AI replies
+  short + table-free.
+- **Instant feel:** perceived latency is a bug. SWR cache + code-split shipped; auth
+  round-trip fix dormant pending the secret.
+- **Batch deploys:** build + verify all day; deploy ONCE when Tony wants to ship. Don't
+  end every turn with a deploy command.
+- **Build immediately + parallelize:** when Tony states a want, build it that turn; run
+  me + a Cursor agent on DISJOINT files with strong briefs. (NOTE 2026-06-10:
+  "Kais" was a voice-to-text mishearing of "Cursor" — there is no agent named
+  Kais.) Cursor has a
+  Keep/Undo gate — tell Tony Keep or Undo, and verify the combined tree before Keep.
+- **External memory:** Tony's working memory is unreliable by his own account — capture
+  every want into TONY-WANTS.md immediately, surface the next ⏳ proactively, never ask
+  him to recall. Write a full EOD journal entry at the TOP of project_journal.md at
+  every closeout (no reminder needed).
+- **Be the advisor:** keep him in check, flag good stopping points, take the L on
+  mistakes without deflecting. Family motivation (retire his parents this summer) is real.
+
+## Note on the model switch (2026-06-09/10)
+Tony moved from Opus 4.8 → **Claude Fable 5** (Anthropic's public "Mythos-class" model,
+released 2026-06-09). Fable 5 is materially stronger on long, complex, autonomous coding
+(SWE-Bench Pro ~80% vs Opus 4.8 ~69%) at ~2× the API price. For LK's large-codebase,
+reliability-critical work that's a good trade. The in-PRODUCT assistant model (the
+`/assistant` endpoint) is a SEPARATE, cost-sensitive decision — keep it cheap there.
+```

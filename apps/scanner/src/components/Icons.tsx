@@ -305,6 +305,57 @@ export function IconCheck(props: IconProps) {
   });
 }
 
+export function IconPrinter(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <polyline points="6 9 6 2 18 2 18 9" />
+        <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+        <rect x="6" y="14" width="12" height="8" rx="1" />
+      </>
+    ),
+  });
+}
+
+export function IconShare(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+        <polyline points="16 6 12 2 8 6" />
+        <line x1="12" y1="2" x2="12" y2="15" />
+      </>
+    ),
+  });
+}
+
+export function IconTag(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+        <line x1="7" y1="7" x2="7.01" y2="7" />
+      </>
+    ),
+  });
+}
+
+export function IconInfo(props: IconProps) {
+  return svg({
+    ...props,
+    children: (
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="16" x2="12" y2="12" />
+        <line x1="12" y1="8" x2="12.01" y2="8" />
+      </>
+    ),
+  });
+}
+
 export function IconAlert(props: IconProps) {
   return svg({
     ...props,

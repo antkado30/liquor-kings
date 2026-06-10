@@ -14,6 +14,7 @@
  * BEFORE wasting a label.
  */
 import { useEffect, useRef, useState } from "react";
+import { IconPrinter, IconShare } from "./Icons";
 import { getAuthBearer } from "../lib/supabase";
 import { getCurrentStoreId } from "../lib/currentStore";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
@@ -179,11 +180,18 @@ export function TagPrintPreview({ html, mlccCode, onClose }: TagPrintPreviewProp
         <div className="tag-print-actions">
           <button
             type="button"
-            className="btn primary btn-block"
+            className="btn primary btn-block btn-ico"
             disabled={!ready || printing}
             onClick={handlePrint}
           >
-            {printing ? "Opening print dialog…" : "🖨️ Print (AirPrint)"}
+            {printing ? (
+              "Opening print dialog…"
+            ) : (
+              <>
+                <IconPrinter size={16} />
+                <span>Print (AirPrint)</span>
+              </>
+            )}
           </button>
           {/*
             Universal share-PDF flow (#76). Only show when we know the
@@ -195,12 +203,19 @@ export function TagPrintPreview({ html, mlccCode, onClose }: TagPrintPreviewProp
           {mlccCode && canShare ? (
             <button
               type="button"
-              className="btn secondary btn-block"
+              className="btn secondary btn-block btn-ico"
               disabled={sharing}
               onClick={() => void handleSharePdf()}
               style={{ marginTop: 8 }}
             >
-              {sharing ? "Preparing PDF…" : "📤 Share to printer app"}
+              {sharing ? (
+                "Preparing PDF…"
+              ) : (
+                <>
+                  <IconShare size={16} />
+                  <span>Share to printer app</span>
+                </>
+              )}
             </button>
           ) : null}
           {shareError ? (

@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flagIncorrectMatch } from "../api/catalog";
+import { reportWrongPhoto, uploadBottlePhoto } from "../api/catalog-photo";
 import { fetchTagsHtml } from "../api/tags";
+import { downscaleImageFile } from "../lib/downscaleImage";
+import { IconAlert, IconCamera, IconCheck, IconInfo, IconTag } from "./Icons";
 import { TagPrintPreview } from "./TagPrintPreview";
 import {
   generateValidQuantities,
@@ -63,6 +66,59 @@ export function ProductCard({
   const [quantity, setQuantity] = useState(0);
   const [flagBusy, setFlagBusy] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+
+  /*
+    Photo truth layer (2026-06-10). Tony: internet photos can't guarantee
+    what the bottle on the truck looks like — the store's own camera can.
+      - "Snap real bottle": capture → downscale → upload → becomes the
+        canonical image for this code (image_source='in_store').
+      - "Wrong photo?": clears a lying image NOW (placeholder renders)
+        and quarantines the code from backfill re-fills.
+    localPhotoUrl overrides the catalog image after a successful upload;
+    photoCleared forces the placeholder after a successful report.
+  */
+  const [localPhotoUrl, setLocalPhotoUrl] = useState<string | null>(null);
+  const [photoCleared, setPhotoCleared] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState<"upload" | "report" | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handlePhotoFile = async (file: File | null) => {
+    if (!file || photoBusy) return;
+    setPhotoBusy("upload");
+    try {
+      const dataUri = await downscaleImageFile(file, 1024, 0.85);
+      const r = await uploadBottlePhoto(selectedProduct.code, dataUri);
+      if (r.ok) {
+        setLocalPhotoUrl(`${r.imageUrl}?v=${Date.now()}`);
+        setPhotoCleared(false);
+        setImageFailed(false);
+        onToast?.("Photo saved — this is now the real bottle for this code.");
+      } else {
+        onToast?.(`Couldn't save the photo (${r.error}). Try again.`);
+      }
+    } catch (e) {
+      onToast?.(
+        `Couldn't read that photo (${e instanceof Error ? e.message : String(e)}).`,
+      );
+    } finally {
+      setPhotoBusy(null);
+      if (photoInputRef.current) photoInputRef.current.value = "";
+    }
+  };
+
+  const handleReportWrongPhoto = async () => {
+    if (photoBusy) return;
+    setPhotoBusy("report");
+    const r = await reportWrongPhoto(selectedProduct.code);
+    setPhotoBusy(null);
+    if (r.ok) {
+      setPhotoCleared(true);
+      setLocalPhotoUrl(null);
+      onToast?.("Photo removed. Snap the real bottle when you have it.");
+    } else {
+      onToast?.(`Couldn't report the photo (${r.error}). Try again.`);
+    }
+  };
 
   /*
     Task #58 (2026-05-31) — stay-open behavior after Add to Cart.
@@ -270,10 +326,12 @@ export function ProductCard({
     ],
   );
   const cardImageUrl =
-    (!imageFailed &&
+    localPhotoUrl ??
+    ((!imageFailed &&
+      !photoCleared &&
       (family.sizes.map((s) => s.imageUrl).find((u) => u && String(u).trim()) ??
         selectedProduct.imageUrl)) ||
-    null;
+      null);
 
   return (
     <div className="product-card-backdrop" role="dialog" aria-modal="true" aria-labelledby="product-card-title">
@@ -303,6 +361,48 @@ export function ProductCard({
             />
           </div>
         )}
+        {/*
+          Photo truth actions (2026-06-10). Quiet text affordances under
+          the image — capture the REAL bottle (always available) and
+          flag a wrong photo (only when an image is showing). Hidden
+          file input with capture="environment" opens the camera
+          directly on iOS.
+        */}
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          style={{ display: "none" }}
+          onChange={(e) => void handlePhotoFile(e.target.files?.[0] ?? null)}
+        />
+        <div className="pc-photo-actions">
+          <button
+            type="button"
+            className="pc-photo-action"
+            disabled={photoBusy !== null}
+            onClick={() => photoInputRef.current?.click()}
+          >
+            <IconCamera size={14} />
+            <span>
+              {photoBusy === "upload"
+                ? "Saving photo…"
+                : cardImageUrl
+                  ? "Replace with real bottle"
+                  : "Snap the real bottle"}
+            </span>
+          </button>
+          {cardImageUrl && !localPhotoUrl ? (
+            <button
+              type="button"
+              className="pc-photo-action pc-photo-action--danger"
+              disabled={photoBusy !== null}
+              onClick={() => void handleReportWrongPhoto()}
+            >
+              {photoBusy === "report" ? "Removing…" : "Wrong photo?"}
+            </button>
+          ) : null}
+        </div>
         <div className="product-card-header">
           <h2 id="product-card-title" className="product-card-brand">
             {family.baseName}
@@ -340,7 +440,11 @@ export function ProductCard({
             role="status"
           >
             <span className="product-card-freshness__icon" aria-hidden>
-              {freshness.status === "likely_discontinued" ? "⚠" : "ℹ"}
+              {freshness.status === "likely_discontinued" ? (
+                <IconAlert size={14} />
+              ) : (
+                <IconInfo size={14} />
+              )}
             </span>
             <span className="product-card-freshness__text">{freshness.message}</span>
           </div>
@@ -486,7 +590,7 @@ export function ProductCard({
             aria-live="polite"
           >
             <span className="product-card-last-added__icon" aria-hidden>
-              ✓
+              <IconCheck size={13} strokeWidth={2.5} />
             </span>
             <span className="product-card-last-added__text">
               Added {lastAdded.quantity} × {lastAdded.sizeLabel} — pick another
@@ -514,12 +618,19 @@ export function ProductCard({
         */}
         <button
           type="button"
-          className="btn secondary btn-block"
+          className="btn secondary btn-block btn-ico"
           onClick={() => void onPrintTag()}
           disabled={printing}
           style={{ marginTop: 8 }}
         >
-          {printing ? "Generating tag…" : "🏷️ Print shelf tag"}
+          {printing ? (
+            "Generating tag…"
+          ) : (
+            <>
+              <IconTag size={15} />
+              <span>Print shelf tag</span>
+            </>
+          )}
         </button>
 
         {showFlag ? (

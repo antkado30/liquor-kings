@@ -124,12 +124,58 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
      only ever covered curated retailer sites = partial coverage anyway. Script
      exists (services/api/scripts/backfill-mlcc-item-images-google.mjs) but is
      shelved.
-   - ⏳ **NEXT PATH = AI-generated bottle images** for true 100% coverage.
-     Feed each bottle's name+category to an image model (DALL-E / Imagen /
-     Stability) → consistent premium on-white render → re-host to Supabase
-     Storage → set image_url. ~$0.02-0.04/img × 13.8k ≈ $300-550 (cost decision
-     for Tony). Build a backfill script like the Google one but calling an
-     image-gen API. Most-scanned first.
+   - ❌ **AI-generated bottle images = DEAD END for accuracy (2026-06-10).**
+     Built `backfill-mlcc-item-images-ai.mjs` (gpt-image-1 + Claude vision
+     verify), spot-checked FRIS VODKA 100 (code 100009) for $0.05: the model
+     produced a generic flask that looks NOTHING like the real frosted
+     triangular FRIS bottle, plus gibberish small text. The vision gate can
+     check label spelling but CANNOT know real trade dress — this failure
+     mode applies to thousands of niche SKUs. Tony's bar: "every single
+     bottle has to be spot-on accurate" → only REAL photos qualify.
+     DO NOT re-chase AI generation for catalog photos. Script kept for
+     reference only. (Tony cleared the bad FRIS image_url via SQL.)
+   - ⏳ **CURRENT PATH = Serper.dev (Google Images as an API) — REAL photos.**
+     **Script BUILT 2026-06-10:** `services/api/scripts/backfill-mlcc-item-images-serper.mjs`.
+     This IS the "just search Google for every bottle" Tony wanted — Google's
+     own CSE is broken/deprecated, Serper returns real Google Images results
+     as JSON. Pin-point verify (name-token containment ≥0.6 + size tolerance
+     ±50mL + min 300px) → trusted-retailer domain ranking (TotalWine, OHLQ,
+     Drizly…) → re-host to Supabase Storage → `image_source='serper_google_images'`.
+     Most-scanned-first, prod-targeted (LK_PROD_* env), fills NULL only,
+     concurrency workers, quota-abort. **2,500 searches FREE on signup;
+     full 13.8k ≈ $4-14.** NEEDS: SERPER_API_KEY in services/api/.env.
+     Fallback for no-match tail: BottleArt placeholder + /admin/catalog-images
+     curation. (Possible free secondary sources if coverage disappoints:
+     other control states' catalogs — OHLQ Ohio, Iowa ABD data.iowa.gov
+     gckp-fe7r, VA ABC — all sell ~the same SKUs with pro photos.)
+     **VISION GATE added same day** after the FRIS 80-vs-100-proof miss:
+     Claude inspects every downloaded photo and rejects wrong brand/variant/
+     proof/multi-packs; walks 3 candidates; no survivor → placeholder.
+     Proven live: rejected the wrong FRIS, accepted the real 100-proof.
+   - ✅ **PHOTO TRUTH LAYER — BUILT 2026-06-10 (in the undeployed batch).**
+     Backend `routes/catalog-photo.routes.js`: POST /catalog/items/:code/photo
+     (in-store capture → Storage `instore/` path → image_source='in_store',
+     overrides backfill, audit-logged) + /photo-report (clears lying image
+     NOW, image_source='reported_wrong' quarantines from backfill re-fills,
+     audit-logged). Frontend: ProductCard "Snap the real bottle" (camera
+     capture → downscale → upload) + "Wrong photo?" affordances under the
+     image. Serper backfill skips reported codes. All verified
+     (tsc/build/node --check). Original want: Tony: "even if it's the right bottle, what if the bottle
+     looks different when it comes in? I don't want that happening AT ALL."
+     Internet photos can't guarantee current trade dress. Plan (layered,
+     image_source is the precedence key: `in_store` > `curated` >
+     `serper_google_images` > placeholder):
+     (a) **In-store photo capture in the scanner** — after a scan resolves
+     to a SKU, one-tap "snap the real bottle" → uploads → becomes the
+     canonical image for that code, overriding any backfill. Dad's store
+     alone fixes the SKUs that actually matter; at hundreds of stores this
+     self-builds a real-shelf photo library of the MI catalog NO competitor
+     can replicate (moat).
+     (b) **"Wrong photo?" report affordance** on ProductCard — one tap
+     flags a lying image: clears/queues it for review (doctrine: loud
+     failures, the catalog never lies silently).
+     (c) Serper backfill stays as instant wide coverage; in-store truth
+     replaces it SKU by SKU over time.
 5. ⏳ **V1 must be ready for hundreds of stores — lightning fast + reliable
    as fuck — BEFORE launch.** Every feature, lightning fast. Scale + reliability
    bar. (Ties to the integrity doctrine + the known scale gaps: RPA
@@ -221,6 +267,17 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
 ### In progress / next up
 
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
+
+- ✅ **CartDrawer premium overhaul** — the LAST core screen, built
+  2026-06-10 (pending deploy in the day's batch). Bottom-sheet grab
+  handle, header with product-count + total meta, SVG-only icons
+  (trash/check/alert/spinner — last emojis killed), compact side-by-side
+  Save/Load template tools, quiet text-style Clear cart, sticky checkout
+  footer (Total + Validate + Submit pinned, checkout-style), classed
+  validate-result panel + template picker (inline-style soup removed).
+  Behavior 100% preserved — every handler/disabled/render condition
+  verified identical; tsc + vite build green. Scoped under
+  `.drawer--cart` so AssistantPanel/AnalyticsDashboard untouched.
 
 - ✅ **Premium-feel pass #1: emoji icons → inline SVG.** Tab bar,
   More page rows, Templates trash + empty state, Scan cart icon, Sign

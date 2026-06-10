@@ -118,7 +118,30 @@ router.get("/browse", async (req, res) => {
   if (Number.isFinite(minProof)) select = select.gte("proof", minProof);
   if (Number.isFinite(maxProof)) select = select.lte("proof", maxProof);
   if (newOnly) select = select.eq("is_new_item", true);
-  if (q) select = select.ilike("name", `%${q}%`);
+  /*
+    Search matches BOTH raw name AND name_searchable (the generated
+    space/punctuation-free column from 20260609230000). Fixes the
+    2026-06-10 Tito's bug: iOS smart-punctuation sends a curly
+    apostrophe ("Tito’s") that never matches the catalog's straight
+    apostrophe ("TITO'S"), and "Titos" matched nothing at all. The
+    stripped term against name_searchable catches both, plus the
+    RumChata-style spacing cases. The raw-name ilike stays so
+    multi-word queries with spaces ("crown royal") keep matching
+    name's word boundaries when the stripped form is too greedy.
+    PostgREST .or() syntax: commas separate clauses, so strip
+    commas/parens out of the user term to avoid filter injection.
+  */
+  if (q) {
+    const safeQ = q.replace(/[,()]/g, " ").replace(/\s+/g, " ").trim();
+    const stripped = safeQ.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (stripped.length >= 2) {
+      select = select.or(
+        `name.ilike.%${safeQ}%,name_searchable.ilike.%${stripped}%`,
+      );
+    } else if (safeQ.length >= 2) {
+      select = select.ilike("name", `%${safeQ}%`);
+    }
+  }
 
   /*
     Sort + cursor. We use a single-column ORDER BY for simplicity; the

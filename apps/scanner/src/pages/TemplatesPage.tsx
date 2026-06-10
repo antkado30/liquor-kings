@@ -16,7 +16,7 @@
  *
  * Doctrine alignment: discipline #1 (predictable) — schedule chip
  * format and ordering is stable; discipline #3 (pre-commit
- * verification) — delete shows a confirm step; discipline #5 (loud
+ * verification) — delete shows a confirm step; doctrine #5 (loud
  * failures) — load errors surface a clear message, not a silent fail.
  */
 import { useEffect, useState } from "react";
@@ -32,12 +32,32 @@ import {
 import { searchProducts } from "../api/catalog";
 import type { MlccProduct } from "../types";
 import { useCart } from "../hooks/useCart";
-import { IconCalendar, IconTrash } from "../components/Icons";
+import {
+  IconCalendar,
+  IconClipboardList,
+  IconPencil,
+  IconTrash,
+  IconX,
+} from "../components/Icons";
 import { useCachedResource } from "../lib/swr";
 import { getCurrentStoreId } from "../lib/currentStore";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DOW_FULL = [
+  "SUNDAY",
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+  "SATURDAY",
+];
+
+function scheduleEyebrow(scheduleDow: number | null): string {
+  if (scheduleDow == null) return "MANUAL";
+  return `AUTO · EVERY ${DOW_FULL[scheduleDow] ?? "WEEK"}`;
+}
 
 export function TemplatesPage() {
   const navigate = useNavigate();
@@ -117,34 +137,23 @@ export function TemplatesPage() {
   }
 
   return (
-    <div style={pageStyle}>
-      <header style={headerStyle}>
-        <h1 style={titleStyle}>Templates</h1>
-        <p style={subtitleStyle}>
+    <div className="tplpg-page">
+      <header className="tplpg-header">
+        <h1 className="tplpg-title">Templates</h1>
+        <p className="tplpg-subtitle">
           Save your weekly cart as a reusable template. Schedule one to
           auto-prepare every week.
         </p>
       </header>
 
       {error ? (
-        <div style={errorBannerStyle}>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>
-            Couldn&apos;t load templates
-          </div>
-          <div style={{ fontSize: 12, marginBottom: 10 }}>{error}</div>
+        <div className="tplpg-error">
+          <div className="tplpg-error__title">Couldn&apos;t load templates</div>
+          <div className="tplpg-error__msg">{error}</div>
           <button
             type="button"
+            className="tplpg-error__retry"
             onClick={() => void refresh()}
-            style={{
-              background: "rgba(244, 63, 94, 0.18)",
-              border: "1px solid rgba(244, 63, 94, 0.4)",
-              color: "#fff",
-              borderRadius: 8,
-              padding: "8px 14px",
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
           >
             Retry
           </button>
@@ -152,96 +161,79 @@ export function TemplatesPage() {
       ) : null}
 
       {templates === null && !error ? (
-        <div style={emptyStyle}>Loading…</div>
+        <TemplatesSkeleton />
       ) : templates === null && error ? (
         /* error already rendered above; render nothing here */
         null
       ) : templates !== null && templates.length === 0 ? (
-        <div style={emptyCardStyle}>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 56,
-              height: 56,
-              borderRadius: 16,
-              background: "rgba(58, 130, 247, 0.1)",
-              color: "#b9d1ff",
-              marginBottom: 12,
-            }}
-          >
-            <IconCalendar size={28} strokeWidth={1.75} />
-          </div>
-          <div style={emptyTitleStyle}>No templates yet</div>
-          <p style={emptyBlurbStyle}>
-            Build a cart, then tap &ldquo;Save as template&rdquo; to add
-            it here. Templates remember your bottles + quantities so you
-            can reload them every week with one tap.
+        <div className="tplpg-empty">
+          <span className="tplpg-empty__icon" aria-hidden>
+            <IconClipboardList size={28} strokeWidth={1.75} />
+          </span>
+          <p className="tplpg-empty__copy">
+            No templates yet — build a cart and tap Save as template.
           </p>
           <button
             type="button"
+            className="btn primary"
             onClick={() => navigate("/")}
-            style={primaryBtnStyle}
           >
             Go to Scan
           </button>
         </div>
       ) : templates ? (
-        <ul style={listStyle}>
+        <ul className="tplpg-list">
           {templates.map((t) => {
             const totalQty = t.items.reduce((s, i) => s + i.quantity, 0);
-            const scheduleLabel =
-              t.schedule_dow != null
-                ? `Auto every ${DOW_LABELS[t.schedule_dow]}`
-                : "Manual";
             const isLoading = loadingId === t.id;
             return (
-              <li key={t.id} style={cardStyle}>
-                <div style={cardHeadStyle}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={cardTitleRowStyle}>
-                      <span style={cardTitleStyle}>{t.name}</span>
-                      {t.needs_review ? (
-                        <span style={reviewBadgeStyle}>● Ready to review</span>
-                      ) : null}
-                    </div>
-                    <div style={cardMetaStyle}>
-                      <span style={chipStyle}>{scheduleLabel}</span>
-                      <span style={metaDotStyle}>·</span>
-                      <span>
-                        {totalQty} bottle{totalQty === 1 ? "" : "s"} ·{" "}
-                        {t.items.length} line{t.items.length === 1 ? "" : "s"}
+              <li key={t.id} className="tplpg-row">
+                <div className="tplpg-row__head">
+                  <div className="tplpg-row__eyebrow">
+                    <IconCalendar size={12} strokeWidth={2} aria-hidden />
+                    {scheduleEyebrow(t.schedule_dow)}
+                  </div>
+                  <div className="tplpg-row__title-row">
+                    <span className="tplpg-row__name">{t.name}</span>
+                    {t.needs_review ? (
+                      <span className="tplpg-review-badge">
+                        <span className="tplpg-review-badge__dot" aria-hidden />
+                        Ready to review
                       </span>
-                    </div>
-                    {t.last_loaded_at ? (
-                      <div style={cardLastLoadedStyle}>
-                        Last loaded {formatRelative(t.last_loaded_at)}
-                      </div>
                     ) : null}
                   </div>
+                  <div className="tplpg-row__meta">
+                    {totalQty} bottle{totalQty === 1 ? "" : "s"} ·{" "}
+                    {t.items.length} line{t.items.length === 1 ? "" : "s"}
+                  </div>
+                  {t.last_loaded_at ? (
+                    <div className="tplpg-row__last">
+                      Last loaded {formatRelative(t.last_loaded_at)}
+                    </div>
+                  ) : null}
                 </div>
 
-                <div style={cardActionsStyle}>
+                <div className="tplpg-row__actions">
                   <button
                     type="button"
                     onClick={() => handleLoad(t)}
                     disabled={isLoading}
-                    style={loadBtnStyle}
+                    className="btn primary tplpg-row__load"
                   >
                     {isLoading ? "Loading…" : "Load into cart"}
                   </button>
                   <button
                     type="button"
                     onClick={() => setEditing(t)}
-                    style={secondaryBtnStyle}
+                    className="tplpg-row__icon-btn"
+                    aria-label={`Edit ${t.name}`}
                   >
-                    Edit
+                    <IconPencil size={18} strokeWidth={1.85} />
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirmDelete(t)}
-                    style={dangerBtnStyle}
+                    className="tplpg-row__icon-btn tplpg-row__icon-btn--danger"
                     aria-label={`Delete ${t.name}`}
                   >
                     <IconTrash size={18} strokeWidth={1.85} />
@@ -253,7 +245,7 @@ export function TemplatesPage() {
         </ul>
       ) : null}
 
-      {toast ? <div style={toastStyle}>{toast}</div> : null}
+      {toast ? <div className="tplpg-toast">{toast}</div> : null}
 
       {editing ? (
         <EditTemplateModal
@@ -267,39 +259,59 @@ export function TemplatesPage() {
       ) : null}
 
       {confirmDelete ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={backdropStyle}
-          onClick={() => setConfirmDelete(null)}
-        >
-          <div style={confirmCardStyle} onClick={(e) => e.stopPropagation()}>
-            <h2 style={confirmTitleStyle}>Delete this template?</h2>
-            <p style={confirmBodyStyle}>
-              &ldquo;{confirmDelete.name}&rdquo; will be removed. Templates
-              are archived, not hard-deleted — they won&apos;t be
-              recoverable from the UI but the data stays on our side for
-              audit. (Doctrine #7.)
-            </p>
-            <div style={confirmActionsStyle}>
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(null)}
-                style={secondaryBtnStyle}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDelete(confirmDelete)}
-                style={dangerSolidBtnStyle}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
+        <DeleteConfirmModal
+          template={confirmDelete}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => handleDelete(confirmDelete)}
+        />
       ) : null}
+    </div>
+  );
+}
+
+function TemplatesSkeleton() {
+  return (
+    <div className="tplpg-skeleton" aria-hidden>
+      <div className="tplpg-shimmer tplpg-shimmer--row" />
+      <div className="tplpg-shimmer tplpg-shimmer--row" />
+      <div className="tplpg-shimmer tplpg-shimmer--row" />
+    </div>
+  );
+}
+
+function DeleteConfirmModal({
+  template,
+  onCancel,
+  onConfirm,
+}: {
+  template: OrderTemplate;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useLockBodyScroll();
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="confirm-overlay"
+      onClick={onCancel}
+    >
+      <div className="confirm-card" onClick={(e) => e.stopPropagation()}>
+        <h2 className="confirm-title">Delete this template?</h2>
+        <p className="confirm-body">
+          &ldquo;{template.name}&rdquo; will be removed. Templates are archived,
+          not hard-deleted — they won&apos;t be recoverable from the UI but the
+          data stays on our side for audit. (Doctrine #7.)
+        </p>
+        <div className="confirm-actions">
+          <button type="button" className="btn secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn primary tplpg-btn--danger" onClick={onConfirm}>
+            Delete
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -422,33 +434,46 @@ function EditTemplateModal({
     <div
       role="dialog"
       aria-modal="true"
-      style={backdropStyle}
+      className="confirm-overlay"
       onClick={onClose}
     >
-      <div style={editCardStyle} onClick={(e) => e.stopPropagation()}>
-        <h2 style={confirmTitleStyle}>Edit template</h2>
+      <div
+        className="confirm-card tplpg-edit-card"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="tplpg-edit-card__header">
+          <h2 className="confirm-title">
+            <IconPencil size={18} strokeWidth={2} aria-hidden />
+            Edit template
+          </h2>
+          <button
+            type="button"
+            className="tplpg-edit-card__close"
+            onClick={onClose}
+            aria-label="Close edit template"
+          >
+            <IconX size={20} strokeWidth={2} />
+          </button>
+        </div>
 
-        <label style={editLabelStyle}>
+        <label className="tplpg-field">
           Name
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            style={editInputStyle}
+            className="tplpg-input"
             disabled={submitting}
           />
         </label>
 
         <div>
-          <div style={editLabelStyle}>Auto-prepare every</div>
-          <div style={dowChipRowStyle}>
+          <div className="tplpg-field__label">Auto-prepare every</div>
+          <div className="tplpg-dow-chips">
             <button
               type="button"
               onClick={() => setScheduleDow(null)}
-              style={{
-                ...dowChipStyle,
-                ...(scheduleDow === null ? dowChipActiveStyle : {}),
-              }}
+              className={`tplpg-dow-chip${scheduleDow === null ? " tplpg-dow-chip--active" : ""}`}
               disabled={submitting}
             >
               Never
@@ -458,10 +483,7 @@ function EditTemplateModal({
                 key={label}
                 type="button"
                 onClick={() => setScheduleDow(idx)}
-                style={{
-                  ...dowChipStyle,
-                  ...(scheduleDow === idx ? dowChipActiveStyle : {}),
-                }}
+                className={`tplpg-dow-chip${scheduleDow === idx ? " tplpg-dow-chip--active" : ""}`}
                 disabled={submitting}
               >
                 {label}
@@ -471,70 +493,36 @@ function EditTemplateModal({
         </div>
 
         <div>
-          <div style={editLabelStyle}>Bottles ({items.length})</div>
-          <ul
-            style={{
-              listStyle: "none",
-              padding: 0,
-              margin: "6px 0 10px",
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-              maxHeight: 240,
-              overflowY: "auto",
-            }}
-          >
+          <div className="tplpg-field__label">Bottles ({items.length})</div>
+          <ul className="tplpg-edit-items">
             {items.map((it) => (
-              <li
-                key={it.mlcc_code}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  background: "#0d1017",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  borderRadius: 10,
-                  padding: "8px 10px",
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 700,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
+              <li key={it.mlcc_code} className="tplpg-edit-item">
+                <div className="tplpg-edit-item__main">
+                  <div className="tplpg-edit-item__name">
                     {it.name ?? it.mlcc_code}
                   </div>
-                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
+                  <div className="tplpg-edit-item__meta">
                     {it.bottle_size_ml ? `${it.bottle_size_ml} mL · ` : ""}#
                     {it.mlcc_code}
                   </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div className="tplpg-edit-item__qty">
                   <button
                     type="button"
                     onClick={() => changeQty(it.mlcc_code, -1)}
                     disabled={submitting}
                     aria-label="Decrease"
-                    style={tplStepBtn}
+                    className="tplpg-step-btn"
                   >
                     −
                   </button>
-                  <span
-                    style={{ minWidth: 22, textAlign: "center", fontWeight: 800 }}
-                  >
-                    {it.quantity}
-                  </span>
+                  <span className="tplpg-edit-item__qty-val">{it.quantity}</span>
                   <button
                     type="button"
                     onClick={() => changeQty(it.mlcc_code, 1)}
                     disabled={submitting}
                     aria-label="Increase"
-                    style={tplStepBtn}
+                    className="tplpg-step-btn"
                   >
                     +
                   </button>
@@ -544,21 +532,14 @@ function EditTemplateModal({
                   onClick={() => removeItem(it.mlcc_code)}
                   disabled={submitting}
                   aria-label={`Remove ${it.name ?? it.mlcc_code}`}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    color: "#ff7a7a",
-                    cursor: "pointer",
-                    padding: 4,
-                    display: "inline-flex",
-                  }}
+                  className="tplpg-edit-item__remove"
                 >
                   <IconTrash size={16} strokeWidth={1.85} />
                 </button>
               </li>
             ))}
             {items.length === 0 ? (
-              <li style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
+              <li className="tplpg-edit-item__empty">
                 No bottles yet — search below to add some.
               </li>
             ) : null}
@@ -569,70 +550,31 @@ function EditTemplateModal({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Add a bottle — search by name or code"
-            style={editInputStyle}
+            className="tplpg-input"
             disabled={submitting}
             autoComplete="off"
           />
           {searching ? (
-            <div
-              style={{
-                fontSize: 12,
-                color: "rgba(255,255,255,0.5)",
-                marginTop: 6,
-              }}
-            >
-              Searching…
-            </div>
+            <div className="tplpg-search-hint">Searching…</div>
           ) : null}
           {results.length > 0 ? (
-            <ul
-              style={{
-                listStyle: "none",
-                padding: 0,
-                margin: "6px 0 0",
-                display: "flex",
-                flexDirection: "column",
-                gap: 4,
-                maxHeight: 180,
-                overflowY: "auto",
-              }}
-            >
+            <ul className="tplpg-search-results">
               {results.map((p) => (
                 <li key={p.id}>
                   <button
                     type="button"
                     onClick={() => addProduct(p)}
                     disabled={submitting}
-                    style={{
-                      width: "100%",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      background: "rgba(58,130,247,0.08)",
-                      border: "1px solid rgba(58,130,247,0.25)",
-                      borderRadius: 8,
-                      padding: "8px 10px",
-                      color: "#fff",
-                      cursor: "pointer",
-                      textAlign: "left",
-                    }}
+                    className="tplpg-search-result"
                   >
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>
-                        {p.name}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: 11,
-                          color: "rgba(255,255,255,0.5)",
-                          marginLeft: 6,
-                        }}
-                      >
+                    <span className="tplpg-search-result__main">
+                      <span className="tplpg-search-result__name">{p.name}</span>
+                      <span className="tplpg-search-result__size">
                         {p.bottle_size_label ??
                           (p.bottle_size_ml ? `${p.bottle_size_ml} mL` : "")}
                       </span>
                     </span>
-                    <span style={{ fontSize: 18, fontWeight: 800, color: "#b9d1ff" }}>
+                    <span className="tplpg-search-result__add" aria-hidden>
                       +
                     </span>
                   </button>
@@ -642,13 +584,13 @@ function EditTemplateModal({
           ) : null}
         </div>
 
-        {err ? <div style={errorBannerStyle}>{err}</div> : null}
+        {err ? <div className="tplpg-error tplpg-error--inline">{err}</div> : null}
 
-        <div style={confirmActionsStyle}>
+        <div className="confirm-actions">
           <button
             type="button"
             onClick={onClose}
-            style={secondaryBtnStyle}
+            className="btn secondary"
             disabled={submitting}
           >
             Cancel
@@ -656,7 +598,7 @@ function EditTemplateModal({
           <button
             type="button"
             onClick={handleSave}
-            style={primaryBtnStyle}
+            className="btn primary"
             disabled={submitting}
           >
             {submitting ? "Saving…" : "Save"}
@@ -681,320 +623,3 @@ function formatRelative(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
-
-/* ─── styles ──────────────────────────────────────────────────────────── */
-
-const pageStyle: React.CSSProperties = {
-  maxWidth: 560,
-  margin: "0 auto",
-  padding: "18px 16px 110px",
-  color: "#fff",
-};
-
-const headerStyle: React.CSSProperties = {
-  marginBottom: 18,
-};
-
-const titleStyle: React.CSSProperties = {
-  fontSize: 28,
-  fontWeight: 800,
-  margin: "0 0 4px",
-};
-
-const subtitleStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: "rgba(255,255,255,0.6)",
-  margin: 0,
-  lineHeight: 1.5,
-};
-
-const listStyle: React.CSSProperties = {
-  listStyle: "none",
-  padding: 0,
-  margin: 0,
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-};
-
-const cardStyle: React.CSSProperties = {
-  background: "#11141b",
-  border: "1px solid rgba(255,255,255,0.07)",
-  borderRadius: 14,
-  padding: "14px 14px 12px",
-};
-
-const cardHeadStyle: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-};
-
-const cardTitleRowStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  flexWrap: "wrap",
-};
-
-const cardTitleStyle: React.CSSProperties = {
-  fontSize: 17,
-  fontWeight: 800,
-  lineHeight: 1.25,
-};
-
-const reviewBadgeStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: "#fde6b3",
-  background: "rgba(245, 158, 11, 0.18)",
-  border: "1px solid rgba(245, 158, 11, 0.4)",
-  borderRadius: 999,
-  padding: "2px 8px",
-  fontWeight: 700,
-};
-
-const cardMetaStyle: React.CSSProperties = {
-  marginTop: 6,
-  display: "flex",
-  alignItems: "center",
-  flexWrap: "wrap",
-  gap: 6,
-  fontSize: 12,
-  color: "rgba(255,255,255,0.65)",
-};
-
-const chipStyle: React.CSSProperties = {
-  background: "rgba(58,130,247,0.13)",
-  border: "1px solid rgba(58,130,247,0.32)",
-  color: "#b9d1ff",
-  fontWeight: 700,
-  fontSize: 12,
-  padding: "3px 9px",
-  borderRadius: 999,
-};
-
-const metaDotStyle: React.CSSProperties = {
-  opacity: 0.4,
-};
-
-const cardLastLoadedStyle: React.CSSProperties = {
-  marginTop: 6,
-  fontSize: 11,
-  color: "rgba(255,255,255,0.4)",
-};
-
-const cardActionsStyle: React.CSSProperties = {
-  display: "flex",
-  gap: 8,
-  marginTop: 12,
-};
-
-const loadBtnStyle: React.CSSProperties = {
-  flex: 1.4,
-  background: "#3a82f7",
-  color: "#fff",
-  border: "none",
-  borderRadius: 10,
-  padding: "10px 12px",
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const secondaryBtnStyle: React.CSSProperties = {
-  background: "transparent",
-  color: "#fff",
-  border: "1px solid rgba(255,255,255,0.16)",
-  borderRadius: 10,
-  padding: "10px 14px",
-  fontSize: 14,
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const primaryBtnStyle: React.CSSProperties = {
-  background: "#3a82f7",
-  color: "#fff",
-  border: "none",
-  borderRadius: 10,
-  padding: "12px 18px",
-  fontSize: 15,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const dangerBtnStyle: React.CSSProperties = {
-  background: "transparent",
-  color: "#ff7a7a",
-  border: "1px solid rgba(255, 122, 122, 0.3)",
-  borderRadius: 10,
-  padding: "10px 12px",
-  fontSize: 16,
-  cursor: "pointer",
-};
-
-const dangerSolidBtnStyle: React.CSSProperties = {
-  background: "#ef4444",
-  color: "#fff",
-  border: "none",
-  borderRadius: 10,
-  padding: "12px 16px",
-  fontSize: 15,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const emptyStyle: React.CSSProperties = {
-  padding: 30,
-  textAlign: "center",
-  color: "rgba(255,255,255,0.5)",
-};
-
-const emptyCardStyle: React.CSSProperties = {
-  background: "#11141b",
-  border: "1px solid rgba(255,255,255,0.07)",
-  borderRadius: 14,
-  padding: 24,
-  textAlign: "center",
-};
-
-const emptyTitleStyle: React.CSSProperties = {
-  fontSize: 18,
-  fontWeight: 800,
-  marginBottom: 6,
-};
-
-const emptyBlurbStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: "rgba(255,255,255,0.6)",
-  lineHeight: 1.5,
-  margin: "0 0 16px",
-};
-
-const errorBannerStyle: React.CSSProperties = {
-  background: "rgba(244, 63, 94, 0.1)",
-  border: "1px solid rgba(244, 63, 94, 0.3)",
-  color: "#fda4af",
-  padding: 12,
-  borderRadius: 10,
-  fontSize: 13,
-  marginBottom: 14,
-};
-
-const toastStyle: React.CSSProperties = {
-  position: "fixed",
-  bottom: 100,
-  left: "50%",
-  transform: "translateX(-50%)",
-  background: "rgba(11, 13, 18, 0.96)",
-  color: "#fff",
-  padding: "12px 18px",
-  borderRadius: 999,
-  fontSize: 13,
-  fontWeight: 600,
-  border: "1px solid rgba(255,255,255,0.12)",
-  zIndex: 95,
-  maxWidth: "90%",
-  textAlign: "center",
-};
-
-const backdropStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(6, 8, 12, 0.85)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 200,
-  padding: 20,
-};
-
-const confirmCardStyle: React.CSSProperties = {
-  background: "#11141b",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: 16,
-  padding: 22,
-  maxWidth: 440,
-  width: "100%",
-  color: "#fff",
-};
-
-const editCardStyle: React.CSSProperties = {
-  ...confirmCardStyle,
-  display: "flex",
-  flexDirection: "column",
-  gap: 14,
-};
-
-const confirmTitleStyle: React.CSSProperties = {
-  fontSize: 20,
-  fontWeight: 800,
-  margin: "0 0 8px",
-};
-
-const confirmBodyStyle: React.CSSProperties = {
-  fontSize: 14,
-  color: "rgba(255,255,255,0.7)",
-  lineHeight: 1.5,
-  margin: "0 0 18px",
-};
-
-const confirmActionsStyle: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-  justifyContent: "flex-end",
-};
-
-const editLabelStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 700,
-  color: "rgba(255,255,255,0.85)",
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-};
-
-const editInputStyle: React.CSSProperties = {
-  background: "#0d1017",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "#fff",
-  borderRadius: 8,
-  padding: "10px 12px",
-  fontSize: 15,
-  fontWeight: 500,
-};
-
-const dowChipRowStyle: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 6,
-  marginTop: 6,
-};
-
-const dowChipStyle: React.CSSProperties = {
-  background: "transparent",
-  border: "1px solid rgba(255,255,255,0.16)",
-  color: "#fff",
-  borderRadius: 999,
-  padding: "7px 12px",
-  fontSize: 12,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const dowChipActiveStyle: React.CSSProperties = {
-  background: "rgba(58, 130, 247, 0.2)",
-  borderColor: "#3a82f7",
-};
-
-const tplStepBtn: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 7,
-  border: "1px solid rgba(255,255,255,0.16)",
-  background: "transparent",
-  color: "#fff",
-  fontSize: 17,
-  fontWeight: 700,
-  lineHeight: 1,
-  cursor: "pointer",
-};
