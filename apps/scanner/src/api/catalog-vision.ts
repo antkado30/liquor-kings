@@ -18,6 +18,8 @@ export type VisionExtracted = {
   brand: string;
   product_name: string;
   size_label: string;
+  /** Normalized MLCC bottle size in millilitres (e.g. 750), or null when unreadable. */
+  size_ml?: number | null;
   confidence: "high" | "medium" | "low";
 };
 

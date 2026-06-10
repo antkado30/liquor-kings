@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { askAssistant, formatAssistantError } from "../api/assistant";
 import { downscaleImageFile } from "../lib/downscaleImage";
 import type { CartContextValue } from "../hooks/useCart";
 import {
   IconAlert,
   IconCamera,
-  IconLoader,
   IconPaperclip,
+  IconSparkles,
   IconX,
 } from "./Icons";
 
@@ -27,10 +27,9 @@ const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 
 /** Curated starters — mix of general catalog questions and store ops. */
 const STARTER_PROMPTS = [
-  "Best tequila for margaritas under $30?",
-  "What should I reorder this week?",
-  "Is Crown Royal Apple in MLCC's catalog?",
-  "How many liters do I need per distributor?",
+  "What's my cost on Tito's 750?",
+  "What pairs with a bourbon flight?",
+  "Is a 12-pack of 50ml Smirnoff a valid order?",
   "What's the 9 liter rule?",
 ] as const;
 
@@ -65,7 +64,195 @@ export function buildContextualSuggestions(cart: CartContextValue): string[] {
     out[1] = "Summarize today's orders";
   }
 
-  return [...new Set(out)].slice(0, 5);
+  return [...new Set(out)].slice(0, 4);
+}
+
+type MarkdownBlock =
+  | { type: "paragraph"; text: string }
+  | { type: "ul"; items: string[] }
+  | { type: "ol"; items: string[] }
+  | { type: "table"; headers: string[]; rows: string[][] };
+
+function isTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 2;
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\|[\s\-:|]+\|$/.test(line.trim());
+}
+
+function parseTableRow(line: string): string[] {
+  return line
+    .trim()
+    .slice(1, -1)
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function parseMarkdownBlocks(text: string): MarkdownBlock[] {
+  const lines = text.split("\n");
+  const blocks: MarkdownBlock[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (!line.trim()) {
+      i += 1;
+      continue;
+    }
+
+    if (isTableRow(line)) {
+      const headers = parseTableRow(line);
+      i += 1;
+      if (i < lines.length && isTableSeparator(lines[i])) {
+        i += 1;
+      }
+      const rows: string[][] = [];
+      while (i < lines.length && isTableRow(lines[i]) && !isTableSeparator(lines[i])) {
+        rows.push(parseTableRow(lines[i]));
+        i += 1;
+      }
+      blocks.push({ type: "table", headers, rows });
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line.trim())) {
+      const items: string[] = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^[-*]\s+/, ""));
+        i += 1;
+      }
+      blocks.push({ type: "ul", items });
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(line.trim())) {
+      const items: string[] = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s+/, ""));
+        i += 1;
+      }
+      blocks.push({ type: "ol", items });
+      continue;
+    }
+
+    const paragraphLines: string[] = [line];
+    i += 1;
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !isTableRow(lines[i]) &&
+      !/^[-*]\s+/.test(lines[i].trim()) &&
+      !/^\d+\.\s+/.test(lines[i].trim())
+    ) {
+      paragraphLines.push(lines[i]);
+      i += 1;
+    }
+    blocks.push({ type: "paragraph", text: paragraphLines.join("\n") });
+  }
+
+  return blocks.length ? blocks : [{ type: "paragraph", text }];
+}
+
+function renderInline(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const re = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  let index = 0;
+
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) {
+      nodes.push(text.slice(last, match.index));
+    }
+    if (match[2]) {
+      nodes.push(<strong key={`${keyPrefix}-b${index}`}>{match[2]}</strong>);
+    } else if (match[3]) {
+      nodes.push(<em key={`${keyPrefix}-i${index}`}>{match[3]}</em>);
+    } else if (match[4]) {
+      nodes.push(
+        <code key={`${keyPrefix}-c${index}`} className="assistant-md__code">
+          {match[4]}
+        </code>,
+      );
+    }
+    last = match.index + match[0].length;
+    index += 1;
+  }
+
+  if (last < text.length) {
+    nodes.push(text.slice(last));
+  }
+
+  return nodes.length ? nodes : [text];
+}
+
+function AssistantMarkdown({ text }: { text: string }) {
+  const blocks = useMemo(() => parseMarkdownBlocks(text), [text]);
+
+  return (
+    <div className="assistant-md">
+      {blocks.map((block, blockIndex) => {
+        if (block.type === "paragraph") {
+          return (
+            <p key={`p-${blockIndex}`} className="assistant-md__p">
+              {renderInline(block.text, `p-${blockIndex}`)}
+            </p>
+          );
+        }
+        if (block.type === "ul") {
+          return (
+            <ul key={`ul-${blockIndex}`} className="assistant-md__ul">
+              {block.items.map((item, itemIndex) => (
+                <li key={`ul-${blockIndex}-${itemIndex}`}>
+                  {renderInline(item, `ul-${blockIndex}-${itemIndex}`)}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        if (block.type === "ol") {
+          return (
+            <ol key={`ol-${blockIndex}`} className="assistant-md__ol">
+              {block.items.map((item, itemIndex) => (
+                <li key={`ol-${blockIndex}-${itemIndex}`}>
+                  {renderInline(item, `ol-${blockIndex}-${itemIndex}`)}
+                </li>
+              ))}
+            </ol>
+          );
+        }
+        return (
+          <div key={`table-${blockIndex}`} className="assistant-md__table-wrap">
+            <table className="assistant-md__table">
+              <thead>
+                <tr>
+                  {block.headers.map((header, headerIndex) => (
+                    <th key={`th-${blockIndex}-${headerIndex}`}>
+                      {renderInline(header, `th-${blockIndex}-${headerIndex}`)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {block.rows.map((row, rowIndex) => (
+                  <tr key={`tr-${blockIndex}-${rowIndex}`}>
+                    {row.map((cell, cellIndex) => (
+                      <td key={`td-${blockIndex}-${rowIndex}-${cellIndex}`}>
+                        {renderInline(cell, `td-${blockIndex}-${rowIndex}-${cellIndex}`)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 type AssistantChatProps = {
@@ -98,7 +285,7 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
     () =>
       cart
         ? buildContextualSuggestions(cart)
-        : [...STARTER_PROMPTS].slice(0, 5),
+        : [...STARTER_PROMPTS].slice(0, 4),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [cart?.items.length],
   );
@@ -209,13 +396,16 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
       >
         {showSuggestions ? (
           <div className="assistant-empty">
-            <p className="muted">
-              Ask anything about your catalog, pricing, MLCC rules, or orders.
-              Attach a photo from your camera roll or take one live.
-            </p>
-            <p className="muted small" style={{ marginTop: 8 }}>
-              Try one of these:
-            </p>
+            <div className="assistant-empty__hero">
+              <span className="assistant-empty__icon" aria-hidden>
+                <IconSparkles size={28} strokeWidth={1.8} />
+              </span>
+              <h2 className="assistant-empty__title">How can I help?</h2>
+              <p className="assistant-empty__desc muted">
+                Ask about your catalog, pricing, MLCC rules, or orders. Attach a
+                photo from your library or take one live.
+              </p>
+            </div>
             <div className="assistant-suggestions" role="list">
               {suggestions.map((s) => (
                 <button
@@ -234,70 +424,67 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
         ) : (
           messages.map((m) => (
             <div key={m.id} className={`assistant-msg assistant-msg--${m.role}`}>
-              {m.imagePreview ? (
-                <img
-                  src={m.imagePreview}
-                  alt=""
-                  className="assistant-msg-image"
-                />
-              ) : null}
-              {m.text}
+              <div className="assistant-msg__bubble">
+                {m.imagePreview ? (
+                  <img
+                    src={m.imagePreview}
+                    alt=""
+                    className="assistant-msg-image"
+                  />
+                ) : null}
+                {m.role === "assistant" ? (
+                  <AssistantMarkdown text={m.text} />
+                ) : (
+                  <p className="assistant-msg__text">{m.text}</p>
+                )}
+              </div>
             </div>
           ))
         )}
 
         {isAsking ? (
           <div
-            className="assistant-msg assistant-msg--assistant assistant-msg--loading"
+            className="assistant-msg assistant-msg--assistant assistant-msg--thinking"
             aria-label="Assistant is thinking"
           >
-            <span
-              className="settings-spinner"
-              style={{ display: "inline-flex", marginRight: 8, verticalAlign: "middle" }}
-              aria-hidden
-            >
-              <IconLoader size={16} strokeWidth={2} />
-            </span>
-            Thinking…
+            <div className="assistant-msg__bubble">
+              <div className="assistant-thinking">
+                <span className="assistant-thinking__dots" aria-hidden>
+                  <span className="assistant-thinking__dot" />
+                  <span className="assistant-thinking__dot" />
+                  <span className="assistant-thinking__dot" />
+                </span>
+                <span className="assistant-thinking__label">Thinking</span>
+              </div>
+            </div>
           </div>
         ) : null}
 
         {askError && !isAsking ? (
           <div
-            className="assistant-msg assistant-msg--assistant"
+            className="assistant-msg assistant-msg--assistant assistant-msg--error"
             role="alert"
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 10,
-              border: "1px solid rgba(248, 113, 113, 0.35)",
-              background: "rgba(248, 113, 113, 0.1)",
-            }}
           >
-            <span style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-              <IconAlert
-                size={18}
-                strokeWidth={2}
-                style={{ flexShrink: 0, marginTop: 2, color: "#fecaca" }}
-                aria-hidden
-              />
-              <span>{askError}</span>
-            </span>
-            <button
-              type="button"
-              className="btn secondary"
-              onClick={retryLastAsk}
-              disabled={!failedAsk}
-              style={{ alignSelf: "flex-start" }}
-            >
-              Retry
-            </button>
+            <div className="assistant-msg__bubble assistant-msg__bubble--error">
+              <span className="assistant-error">
+                <IconAlert size={18} strokeWidth={2} aria-hidden />
+                <span>{askError}</span>
+              </span>
+              <button
+                type="button"
+                className="btn secondary assistant-error__retry"
+                onClick={retryLastAsk}
+                disabled={!failedAsk}
+              >
+                Retry
+              </button>
+            </div>
           </div>
         ) : null}
       </div>
 
       {imageError ? (
-        <p className="banner banner-err" role="alert">
+        <p className="banner banner-err assistant-composer__banner" role="alert">
           {imageError}
         </p>
       ) : null}
@@ -321,7 +508,7 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
       ) : null}
 
       <form
-        className="assistant-input-row"
+        className="assistant-composer"
         onSubmit={(e) => {
           e.preventDefault();
           submit(input);
@@ -352,36 +539,42 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
             e.target.value = "";
           }}
         />
-        <button
-          type="button"
-          className="assistant-attach-btn"
-          onClick={() => galleryInputRef.current?.click()}
-          disabled={isAsking || imageBusy}
-          aria-label="Attach photo from library"
-        >
-          <IconPaperclip size={20} strokeWidth={1.85} />
-        </button>
-        <button
-          type="button"
-          className="assistant-attach-btn"
-          onClick={() => cameraInputRef.current?.click()}
-          disabled={isAsking || imageBusy}
-          aria-label="Take a photo"
-        >
-          <IconCamera size={20} strokeWidth={1.85} />
-        </button>
-        <input
-          type="text"
-          className="assistant-input"
-          placeholder="Ask the assistant…"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          disabled={isAsking || imageBusy}
-          aria-label="Ask the assistant"
-        />
-        <button type="submit" className="btn primary" disabled={!canSend}>
-          Send
-        </button>
+        <div className="assistant-input-row">
+          <button
+            type="button"
+            className="assistant-attach-btn"
+            onClick={() => galleryInputRef.current?.click()}
+            disabled={isAsking || imageBusy}
+            aria-label="Attach photo from library"
+          >
+            <IconPaperclip size={20} strokeWidth={1.85} />
+          </button>
+          <button
+            type="button"
+            className="assistant-attach-btn"
+            onClick={() => cameraInputRef.current?.click()}
+            disabled={isAsking || imageBusy}
+            aria-label="Take a photo"
+          >
+            <IconCamera size={20} strokeWidth={1.85} />
+          </button>
+          <input
+            type="text"
+            className="assistant-input"
+            placeholder="Ask the assistant…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            disabled={isAsking || imageBusy}
+            aria-label="Ask the assistant"
+          />
+          <button
+            type="submit"
+            className="btn primary assistant-send-btn"
+            disabled={!canSend}
+          >
+            Send
+          </button>
+        </div>
       </form>
     </div>
   );

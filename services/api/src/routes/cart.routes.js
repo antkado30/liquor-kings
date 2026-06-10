@@ -348,64 +348,29 @@ router.post("/:storeId/items", async (req, res) => {
     cart = newCart;
   }
 
-  const { data: existingItem, error: existingItemError } = await supabase
-    .from("cart_items")
-    .select("*")
-    .eq("cart_id", cart.id)
-    .eq("bottle_id", resolvedBottleId)
-    // (cart_id, bottle_id) has NO unique constraint, so a race (two fast adds)
-    // can leave dup rows — .maybeSingle() would then 500 on the next add.
-    // Take the oldest row deterministically. (TODO: add a unique index +
-    // dedupe migration to prevent the dup at the source.)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  // Atomic insert-or-increment via the add_cart_item RPC. The UNIQUE index on
+  // (cart_id, bottle_id) + ON CONFLICT DO UPDATE makes this fully race-safe:
+  // two fast adds can never leave duplicate rows, there's no read-then-write
+  // window, and it's a single round-trip instead of select+update/insert.
+  // (Replaces the old select→insert/update path, 2026-06-09.)
+  const { data: rpcResult, error: addError } = await supabase.rpc(
+    "add_cart_item",
+    {
+      p_cart_id: cart.id,
+      p_bottle_id: resolvedBottleId,
+      p_mlcc_item_id: mlccItem.id,
+      p_store_id: storeId,
+      p_qty: qty,
+    },
+  );
 
-  if (existingItemError) {
-    return res.status(500).json({ error: existingItemError.message });
+  if (addError) {
+    return res.status(500).json({ error: addError.message });
   }
 
-  let savedItem;
-
-  if (existingItem) {
-    const newQuantity = existingItem.quantity + qty;
-
-    const { data: updatedItem, error: updateError } = await supabase
-      .from("cart_items")
-      .update({
-        quantity: newQuantity,
-        mlcc_item_id: mlccItem.id,
-        store_id: storeId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", existingItem.id)
-      .select("*")
-      .single();
-
-    if (updateError) {
-      return res.status(500).json({ error: updateError.message });
-    }
-
-    savedItem = updatedItem;
-  } else {
-    const { data: newItem, error: insertError } = await supabase
-      .from("cart_items")
-      .insert({
-        cart_id: cart.id,
-        bottle_id: resolvedBottleId,
-        mlcc_item_id: mlccItem.id,
-        store_id: storeId,
-        quantity: qty,
-      })
-      .select("*")
-      .single();
-
-    if (insertError) {
-      return res.status(500).json({ error: insertError.message });
-    }
-
-    savedItem = newItem;
-  }
+  // A function returning a single composite comes back as the row object, but
+  // tolerate an array shape too (defensive against PostgREST version quirks).
+  const savedItem = Array.isArray(rpcResult) ? rpcResult[0] : rpcResult;
 
   res.status(201).json({
     success: true,

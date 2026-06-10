@@ -9,8 +9,8 @@
  *   - Top: BIG AI Assistant card (purple gradient, sparkles icon,
  *     "Ask anything about your store" tagline). This is the moat,
  *     make it impossible to miss.
- *   - Then the rest as standard rows: Orders, Dashboard, Inventory
- *     (Coming Soon), Settings.
+ *   - Then the rest as standard rows: Templates, Orders, Analytics,
+ *     Inventory, Settings — all live.
  *   - Sign-out at the bottom.
  */
 import { useState } from "react";
@@ -33,7 +33,6 @@ type MenuItem = {
   label: string;
   blurb: string;
   onTap: () => void;
-  comingSoon?: boolean;
 };
 
 export function MorePage() {
@@ -113,30 +112,19 @@ export function MorePage() {
           return (
             <li
               key={item.label}
-              style={{
-                ...rowStyle,
-                opacity: item.comingSoon ? 0.55 : 1,
-                cursor: item.comingSoon ? "default" : "pointer",
-              }}
-              onClick={() => !item.comingSoon && item.onTap()}
+              style={{ ...rowStyle, cursor: "pointer" }}
+              onClick={() => item.onTap()}
             >
               <span style={iconWrapStyle}>
                 <Icon size={22} strokeWidth={1.75} />
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={rowTitleStyle}>
-                  {item.label}
-                  {item.comingSoon ? (
-                    <span style={comingSoonBadgeStyle}>Coming soon</span>
-                  ) : null}
-                </div>
+                <div style={rowTitleStyle}>{item.label}</div>
                 <div style={rowBlurbStyle}>{item.blurb}</div>
               </div>
-              {!item.comingSoon ? (
-                <span style={chevronStyle}>
-                  <IconChevronRight size={20} />
-                </span>
-              ) : null}
+              <span style={chevronStyle}>
+                <IconChevronRight size={20} />
+              </span>
             </li>
           );
         })}
@@ -325,18 +313,6 @@ const rowBlurbStyle: React.CSSProperties = {
 const chevronStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.3)",
   display: "inline-flex",
-};
-
-const comingSoonBadgeStyle: React.CSSProperties = {
-  fontSize: 10,
-  background: "rgba(245, 158, 11, 0.16)",
-  color: "#fde6b3",
-  border: "1px solid rgba(245, 158, 11, 0.35)",
-  borderRadius: 999,
-  padding: "2px 8px",
-  fontWeight: 700,
-  textTransform: "uppercase",
-  letterSpacing: "0.05em",
 };
 
 /* ─── Sign out ────────────────────────────────────────────────────── */

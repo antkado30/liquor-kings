@@ -372,7 +372,10 @@ function applyTokenAndSearchToQuery(q, search) {
   if (tokens.length === 0) {
     // No significant tokens — fall back to substring on the raw search
     const original = escapeIlikeOrToken(search);
-    return q.or(`name.ilike.%${original}%,code.ilike.%${original}%`);
+    const spaceFree = original.replace(/\s+/g, "");
+    return q.or(
+      `name.ilike.%${original}%,name_normalized.ilike.%${original}%,name_searchable.ilike.%${spaceFree}%,code.ilike.%${original}%`,
+    );
   }
 
   for (const token of tokens) {
@@ -382,6 +385,11 @@ function applyTokenAndSearchToQuery(q, search) {
     for (const v of variants) {
       orParts.push(`name.ilike.%${v}%`);
       orParts.push(`name_normalized.ilike.%${v}%`);
+      // name_searchable strips spaces too, so a combined-word query token
+      // (e.g. "rumchata") matches a spaced catalog name and vice-versa.
+      // Purely additive — never removes a match that name_normalized makes.
+      // (MLCC name-weirdness fix, 2026-06-09.)
+      orParts.push(`name_searchable.ilike.%${v}%`);
     }
     // Also let the original token match `code` directly (numeric code search)
     orParts.push(`code.ilike.%${escapeIlikeOrToken(token)}%`);

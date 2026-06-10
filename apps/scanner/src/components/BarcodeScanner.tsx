@@ -4,49 +4,34 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Sentry } from "../lib/sentry";
+import { IconCamera, IconFileText } from "./Icons";
 
 type BarcodeScannerProps = {
   onScan: (code: string) => void;
   active: boolean;
-  /**
-   * Optional — fires when the user taps "Take a photo" from the
-   * trouble-hint panel (task #37 fallback). Receives a JPEG data URI
-   * captured from the current video frame. Parent handles the API
-   * call + result UI. Without this prop, the button is hidden.
-   */
   onPhotoCapture?: (jpegDataUri: string) => void | Promise<void>;
-  /**
-   * Home simplification 2026-06-02: when true, hides the manual MLCC
-   * code input AND the trouble-hint panel. The parent provides its
-   * own unified search bar instead (handles both name + code lookup).
-   * The camera + aim rectangle remain.
-   */
   hideManualInput?: boolean;
 };
 
 const COOLDOWN_MS = 2000;
 const DETECT_INTERVAL_MS = 220;
 const ZXING_COOLDOWN_MS = 200;
-/*
-  Time (ms) of continuous scanning with no successful read before we
-  show the "trouble scanning?" hint. Tuned to feel natural: under 5s
-  is too aggressive (interrupts during normal aim), >12s is too late
-  (user already gave up). 8s is the sweet spot we landed on based on
-  Tony's 23-min Captain Morgan plastic-shot failure 2026-06-01.
-*/
 const TROUBLE_HINT_MS = 8000;
-
-/*
-  Tighter focusing window for the BarcodeDetector. Higher resolution
-  means more pixels per barcode, which dramatically improves recognition
-  of small/curved labels (50ml shots, pints). 1280×720 is the iPhone
-  rear-cam default sweet spot — bigger and the frame analysis slows
-  down without giving the decoder more info.
-*/
 const VIDEO_IDEAL_WIDTH = 1280;
 const VIDEO_IDEAL_HEIGHT = 720;
+const ROTATIONS = [0, 90, 180, 270] as const;
 
 type ZxDecodeHintType = import("@zxing/library").DecodeHintType;
+
+type ZxingCanvasReader = {
+  decodeFromCanvas?: (
+    canvas: HTMLCanvasElement,
+  ) => Promise<{ getText(): string }>;
+  decodeFromCanvasElement?: (
+    canvas: HTMLCanvasElement,
+  ) => Promise<{ getText(): string }>;
+  reset?: () => void;
+};
 
 async function buildZxingDecodeHints(): Promise<Map<ZxDecodeHintType, unknown> | null> {
   let lib: typeof import("@zxing/library");
@@ -79,6 +64,79 @@ async function buildZxingDecodeHints(): Promise<Map<ZxDecodeHintType, unknown> |
   return hints;
 }
 
+function rotateCanvas(source: HTMLCanvasElement, degrees: number): HTMLCanvasElement {
+  if (degrees === 0) return source;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return source;
+  const w = source.width;
+  const h = source.height;
+  if (degrees === 90 || degrees === 270) {
+    canvas.width = h;
+    canvas.height = w;
+  } else {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate((degrees * Math.PI) / 180);
+  ctx.drawImage(source, -w / 2, -h / 2);
+  return canvas;
+}
+
+async function tryDecodeCanvas(
+  reader: ZxingCanvasReader,
+  canvas: HTMLCanvasElement,
+): Promise<string | null> {
+  const decode = reader.decodeFromCanvas ?? reader.decodeFromCanvasElement;
+  if (!decode) return null;
+  try {
+    const result = await decode.call(reader, canvas);
+    const raw = result.getText().trim();
+    return raw || null;
+  } catch {
+    return null;
+  }
+}
+
+async function decodeBarcodeFromCanvas(
+  reader: ZxingCanvasReader,
+  sourceCanvas: HTMLCanvasElement,
+): Promise<string | null> {
+  for (const degrees of ROTATIONS) {
+    const canvas = degrees === 0 ? sourceCanvas : rotateCanvas(sourceCanvas, degrees);
+    const code = await tryDecodeCanvas(reader, canvas);
+    if (code) return code;
+  }
+  return null;
+}
+
+function captureVideoFrame(video: HTMLVideoElement): HTMLCanvasElement | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth || VIDEO_IDEAL_WIDTH;
+  canvas.height = video.videoHeight || VIDEO_IDEAL_HEIGHT;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function loadImageFile(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Could not read image file."));
+    };
+    img.src = objectUrl;
+  });
+}
+
 type NativeBarcodeDetector = {
   detect(image: ImageBitmapSource): Promise<Array<{ rawValue?: string; format?: string }>>;
 };
@@ -93,24 +151,12 @@ declare global {
 
 type ScannerEngine = "native" | "zxing" | "unsupported";
 
-/**
- * Categorize getUserMedia failure modes so we can render a helpful
- * device-specific message instead of "Camera unavailable" for everything.
- *
- * Refs:
- *   https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia#exceptions
- *
- * iOS Safari specifically throws NotAllowedError when the user previously
- * tapped "Don't Allow" — and the only way to re-enable is via Settings
- * (the in-page prompt won't re-appear). That UX is unintuitive enough
- * that we surface explicit instructions for it.
- */
 type CameraFailureKind =
-  | "permission_denied" // NotAllowedError — user actively denied
-  | "no_camera_found" // NotFoundError / DevicesNotFoundError
-  | "in_use" // NotReadableError — another app/tab has the camera
-  | "constraints" // OverconstrainedError / ConstraintNotSatisfiedError
-  | "insecure_context" // SecurityError / non-HTTPS
+  | "permission_denied"
+  | "no_camera_found"
+  | "in_use"
+  | "constraints"
+  | "insecure_context"
   | "unknown";
 
 function categorizeCameraError(err: unknown): CameraFailureKind {
@@ -133,7 +179,6 @@ function categorizeCameraError(err: unknown): CameraFailureKind {
 
 function isIos(): boolean {
   if (typeof navigator === "undefined") return false;
-  // Modern iPads identify as Mac; detect the touch-on-Mac quirk.
   const ua = navigator.userAgent || "";
   return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && typeof document !== "undefined" && "ontouchend" in document);
 }
@@ -177,19 +222,6 @@ function hasCameraSupport(): boolean {
   return typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getUserMedia === "function";
 }
 
-/*
-  Try to coax the active video track into continuous autofocus +
-  whatever focal helpers the device exposes. This is the SINGLE LARGEST
-  reliability improvement for handheld scanning of small/curved labels
-  — without it, the camera locks focus where it was when the stream
-  started and the user has to physically position the bottle at that
-  distance. With it, focus follows the bottle as the user moves.
-
-  We probe capabilities first and only request supported modes (passing
-  unsupported modes throws OverconstrainedError on iOS Safari). Quiet
-  failures are fine — the camera still works without continuous focus,
-  just less well on small labels.
-*/
 async function applyAutofocusEnhancements(
   track: MediaStreamTrack,
 ): Promise<void> {
@@ -214,45 +246,40 @@ async function applyAutofocusEnhancements(
     if (advanced.length === 0) return;
     await track.applyConstraints({ advanced } as MediaTrackConstraints);
   } catch (err) {
-    // Non-fatal — log and continue. The video stream is still usable
-    // without continuous focus, just less reliable on small labels.
     console.warn("[BarcodeScanner] continuous-focus apply failed (continuing without)", err);
   }
 }
 
-export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput = false }: BarcodeScannerProps) {
+export function BarcodeScanner({
+  onScan,
+  active,
+  onPhotoCapture,
+  hideManualInput = false,
+}: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectorRef = useRef<NativeBarcodeDetector | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const zxingReaderRef = useRef<ZxingCanvasReader | null>(null);
   const zxingResetRef = useRef<(() => void) | null>(null);
-  const zxingControlsRef = useRef<{ stop: () => void } | null>(null);
+  const barcodePhotoInputRef = useRef<HTMLInputElement>(null);
   const lastScanRef = useRef(0);
   const lastZxingScanRef = useRef<{ code: string; at: number } | null>(null);
   const [scanning, setScanning] = useState(false);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState("");
   const [engine, setEngine] = useState<ScannerEngine>("unsupported");
-  /*
-    Becomes true if we've been scanning for TROUBLE_HINT_MS without a
-    successful read. Drives the "Having trouble?" prompt with manual-
-    entry / search shortcuts. Reset whenever a scan succeeds — see the
-    handleScan wrapper below.
-  */
   const [showTroubleHint, setShowTroubleHint] = useState(false);
+  const [barcodePhotoBusy, setBarcodePhotoBusy] = useState(false);
+  const [barcodePhotoError, setBarcodePhotoError] = useState<string | null>(null);
   const troubleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /*
-    Wrap the prop's onScan so we can reset the trouble-hint timer on
-    every successful read. Without this, the hint would stay up forever
-    after one bad scan, even after subsequent scans succeed.
-  */
   const handleSuccessfulScan = useCallback(
     (code: string) => {
       setShowTroubleHint(false);
+      setBarcodePhotoError(null);
       if (troubleTimerRef.current) {
         clearTimeout(troubleTimerRef.current);
-        // Restart the timer for the next scan attempt.
         troubleTimerRef.current = setTimeout(
           () => setShowTroubleHint(true),
           TROUBLE_HINT_MS,
@@ -316,8 +343,7 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     detectorRef.current = null;
-    zxingControlsRef.current?.stop();
-    zxingControlsRef.current = null;
+    zxingReaderRef.current = null;
     zxingResetRef.current?.();
     zxingResetRef.current = null;
     setScanning(false);
@@ -343,15 +369,6 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
           const detector = new Detector({ formats }) as NativeBarcodeDetector;
           detectorRef.current = detector;
 
-          /*
-            Camera constraints upgrade (task #60, 2026-06-01). We request
-            1280×720 (ideal) so the BarcodeDetector gets enough pixels
-            per barcode to read curved/small labels on plastic shots.
-            facingMode: "environment" stays — back camera. After the
-            stream starts, applyAutofocusEnhancements probes the track's
-            capabilities and turns on continuous focus / exposure /
-            white-balance for whatever the device supports.
-          */
           const stream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: "environment",
@@ -411,8 +428,6 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
           setPermissionError(cameraFailureMessage("unknown"));
           return;
         }
-        // Same higher-res + continuous-focus pass as the native path
-        // (task #60). ZXing benefits from the larger frame too.
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
@@ -430,33 +445,51 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
         if (zxTrack) {
           void applyAutofocusEnhancements(zxTrack);
         }
-        const readerOptions = { delayBetweenScanSuccess: 200 };
+        if (v) {
+          v.srcObject = stream;
+          await v.play().catch(() => {});
+        }
+
         let reader: InstanceType<typeof BrowserMultiFormatReader>;
         try {
           const hints = await buildZxingDecodeHints();
           reader = hints
-            ? new BrowserMultiFormatReader(hints, readerOptions)
-            : new BrowserMultiFormatReader(undefined, readerOptions);
+            ? new BrowserMultiFormatReader(hints, { delayBetweenScanSuccess: 200 })
+            : new BrowserMultiFormatReader(undefined, { delayBetweenScanSuccess: 200 });
         } catch (hintErr) {
           console.warn("[BarcodeScanner] ZXing decode hints failed; using default reader", hintErr);
           reportCameraError(hintErr);
-          reader = new BrowserMultiFormatReader(undefined, readerOptions);
+          reader = new BrowserMultiFormatReader(undefined, { delayBetweenScanSuccess: 200 });
         }
+
+        zxingReaderRef.current = reader as unknown as ZxingCanvasReader;
         zxingResetRef.current = () => {
           (reader as unknown as { reset?: () => void }).reset?.();
         };
-        const controls = await reader.decodeFromStream(stream, v, (result) => {
-          if (!result) return;
-          const raw = result.getText().trim();
-          if (!raw) return;
-          const now = Date.now();
-          const prev = lastZxingScanRef.current;
-          if (prev && prev.code === raw && now - prev.at < ZXING_COOLDOWN_MS) return;
-          lastZxingScanRef.current = { code: raw, at: now };
-          handleSuccessfulScan(raw);
-        });
-        zxingControlsRef.current = controls;
+
         setScanning(true);
+
+        timerRef.current = setInterval(() => {
+          void (async () => {
+            const vid = videoRef.current;
+            const zxReader = zxingReaderRef.current;
+            if (!vid || !zxReader || vid.readyState < 2) return;
+            const now = Date.now();
+            if (now - lastScanRef.current < COOLDOWN_MS) return;
+
+            const canvas = captureVideoFrame(vid);
+            if (!canvas) return;
+
+            const raw = await decodeBarcodeFromCanvas(zxReader, canvas);
+            if (!raw) return;
+
+            const prev = lastZxingScanRef.current;
+            if (prev && prev.code === raw && now - prev.at < ZXING_COOLDOWN_MS) return;
+            lastZxingScanRef.current = { code: raw, at: now };
+            lastScanRef.current = now;
+            handleSuccessfulScan(raw);
+          })();
+        }, DETECT_INTERVAL_MS);
       } catch (error) {
         reportCameraError(error);
         setPermissionError(cameraFailureMessage(categorizeCameraError(error)));
@@ -470,15 +503,8 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
       cancelled = true;
       stopCamera();
     };
-  }, [active, engine, onScan, reportCameraError, stopCamera]);
+  }, [active, engine, handleSuccessfulScan, reportCameraError, stopCamera]);
 
-  /*
-    Trouble-hint timer (task #60, 2026-06-01). When scanning starts,
-    arm a TROUBLE_HINT_MS timer. If the user successfully scans before
-    it fires, handleSuccessfulScan resets it. If it fires, we render
-    the "Having trouble?" prompt below the video to surface manual
-    entry / search. This is the soft fallback before #37 ships.
-  */
   useEffect(() => {
     if (troubleTimerRef.current) {
       clearTimeout(troubleTimerRef.current);
@@ -508,18 +534,6 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
     }
   };
 
-  /*
-    Capture the current video frame to a JPEG data URI and emit it to
-    the parent (task #37, 2026-06-01). Used by the "Take a photo"
-    button in the trouble panel. We draw the video to an offscreen
-    canvas at its native resolution (which is whatever
-    applyAutofocusEnhancements + the 1280×720 ideal request landed on),
-    then toDataURL gives us the base64 to ship.
-
-    JPEG quality 0.85 is the sweet spot — enough for vision OCR + label
-    recognition, small enough to not balloon the upload (typical
-    output ~80-150 KB for a 1280×720 frame).
-  */
   const handlePhotoTap = () => {
     if (!onPhotoCapture) return;
     const vid = videoRef.current;
@@ -528,18 +542,91 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
       return;
     }
     try {
-      const canvas = document.createElement("canvas");
-      canvas.width = vid.videoWidth || 1280;
-      canvas.height = vid.videoHeight || 720;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+      const canvas = captureVideoFrame(vid);
+      if (!canvas) return;
       const dataUri = canvas.toDataURL("image/jpeg", 0.85);
       void onPhotoCapture(dataUri);
     } catch (err) {
       console.warn("[BarcodeScanner] frame capture failed", err);
     }
   };
+
+  const handleBarcodePhotoFile = async (file: File | undefined) => {
+    if (!file || !file.type.startsWith("image/")) {
+      setBarcodePhotoError("Please choose a photo that includes the barcode.");
+      return;
+    }
+    setBarcodePhotoBusy(true);
+    setBarcodePhotoError(null);
+    try {
+      const img = await loadImageFile(file);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        setBarcodePhotoError("Couldn't process that photo.");
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+
+      const { BrowserMultiFormatReader } = await import("@zxing/browser");
+      let reader: InstanceType<typeof BrowserMultiFormatReader>;
+      try {
+        const hints = await buildZxingDecodeHints();
+        reader = hints
+          ? new BrowserMultiFormatReader(hints)
+          : new BrowserMultiFormatReader();
+      } catch {
+        reader = new BrowserMultiFormatReader();
+      }
+
+      const code = await decodeBarcodeFromCanvas(
+        reader as unknown as ZxingCanvasReader,
+        canvas,
+      );
+      if (code) {
+        handleSuccessfulScan(code);
+      } else {
+        setBarcodePhotoError(
+          "Couldn't read a barcode in that photo — try getting closer or use \"Take a photo of the bottle\" instead.",
+        );
+      }
+    } catch (err) {
+      console.warn("[BarcodeScanner] barcode photo decode failed", err);
+      setBarcodePhotoError(
+        "Couldn't read a barcode in that photo — try getting closer or use \"Take a photo of the bottle\" instead.",
+      );
+    } finally {
+      setBarcodePhotoBusy(false);
+    }
+  };
+
+  const photoFallbackButtons = (
+    <div className="scanner-photo-actions">
+      {onPhotoCapture ? (
+        <button
+          type="button"
+          className="scanner-photo-compact-btn"
+          onClick={handlePhotoTap}
+          aria-label="Take a photo to identify the bottle"
+        >
+          <IconCamera size={18} strokeWidth={1.9} aria-hidden />
+          Take a photo of the bottle
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="scanner-photo-compact-btn scanner-photo-compact-btn--secondary"
+        onClick={() => barcodePhotoInputRef.current?.click()}
+        disabled={barcodePhotoBusy}
+        aria-label="Scan barcode from a photo"
+      >
+        <IconFileText size={18} strokeWidth={1.9} aria-hidden />
+        {barcodePhotoBusy ? "Reading barcode…" : "Scan barcode from photo"}
+      </button>
+    </div>
+  );
 
   return (
     <section className="scanner-panel">
@@ -550,13 +637,6 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
         <>
           <div className="scanner-video-wrap">
             <video ref={videoRef} className="scanner-video" playsInline muted />
-            {/*
-              Visual aim rectangle (task #60). Gives the user a clear
-              "point here" target instead of a blank video frame. The
-              dashed inner box matches the BarcodeDetector's sweet spot
-              for label-sized barcodes. Pointer-events:none so it
-              never blocks the manual-entry field below.
-            */}
             {scanning ? (
               <div className="scanner-aim-rect" aria-hidden>
                 <span className="scanner-aim-corner scanner-aim-corner--tl" />
@@ -572,33 +652,32 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
               </div>
             ) : null}
           </div>
-          <p className="muted small">{engine === "native" ? "Using native scanner" : "Using ZXing fallback"}</p>
-          {/*
-            Trouble-scanning prompt (task #60). Renders after
-            TROUBLE_HINT_MS of unsuccessful scanning. Surfaces the
-            highest-leverage fallback inline so the user doesn't have
-            to remember the manual input field exists below. The
-            "Type code instead" button focuses the manual input so
-            the next tap puts the cursor where it needs to be.
-          */}
-          {/*
-            Home simplification 2026-06-02 (Tony's request): the verbose
-            trouble panel + separate manual input have been replaced by
-            a single compact "Take a photo" button that's always visible
-            below the camera (when onPhotoCapture is wired and
-            hideManualInput is on). Parent provides a unified search bar
-            for both name search AND code entry.
-          */}
-          {hideManualInput && onPhotoCapture ? (
-            <button
-              type="button"
-              className="scanner-photo-compact-btn"
-              onClick={handlePhotoTap}
-              aria-label="Take a photo to identify the bottle"
-            >
-              📷 Take a photo of the bottle
-            </button>
-          ) : showTroubleHint ? (
+          <p className="muted small">
+            {engine === "native" ? "Using native scanner" : "Using ZXing fallback"}
+          </p>
+
+          <input
+            ref={barcodePhotoInputRef}
+            type="file"
+            accept="image/*"
+            className="scanner-file-input"
+            aria-hidden
+            tabIndex={-1}
+            onChange={(e) => {
+              void handleBarcodePhotoFile(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+
+          {hideManualInput ? photoFallbackButtons : null}
+
+          {barcodePhotoError ? (
+            <p className="scanner-photo-error banner banner-warn" role="alert">
+              {barcodePhotoError}
+            </p>
+          ) : null}
+
+          {!hideManualInput && showTroubleHint ? (
             <div className="scanner-trouble" role="status">
               <strong>Can&apos;t read the barcode?</strong>
               <p className="muted small">
@@ -612,9 +691,19 @@ export function BarcodeScanner({ onScan, active, onPhotoCapture, hideManualInput
                     className="btn primary"
                     onClick={handlePhotoTap}
                   >
-                    📷 Take a photo
+                    <IconCamera size={16} strokeWidth={1.9} aria-hidden />
+                    Take a photo
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={() => barcodePhotoInputRef.current?.click()}
+                  disabled={barcodePhotoBusy}
+                >
+                  <IconFileText size={16} strokeWidth={1.9} aria-hidden />
+                  Scan from photo
+                </button>
                 <button
                   type="button"
                   className="btn secondary"

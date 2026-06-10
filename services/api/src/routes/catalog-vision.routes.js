@@ -61,7 +61,7 @@ const SYSTEM_PROMPT = `You identify liquor bottles from photos. The user is in a
 Look at the image and identify:
 - brand: the brand name (e.g. "Tito's", "Captain Morgan", "Jack Daniel's")
 - product_name: the specific variant if visible (e.g. "Handmade Vodka", "Original Spiced Rum", "Old No. 7 Black Label"). If you can only read the brand, leave this empty.
-- size_label: the bottle size if visible on the label (e.g. "750ml", "50ml", "1.75L", "1L", "375ml"). If not visible, leave this empty.
+- size_label: the bottle's size. Read it from the label if it's printed (e.g. "750ml", "50ml", "1.75L", "1L", "375ml"). If the printed size isn't legible but the bottle's proportions make the size obvious, give your best estimate as the nearest standard size. Michigan liquor sizes are 50ml, 100ml, 200ml, 375ml, 750ml, 1L, and 1.75L — always pick the closest one of these. Only leave it empty if you genuinely cannot tell the size at all.
 - confidence: your confidence in the identification — "high" (the brand and product are clearly visible and unambiguous), "medium" (you're reasonably sure but the label is partially obscured or the photo is unclear), or "low" (you're guessing).
 
 If the image does NOT show a liquor bottle (e.g. blank, blurry, something else entirely), set brand and product_name to empty strings and confidence to "low".
@@ -138,7 +138,15 @@ function normalizeExtracted(raw) {
     confidenceRaw === "high" || confidenceRaw === "medium" || confidenceRaw === "low"
       ? confidenceRaw
       : "low";
-  return { brand, product_name: productName, size_label: sizeLabel, confidence };
+  return {
+    brand,
+    product_name: productName,
+    size_label: sizeLabel,
+    // Normalized + snapped millilitres (null when unreadable). Lets the
+    // catalog filter and the client picker rank by a real size, not a string.
+    size_ml: parseSizeToMl(sizeLabel),
+    confidence,
+  };
 }
 
 /**
@@ -182,6 +190,66 @@ function shortenForAbbrevMatch(token) {
   return token.length <= 4 ? token : token.slice(0, 4);
 }
 
+// The only bottle sizes MLCC sells. Vision size estimates get snapped to the
+// nearest of these so the catalog size filter actually matches a real SKU.
+const STANDARD_MLCC_SIZES_ML = [50, 100, 200, 375, 750, 1000, 1750];
+
+function snapToStandardSize(ml) {
+  if (!Number.isFinite(ml) || ml <= 0) return null;
+  let best = null;
+  let bestDiff = Infinity;
+  for (const s of STANDARD_MLCC_SIZES_ML) {
+    const diff = Math.abs(s - ml);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = s;
+    }
+  }
+  // Snap only when we're within 15% of a standard size (e.g. 700→750,
+  // 1800→1750). Otherwise keep the rounded value rather than inventing one.
+  if (best != null && bestDiff <= best * 0.15) return best;
+  return Math.round(ml);
+}
+
+/**
+ * Parse a vision-extracted size label into a millilitre integer, tolerant of
+ * the many ways a size shows up: "750ml", "1.75 L", "1L", "37.5cl", bare
+ * "1.75", and the US trade words (fifth / pint / half pint / handle). The
+ * result is snapped to the nearest standard MLCC size so it lines up with the
+ * catalog. Returns null when no size is parseable.
+ */
+function parseSizeToMl(sizeRaw) {
+  if (!sizeRaw || typeof sizeRaw !== "string") return null;
+  const s = sizeRaw.toLowerCase().trim();
+  if (!s) return null;
+
+  // Trade words first (these are unambiguous on US liquor).
+  if (/half[\s-]*pint/.test(s)) return 200;
+  if (/\bpint\b/.test(s)) return 375;
+  if (/\bfifth\b/.test(s)) return 750;
+  if (/\bhandle\b/.test(s)) return 1750;
+  if (/\bmagnum\b/.test(s)) return 1750;
+
+  // Number + unit.
+  let m = s.match(/(\d+(?:\.\d+)?)\s*(ml|cl|litre|liter|l)\b/);
+  if (m) {
+    let val = Number(m[1]);
+    const unit = m[2];
+    if (unit === "l" || unit === "liter" || unit === "litre") val *= 1000;
+    else if (unit === "cl") val *= 10;
+    return snapToStandardSize(val);
+  }
+
+  // Bare number — infer by magnitude (≤3 means liters: "1.75" → 1750).
+  m = s.match(/(\d+(?:\.\d+)?)/);
+  if (m) {
+    let val = Number(m[1]);
+    if (val > 0 && val <= 3) val *= 1000;
+    return snapToStandardSize(val);
+  }
+  return null;
+}
+
 async function searchCatalog(supabase, extracted) {
   const brandTokens = tokenize(extracted.brand);
   const productTokens = tokenize(extracted.product_name);
@@ -200,21 +268,16 @@ async function searchCatalog(supabase, extracted) {
     .from("mlcc_items")
     .select("*")
     .eq("is_active", true)
-    .ilike("name", `%${primaryPrefix}%`);
+    // Match the space-free column too, so a combined-word brand the model read
+    // (e.g. "RumChata") still pulls a spaced catalog name ("RUM CHATA").
+    .or(`name.ilike.%${primaryPrefix}%,name_searchable.ilike.%${primaryPrefix}%`);
 
-  // Size filter if extracted. Allow some slop on the label format.
-  const sizeRaw = extracted.size_label;
-  let sizeMlNumeric = null;
-  if (sizeRaw && sizeRaw.length > 0) {
-    const sizeMatch = sizeRaw.match(/(\d+(?:\.\d+)?)\s*(ml|l)/i);
-    if (sizeMatch) {
-      let sizeMl = Number(sizeMatch[1]);
-      if (sizeMatch[2].toLowerCase() === "l") sizeMl = sizeMl * 1000;
-      if (Number.isFinite(sizeMl) && sizeMl > 0) {
-        sizeMlNumeric = Math.round(sizeMl);
-        q = q.eq("bottle_size_ml", sizeMlNumeric);
-      }
-    }
+  // Size filter when vision gave us one. extracted.size_ml is already parsed
+  // and snapped to a real MLCC size (e.g. a "700ml" read → 750), so this
+  // eq-filter lines up with actual catalog SKUs instead of missing.
+  const sizeMlNumeric = extracted.size_ml ?? null;
+  if (sizeMlNumeric != null) {
+    q = q.eq("bottle_size_ml", sizeMlNumeric);
   }
 
   // Generous pool so the JS ranker has options. 100 rows is fast even
@@ -237,7 +300,7 @@ async function searchCatalog(supabase, extracted) {
       .from("mlcc_items")
       .select("*")
       .eq("is_active", true)
-      .ilike("name", `%${primaryPrefix}%`)
+      .or(`name.ilike.%${primaryPrefix}%,name_searchable.ilike.%${primaryPrefix}%`)
       .limit(100);
     if (!retry.error && Array.isArray(retry.data)) data = retry.data;
   }
@@ -257,17 +320,28 @@ async function searchCatalog(supabase, extracted) {
   const ranked = data
     .map((row) => {
       const name = String(row.name ?? "").toLowerCase();
+      // Space-free name too, so combined-word catalog names ("RUMCHATA") still
+      // score token hits and aren't dropped by the score>=10 filter below.
+      const nameSearchable = String(row.name_searchable ?? "").toLowerCase();
       let hits = 0;
       for (let i = 0; i < allTokens.length; i++) {
-        // Count once per token — credit either the full or prefix match.
-        if (name.includes(allTokensLc[i]) || name.includes(allPrefixesLc[i])) {
+        // Count once per token — credit a full or prefix match on either column.
+        if (
+          name.includes(allTokensLc[i]) ||
+          name.includes(allPrefixesLc[i]) ||
+          nameSearchable.includes(allTokensLc[i]) ||
+          nameSearchable.includes(allPrefixesLc[i])
+        ) {
           hits += 1;
         }
       }
-      const startsWithBrand = name.startsWith(primaryPrefix) ? 5 : 0;
+      const startsWithBrand =
+        name.startsWith(primaryPrefix) || nameSearchable.startsWith(primaryPrefix)
+          ? 5
+          : 0;
       const sizeMatches =
         sizeMlNumeric != null && Number(row.bottle_size_ml) === sizeMlNumeric
-          ? 3
+          ? 8
           : 0;
       const score = hits * 10 + startsWithBrand + sizeMatches;
       return { row, score };
