@@ -511,6 +511,14 @@ select {
   width: 100%;
   max-width: 480px;
   max-height: 90vh;
+  /*
+    iOS fix (Tony, 2026-06-10): 90vh OVERESTIMATES the visible viewport in
+    iOS Safari/PWA (toolbar area), so the card's bottom — the Print shelf
+    tag button — rendered below the fold, and since the content "fit"
+    inside 90vh the card never scrolled; scroll attempts hit the locked
+    body and bounced back. dvh tracks the REAL visible height.
+  */
+  max-height: 85dvh;
   overflow: auto;
   /* Keep the card's inner scroll from chaining out to the page/scanner behind
      it (pairs with useLockBodyScroll). Fixes the "scrolling moves the scanner
@@ -527,10 +535,17 @@ select {
 }
 
 .product-card__image {
-  width: 120px;
-  height: 120px;
-  border-radius: 8px;
-  object-fit: cover;
+  /*
+    Full bottle visible (Tony, 2026-06-10): object-fit cover CROPPED tall
+    bottles. contain letterboxes the whole bottle inside a white tile —
+    matches the on-white catalog photo standard.
+  */
+  width: 150px;
+  height: 170px;
+  border-radius: 10px;
+  object-fit: contain;
+  background: #fff;
+  padding: 6px;
   margin: 0 auto 12px;
   display: block;
 }

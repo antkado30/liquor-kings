@@ -96,6 +96,27 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
 
 ---
 
+## 🔥🔥 #1 ACTIVE FOCUS — VALIDATE SPEED + RELIABILITY (Tony, 2026-06-10 night)
+
+> "We have to increase the speed and reliability of validating the whole
+> cart in every single aspect. Validating takes longer than actually
+> scanning the bottles. It should be 30 seconds max — it literally just
+> took like 4 minutes and came back as FAILED."
+
+Witnessed: ~84-item cart, ~4 min validate → "MLCC validate finished as
+failed." THE next major build (fresh session, full focus). Investigation
+plan: (1) pull that run's ID in Command Deck Review — stage timings +
+failure type tell us where 4 minutes went (queue wait? cold login? Stage 3
+adds? MILO flake?); (2) suspects: worker cold session (LK_RPA_PERSIST
+warm path is ~25-45s but cold is ~2min), single worker busy = queue delay,
+Stage 3 per-item add time scaling with 84 items, MILO server slowness;
+(3) levers: always-warm session per active store, scale worker count,
+parallel/bulk Stage 3 add strategies, smarter retry-on-flake instead of
+failing the whole run, aggressive background pre-validate so the
+foreground tap is usually a cache hit; (4) pairs with the OBSERVABILITY
+CENTER build — same session. Target: warm validate ≤30-45s, NEVER a
+4-minute silent grind, failures explain themselves in one sentence.
+
 ## Tony's 2026-06-07 batch (stated after speed passes)
 
 1. ⏳ **MLCC validate feels SLOW — #1 irritation.** "If someone validated on
