@@ -104,7 +104,7 @@ router.get("/browse", async (req, res) => {
   const BROWSE_COLUMNS =
     "id, code, name, category, ada_number, ada_name, " +
     "bottle_size_ml, bottle_size_label, licensee_price, proof, " +
-    "is_new_item, last_price_book_date, image_url";
+    "is_new_item, last_price_book_date, image_url, featured_sort";
   let select = supabase
     .from("mlcc_items")
     .select(BROWSE_COLUMNS)
@@ -174,7 +174,16 @@ router.get("/browse", async (req, res) => {
       break;
     case "name":
     default:
-      sortColumn = "name";
+      /*
+        "Featured" (the default sort): photographed bottles first, A-Z
+        within each group, placeholders sink to the bottom (Tony,
+        2026-06-10 — "push bottles with photos to the top until we have
+        all the pictures figured out"). featured_sort is a generated
+        column ('0~'+name with photo / '1~'+name without, migration
+        20260610233000) so it works with the single-column cursor and
+        reorders itself as photo coverage grows.
+      */
+      sortColumn = "featured_sort";
       ascending = true;
       break;
   }
@@ -196,13 +205,22 @@ router.get("/browse", async (req, res) => {
       const sortVal = decoded?.sortVal;
       const lastId = String(decoded?.id ?? "");
       if (sortVal !== undefined && lastId) {
+        /*
+          Quote the sort value for PostgREST .or() syntax (2026-06-10).
+          Text sort values are product names — commas and parens in a
+          name ("DARK ARTS WHISKEY HOUSE, OLOROSO…") broke the filter
+          grammar and silently restarted pagination from page one.
+          Double-quoting makes any value a single literal; embedded
+          quotes/backslashes are stripped (never legitimately in names).
+        */
+        const qv = `"${String(sortVal).replace(/["\\]/g, "")}"`;
         if (ascending) {
           select = select.or(
-            `${sortColumn}.gt.${sortVal},and(${sortColumn}.eq.${sortVal},id.gt.${lastId})`,
+            `${sortColumn}.gt.${qv},and(${sortColumn}.eq.${qv},id.gt.${lastId})`,
           );
         } else {
           select = select.or(
-            `${sortColumn}.lt.${sortVal},and(${sortColumn}.eq.${sortVal},id.gt.${lastId})`,
+            `${sortColumn}.lt.${qv},and(${sortColumn}.eq.${qv},id.gt.${lastId})`,
           );
         }
       }
@@ -269,8 +287,42 @@ router.get("/browse/facets", async (req, res) => {
   }
   const supabase = supabaseDefault;
 
-  // Each facet runs independently — one slow query doesn't block the
-  // others. Empty results are fine ([] in the response).
+  /*
+    Fast path (2026-06-10): one browse_facets() RPC — Postgres GROUP BYs
+    return the entire facet payload as a single jsonb blob instead of
+    shipping ~13.8k rows three times for JS counting (migration
+    20260610234500). Falls back to the original per-facet JS path when
+    the function doesn't exist yet, so deploy order doesn't matter.
+  */
+  try {
+    const { data: blob, error: rpcErr } = await supabase.rpc("browse_facets");
+    if (!rpcErr && blob && typeof blob === "object") {
+      return res.json({
+        ok: true,
+        facets: {
+          categories: Array.isArray(blob.categories) ? blob.categories : [],
+          adas: Array.isArray(blob.adas) ? blob.adas : [],
+          sizes: Array.isArray(blob.sizes) ? blob.sizes : [],
+          priceRange:
+            blob.priceRange && typeof blob.priceRange === "object"
+              ? blob.priceRange
+              : { min: 0, max: 0 },
+          proofRange:
+            blob.proofRange && typeof blob.proofRange === "object"
+              ? blob.proofRange
+              : { min: 0, max: 0 },
+        },
+      });
+    }
+    if (rpcErr) {
+      console.log("[browse-facets] rpc unavailable, JS fallback:", rpcErr.message);
+    }
+  } catch (e) {
+    console.log("[browse-facets] rpc threw, JS fallback:", e?.message ?? e);
+  }
+
+  // Fallback: each facet runs independently — one slow query doesn't
+  // block the others. Empty results are fine ([] in the response).
   const [cats, adas, sizes, priceRange, proofRange] = await Promise.all([
     facetCategories(supabase),
     facetAdas(supabase),

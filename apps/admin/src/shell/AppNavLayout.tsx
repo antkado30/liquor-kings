@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { IconCrown } from "../deck/DeckUi";
 import { useReviewRuns } from "../review/ReviewRunsContext";
 
 export function AppNavLayout() {
@@ -12,7 +13,10 @@ export function AppNavLayout() {
           to="/founder"
           className={({ isActive }) => `admin-nav-link${isActive ? " active" : ""}`}
         >
-          🏰 Founder
+          <span className="admin-nav-link__icon" aria-hidden>
+            <IconCrown size={14} />
+          </span>
+          Founder
         </NavLink>
         <NavLink
           to="/overview"

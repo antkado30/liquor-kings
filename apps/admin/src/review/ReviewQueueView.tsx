@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { DeckHeader, DeckPage } from "../deck/DeckUi";
 import { RunQueuePanel } from "../operator-review/RunQueuePanel";
 import { useReviewRuns } from "./ReviewRunsContext";
 
@@ -7,7 +8,14 @@ export function ReviewQueueView() {
   const ctx = useReviewRuns();
 
   return (
-    <div className="review-view">
+    <DeckPage>
+      <DeckHeader
+        title="Review queue"
+        subtitle="UPC execution runs — triage failures, bulk acknowledge, and open run detail."
+        icon="queue"
+        onRefresh={() => void ctx.loadRuns({ silentSuccess: true })}
+        loading={ctx.loadingRuns}
+      />
       <RunQueuePanel
         statusFilter={ctx.statusFilter}
         setStatusFilter={ctx.setStatusFilter}
@@ -53,6 +61,6 @@ export function ReviewQueueView() {
         hasNextPage={ctx.hasNextPage}
         hasPrevPage={ctx.hasPrevPage}
       />
-    </div>
+    </DeckPage>
   );
 }

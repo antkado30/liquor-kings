@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { DeckHeader, DeckPage, DeckSection, DeckSkeleton } from "../deck/DeckUi";
 import { getDiagnosticsOverview, getRuns, parseJson } from "../api/operatorReview";
 import { Msg } from "../operator-review/components/Msg";
 import { buildQuery } from "../operator-review/utils";
@@ -169,29 +170,27 @@ export function OperatorOverviewPage() {
   const qh = data?.queue_health;
 
   return (
-    <div className="review-view operator-overview-page">
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-        <h2 className="section-title" style={{ margin: 0 }}>
-          Overview
-        </h2>
-        <button type="button" className="secondary" onClick={() => void load()} disabled={loading}>
-          Refresh
-        </button>
-      </div>
+    <DeckPage>
+      <DeckHeader
+        title="Overview"
+        subtitle={
+          <>
+            Snapshot for the current store. Failed/retryable counts use the diagnostics time window and
+            row cap (see <Link to="/diagnostics">Diagnostics</Link> for details). Pending manual total is
+            the full queue size from the review list API.
+          </>
+        }
+        icon="overview"
+        onRefresh={() => void load()}
+        loading={loading}
+      />
 
-      <p className="muted" style={{ marginTop: 0 }}>
-        Snapshot for the current store. Failed/retryable counts use the diagnostics time window and row
-        cap (see <Link to="/diagnostics">Diagnostics</Link> for details). Pending manual total is the
-        full queue size from the review list API.
-      </p>
-
-      {loading && !data ? <p className="muted">Loading…</p> : null}
+      {loading && !data ? <DeckSkeleton rows={4} variant="stat" /> : null}
       <Msg type={msg.type} text={msg.text} />
 
       {data ? (
         <>
-          <section className="card" style={{ marginTop: 12 }}>
-            <h3 className="section-title">Needs attention now</h3>
+          <DeckSection title="Needs attention now">
             {qh && qh.warnings.length > 0 ? (
               <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
                 {qh.warnings.map((w) => (
@@ -213,7 +212,7 @@ export function OperatorOverviewPage() {
                 heartbeat detail.
               </p>
             ) : null}
-          </section>
+          </DeckSection>
 
           <div className="diag-cards" style={{ marginTop: 12 }}>
             <div className="card diag-card">
@@ -241,14 +240,13 @@ export function OperatorOverviewPage() {
             ) : null}
 
             {data.mlcc_diagnostics ? (
-              <section className="card" style={{ marginTop: 12 }}>
-                <h3 className="section-title">MLCC failure signals (window)</h3>
+              <DeckSection title="MLCC failure signals (window)" className="deck-section--full">
                 <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
                   From stored <code>failure_details</code> + inference rules. See{" "}
                   <Link to="/diagnostics">Diagnostics</Link> for full breakdown and trends.
                 </p>
                 <MlccDiagCards md={data.mlcc_diagnostics} />
-              </section>
+              </DeckSection>
             ) : null}
 
             {qh ? (
@@ -271,8 +269,7 @@ export function OperatorOverviewPage() {
             ) : null}
           </div>
 
-          <section className="card" style={{ marginTop: 12 }}>
-            <h3 className="section-title">Recent operator session activity</h3>
+          <DeckSection title="Recent operator session activity">
             <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
               From system diagnostics (<code>operator_session</code>). Per-run actions are on each run’s
               detail screen.
@@ -297,13 +294,13 @@ export function OperatorOverviewPage() {
                 ))}
               </ul>
             )}
-          </section>
+          </DeckSection>
 
           <p className="muted" style={{ fontSize: 12, marginTop: 16 }}>
             <Link to="/review">Review queue</Link> · <Link to="/diagnostics">Full diagnostics</Link>
           </p>
         </>
       ) : null}
-    </div>
+    </DeckPage>
   );
 }

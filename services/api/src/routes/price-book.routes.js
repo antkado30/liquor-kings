@@ -1040,7 +1040,7 @@ export async function priceBookUpcHandler(req, res) {
 
     const mapping = await getUpcMapping(supabase, upc);
     if (mapping) {
-      const { data: mlccItem, error: mapItemErr } = await supabase
+      let { data: mlccItem, error: mapItemErr } = await supabase
         .from("mlcc_items")
         .select("*")
         .eq("code", mapping.mlccCode)
@@ -1049,6 +1049,37 @@ export async function priceBookUpcHandler(req, res) {
         .order("ada_number", { ascending: true })
         .limit(1)
         .maybeSingle();
+      /*
+        Combo-swap (Tony's Casamigos bug, 2026-06-10): MLCC puts the SAME
+        bottle UPC on both the regular SKU and gift-combo SKUs ("...W/50ML
+        REPO W/"). If a non-user-confirmed mapping resolved to a combo,
+        prefer the regular bottle that shares the UPC — a store owner
+        scanning a fifth means the fifth, not the seasonal gift pack.
+        User-confirmed mappings are never overridden.
+      */
+      if (
+        mlccItem &&
+        isMlccComboName(mlccItem.name) &&
+        mapping.confidenceSource !== "user_confirmed"
+      ) {
+        const { data: upcSiblings } = await supabase
+          .from("mlcc_items")
+          .select("*")
+          .eq("upc", upc)
+          .limit(10);
+        const regular = (upcSiblings ?? [])
+          .filter((r) => !isMlccComboName(r.name))
+          .sort((a, b) => String(a.ada_number ?? "").localeCompare(String(b.ada_number ?? "")))[0];
+        if (regular) {
+          console.log(
+            "[price-book-upc] combo-swap: mapping hit combo",
+            mlccItem.code,
+            "→ regular",
+            regular.code,
+          );
+          mlccItem = regular;
+        }
+      }
       if (mapItemErr) {
         console.log("[price-book-upc] upc_mappings mlcc_items fetch error", mapItemErr.message);
       } else if (mlccItem) {
@@ -1091,17 +1122,30 @@ export async function priceBookUpcHandler(req, res) {
       void deleteUpcMapping(supabase, upc).catch(() => {});
     }
 
-    const { data: localRow, error: localErr } = await supabase
+    /*
+      Multiple mlcc_items rows can share one UPC (regular bottle + gift
+      combos + multi-ADA rows). The old `.limit(1).maybeSingle()` picked an
+      ARBITRARY row — Tony's fifth of Casamigos resolved to the "W/50ML
+      REPO" gift combo by coin flip (2026-06-10). Deterministic preference:
+      non-combo first, then lowest ADA.
+    */
+    const { data: localRows, error: localErr } = await supabase
       .from("mlcc_items")
       .select("*")
       .eq("upc", upc)
-      .limit(1)
-      .maybeSingle();
+      .limit(10);
 
     if (localErr) {
       console.log("[price-book-upc] db error", localErr.message);
       return res.status(500).json({ ok: false, error: localErr.message });
     }
+    const localRow = (localRows ?? [])
+      .slice()
+      .sort(
+        (a, b) =>
+          Number(isMlccComboName(a.name)) - Number(isMlccComboName(b.name)) ||
+          String(a.ada_number ?? "").localeCompare(String(b.ada_number ?? "")),
+      )[0] ?? null;
     if (localRow) {
       console.log("[price-book-upc] local match", localRow.id);
       queueUpcLookupLog({
@@ -1349,7 +1393,20 @@ router.get("/items/:code/family", async (req, res) => {
     for (const row of sizes) {
       if (!row?.id || byId.has(row.id)) continue;
       byId.add(row.id);
-      dedup.push(row);
+      /*
+        Combo rows get a distinct size-tab label ("750 ML · GIFT PACK")
+        so they can never render as an identical twin of the regular
+        bottle's tab (Tony saw two indistinguishable "750 ML" chips on
+        Casamigos, 2026-06-10).
+      */
+      if (isMlccComboName(row.name)) {
+        const baseLabel =
+          String(row.bottle_size_label ?? "").trim() ||
+          (row.bottle_size_ml ? `${row.bottle_size_ml} ML` : "PACK");
+        dedup.push({ ...row, bottle_size_label: `${baseLabel} · GIFT PACK` });
+      } else {
+        dedup.push(row);
+      }
     }
     dedup.sort((a, b) => (Number(a.bottle_size_ml) || 0) - (Number(b.bottle_size_ml) || 0));
 

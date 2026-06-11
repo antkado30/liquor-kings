@@ -1,9 +1,14 @@
 /**
  * Settings page — store profile, MLCC connection, credentials, legal, account.
  */
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { getSmartCards, type StoreVerificationMeta } from "../api/home";
+import {
+  createStore,
+  getMyStores,
+  type StoreListItem,
+} from "../api/stores";
 import { MlccCredentialsForm } from "../components/MlccCredentialsForm";
 import {
   IconAlert,
@@ -15,10 +20,16 @@ import {
   IconLogOut,
   IconPlug,
   IconStore,
+  IconX,
 } from "../components/Icons";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import { useMlccVerifyProbe } from "../hooks/useMlccVerifyProbe";
-import { clearCurrentStoreId, getCurrentStoreId } from "../lib/currentStore";
-import { useCachedResource } from "../lib/swr";
+import {
+  clearCurrentStoreId,
+  getCurrentStoreId,
+  setCurrentStoreId,
+} from "../lib/currentStore";
+import { clearAllCache, useCachedResource } from "../lib/swr";
 import { signOut } from "../lib/supabase";
 
 const APP_VERSION =
@@ -50,10 +61,256 @@ function getConnectionTone(
   return "problem";
 }
 
+function AddStoreModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (storeId: string) => void;
+}) {
+  useLockBodyScroll();
+  const [storeName, setStoreName] = useState("");
+  const [liquorLicense, setLiquorLicense] = useState("");
+  const [mlccUsername, setMlccUsername] = useState("");
+  const [mlccPassword, setMlccPassword] = useState("");
+  const [addressLine1, setAddressLine1] = useState("");
+  const [city, setCity] = useState("");
+  const [state, setState] = useState("");
+  const [postalCode, setPostalCode] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    setSubmitting(true);
+    const r = await createStore({
+      store_name: storeName,
+      liquor_license: liquorLicense,
+      mlcc_username: mlccUsername,
+      mlcc_password: mlccPassword,
+      address_line1: addressLine1 || undefined,
+      city: city || undefined,
+      state: state || undefined,
+      postal_code: postalCode || undefined,
+    });
+    setSubmitting(false);
+    if (!r.ok) {
+      setErr(r.error);
+      return;
+    }
+    onCreated(r.store_id);
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="mstore-add-title"
+      className="confirm-overlay"
+      onClick={onClose}
+    >
+      <div
+        className="confirm-card mstore-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mstore-modal__head">
+          <h2 id="mstore-add-title" className="confirm-title">
+            Add another store
+          </h2>
+          <button
+            type="button"
+            className="mstore-modal__close"
+            onClick={onClose}
+            aria-label="Close"
+            disabled={submitting}
+          >
+            <IconX size={20} strokeWidth={2} />
+          </button>
+        </div>
+        <p className="confirm-body">
+          Register a new location under your account. After adding, we&apos;ll
+          switch to it and verify MLCC on the home screen.
+        </p>
+
+        {err ? (
+          <p className="auth-alert" role="alert">
+            <IconAlert size={16} strokeWidth={2} aria-hidden />
+            {err}
+          </p>
+        ) : null}
+
+        <form className="mstore-form" onSubmit={(e) => void handleSubmit(e)}>
+          <label className="mstore-field">
+            <span className="mstore-field__label">Store name</span>
+            <input
+              type="text"
+              value={storeName}
+              onChange={(e) => setStoreName(e.target.value)}
+              required
+              autoComplete="organization"
+              disabled={submitting}
+            />
+          </label>
+          <label className="mstore-field">
+            <span className="mstore-field__label">Liquor license</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={liquorLicense}
+              onChange={(e) => setLiquorLicense(e.target.value)}
+              required
+              className="mono"
+              disabled={submitting}
+            />
+          </label>
+          <label className="mstore-field">
+            <span className="mstore-field__label">MLCC username</span>
+            <input
+              type="text"
+              value={mlccUsername}
+              onChange={(e) => setMlccUsername(e.target.value)}
+              required
+              autoComplete="username"
+              disabled={submitting}
+            />
+          </label>
+          <label className="mstore-field">
+            <span className="mstore-field__label">MLCC password</span>
+            <input
+              type="password"
+              value={mlccPassword}
+              onChange={(e) => setMlccPassword(e.target.value)}
+              required
+              autoComplete="new-password"
+              disabled={submitting}
+            />
+          </label>
+
+          <details className="mstore-address">
+            <summary>Address (optional)</summary>
+            <div className="mstore-address__fields">
+              <label className="mstore-field">
+                <span className="mstore-field__label">Street address</span>
+                <input
+                  type="text"
+                  value={addressLine1}
+                  onChange={(e) => setAddressLine1(e.target.value)}
+                  autoComplete="street-address"
+                  disabled={submitting}
+                />
+              </label>
+              <div className="mstore-address__row">
+                <label className="mstore-field">
+                  <span className="mstore-field__label">City</span>
+                  <input
+                    type="text"
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    autoComplete="address-level2"
+                    disabled={submitting}
+                  />
+                </label>
+                <label className="mstore-field mstore-field--short">
+                  <span className="mstore-field__label">State</span>
+                  <input
+                    type="text"
+                    value={state}
+                    onChange={(e) => setState(e.target.value)}
+                    autoComplete="address-level1"
+                    maxLength={4}
+                    disabled={submitting}
+                  />
+                </label>
+              </div>
+              <label className="mstore-field mstore-field--short">
+                <span className="mstore-field__label">ZIP</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={postalCode}
+                  onChange={(e) => setPostalCode(e.target.value)}
+                  autoComplete="postal-code"
+                  disabled={submitting}
+                />
+              </label>
+            </div>
+          </details>
+
+          <div className="confirm-actions mstore-modal__actions">
+            <button
+              type="button"
+              className="btn secondary"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="btn primary" disabled={submitting}>
+              {submitting ? (
+                <>
+                  <IconLoader size={16} strokeWidth={2} aria-hidden />
+                  Adding…
+                </>
+              ) : (
+                "Add store"
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export function SettingsPage() {
+  const navigate = useNavigate();
   const storeId = getCurrentStoreId() ?? "none";
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [myStores, setMyStores] = useState<StoreListItem[]>([]);
+  const [storesLoading, setStoresLoading] = useState(true);
+  const [storesError, setStoresError] = useState<string | null>(null);
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [addStoreOpen, setAddStoreOpen] = useState(false);
+
+  const loadStores = useCallback(async () => {
+    setStoresLoading(true);
+    setStoresError(null);
+    const r = await getMyStores();
+    if (!r.ok) {
+      setStoresError(r.error);
+      setMyStores([]);
+    } else {
+      setMyStores(r.stores);
+    }
+    setStoresLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void loadStores();
+  }, [loadStores, storeId]);
+
+  const switchToStore = useCallback(
+    (id: string) => {
+      if (id === getCurrentStoreId()) return;
+      setSwitchingId(id);
+      setCurrentStoreId(id);
+      clearAllCache();
+      navigate("/");
+    },
+    [navigate],
+  );
+
+  const onStoreCreated = useCallback(
+    (id: string) => {
+      setAddStoreOpen(false);
+      setCurrentStoreId(id);
+      clearAllCache();
+      navigate("/");
+    },
+    [navigate],
+  );
 
   const metaRes = useCachedResource<StoreVerificationMeta | null>(
     `settings-store-meta:${storeId}`,
@@ -147,6 +404,96 @@ export function SettingsPage() {
               </div>
             </div>
           )}
+        </div>
+      </section>
+
+      {/* ─── Your stores (multi-store switcher) ─── */}
+      <section className="settings-block" aria-labelledby="settings-stores-title">
+        <div className="settings-block__head">
+          <span className="settings-block__icon" aria-hidden>
+            <IconStore size={18} strokeWidth={1.75} />
+          </span>
+          <h2 id="settings-stores-title" className="settings-block__title">
+            Your stores
+          </h2>
+        </div>
+
+        <div className="settings-card">
+          <p className="settings-card__desc">
+            Switch between locations on your account. Changing stores refreshes
+            the app under that store&apos;s data.
+          </p>
+
+          {storesError ? (
+            <p className="auth-alert" role="alert">
+              <IconAlert size={16} strokeWidth={2} aria-hidden />
+              {storesError}
+              <button
+                type="button"
+                className="mstore-retry"
+                onClick={() => void loadStores()}
+              >
+                Try again
+              </button>
+            </p>
+          ) : null}
+
+          {storesLoading ? (
+            <div className="mstore-skeleton" aria-hidden>
+              <div className="mstore-shimmer mstore-shimmer--row" />
+              <div className="mstore-shimmer mstore-shimmer--row" />
+              <div className="mstore-shimmer mstore-shimmer--row" />
+            </div>
+          ) : (
+            <ul className="mstore-list" role="list">
+              {myStores.map((s) => {
+                const isCurrent = s.store_id === getCurrentStoreId();
+                const busy = switchingId === s.store_id;
+                return (
+                  <li key={s.store_id}>
+                    <button
+                      type="button"
+                      className={`mstore-row${isCurrent ? " mstore-row--current" : ""}`}
+                      onClick={() => switchToStore(s.store_id)}
+                      disabled={isCurrent || switchingId !== null}
+                      aria-current={isCurrent ? "true" : undefined}
+                    >
+                      <span className="mstore-row__icon" aria-hidden>
+                        <IconStore size={18} strokeWidth={1.75} />
+                      </span>
+                      <span className="mstore-row__body">
+                        <span className="mstore-row__name">{s.store_name}</span>
+                        {s.license_tail ? (
+                          <span className="mstore-row__tail mono">
+                            · #{s.license_tail}
+                          </span>
+                        ) : null}
+                      </span>
+                      {busy ? (
+                        <span className="mstore-row__check settings-spinner" aria-hidden>
+                          <IconLoader size={18} strokeWidth={2} />
+                        </span>
+                      ) : isCurrent ? (
+                        <span className="mstore-row__check" aria-label="Current store">
+                          <IconCheck size={18} strokeWidth={2.2} />
+                        </span>
+                      ) : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          <button
+            type="button"
+            className="settings-btn settings-btn--ghost mstore-add-btn"
+            onClick={() => setAddStoreOpen(true)}
+            disabled={storesLoading || switchingId !== null}
+          >
+            <IconPlug size={18} strokeWidth={1.75} aria-hidden />
+            Add another store
+          </button>
         </div>
       </section>
 
@@ -332,6 +679,13 @@ export function SettingsPage() {
           </button>
         </div>
       </section>
+
+      {addStoreOpen ? (
+        <AddStoreModal
+          onClose={() => setAddStoreOpen(false)}
+          onCreated={onStoreCreated}
+        />
+      ) : null}
 
       {confirmSignOut ? (
         <div

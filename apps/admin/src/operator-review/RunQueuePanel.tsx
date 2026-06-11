@@ -1,4 +1,5 @@
 import { memo, useMemo } from "react";
+import { DeckSkeleton, IconChevronRight } from "../deck/DeckUi";
 import { Link } from "react-router-dom";
 import { failureGuidanceText } from "../lib/failureGuidance";
 import { formatMlccContextLine } from "./mlccOperatorContext";
@@ -150,8 +151,8 @@ function RunQueuePanelInner({
   );
 
   return (
-    <section className="card">
-      <h3 className="section-title">Run queue</h3>
+    <section className="card deck-section">
+      <h3 className="deck-section__title">Run queue</h3>
       <p className="muted review-persist-hint" style={{ fontSize: 12, marginTop: 4 }}>
         Sort, auto-refresh, server filters, cart filter, queue search, and server page size persist in
         this browser for the current store (localStorage key{" "}
@@ -432,6 +433,7 @@ function RunQueuePanelInner({
         <strong>Bulk resolve_without_retry</strong> stays unavailable.
       </p>
       <Msg type={listMsg.type} text={listMsg.text} />
+      {loadingRuns && runs.length === 0 ? <DeckSkeleton rows={5} variant="row" /> : null}
       <div className={`runs-list ${loadingRuns ? "loading" : ""}`}>
         {runs.length === 0 ? (
           <div className="empty-state">
@@ -515,14 +517,16 @@ function RunQueuePanelInner({
                     ) : null}
                     {hint ? <div className="hint">{hint}</div> : null}
                   </div>
-                  <div style={{ textAlign: "right", fontSize: 11, color: "#6b7280" }}>
+                  <div className="muted" style={{ textAlign: "right", fontSize: 11 }}>
                     {row.pending_manual_review ? (
                       <>
                         <strong>MANUAL REVIEW</strong>
                         <br />
                       </>
                     ) : null}
-                    Open →
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                      Open <IconChevronRight size={12} />
+                    </span>
                   </div>
                 </div>
               </div>

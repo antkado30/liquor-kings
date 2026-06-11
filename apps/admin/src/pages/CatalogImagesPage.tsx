@@ -19,6 +19,17 @@ import {
   setImageUrl,
   type UncoveredRow,
 } from "../api/catalogImages";
+import {
+  DeckEmpty,
+  DeckHeader,
+  DeckPage,
+  DeckSkeleton,
+  DeckStat,
+  DeckStatGrid,
+  IconChevronLeft,
+  IconChevronRight,
+  IconExternal,
+} from "../deck/DeckUi";
 
 const PAGE_SIZE = 30;
 
@@ -125,27 +136,39 @@ export function CatalogImagesPage() {
   const remaining = useMemo(() => total, [total]);
 
   return (
-    <div className="page-narrow" style={{ padding: 16 }}>
-      <header style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
-        <h1 style={{ margin: 0 }}>Catalog images</h1>
-        <p className="muted small" style={{ margin: 0 }}>
-          {remaining.toLocaleString()} SKU{remaining === 1 ? "" : "s"} still need a photo. {onShelfTotal.toLocaleString()} are on someone&apos;s shelf.
-        </p>
-        <p className="muted small" style={{ margin: 0 }}>
-          Paste a clean image URL (Google Images → right-click → &quot;Copy image address&quot;). Preview before saving.
-        </p>
-      </header>
+    <DeckPage narrow>
+      <DeckHeader
+        title="Catalog images"
+        subtitle="Paste a clean image URL (Google Images → right-click → Copy image address). Preview before saving."
+        icon="images"
+        onRefresh={() => void load()}
+        loading={loading}
+      />
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+      <DeckStatGrid>
+        <DeckStat
+          label="Uncovered SKUs"
+          value={remaining.toLocaleString()}
+          tone="purple"
+        />
+        <DeckStat
+          label="On shelf"
+          value={onShelfTotal.toLocaleString()}
+          sub="Prioritized in list when on-shelf only is enabled"
+          tone="neutral"
+        />
+      </DeckStatGrid>
+
+      <div className="deck-catalog-toolbar">
         <input
           type="search"
+          className="deck-catalog-search"
           placeholder="Search by name..."
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
             setOffset(0);
           }}
-          style={{ flex: 1, minWidth: 200, padding: "8px 12px", border: "1px solid var(--border, #ccc)", borderRadius: 6 }}
         />
         <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input
@@ -161,12 +184,14 @@ export function CatalogImagesPage() {
       </div>
 
       {loadError ? <div className="banner banner-err">Load error: {loadError}</div> : null}
-      {loading ? <p className="muted">Loading…</p> : null}
+      {loading ? <DeckSkeleton rows={4} variant="row" /> : null}
       {!loading && rows.length === 0 && !loadError ? (
-        <p className="muted">No uncovered SKUs match. Try a different search or untick &quot;on-shelf only&quot;.</p>
+        <DeckEmpty title="No uncovered SKUs">
+          Try a different search or untick on-shelf only.
+        </DeckEmpty>
       ) : null}
 
-      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+      <ul className="deck-catalog-list">
         {rows.map((row) => {
           const state = rowState[row.code] ?? {
             draft: "",
@@ -178,31 +203,9 @@ export function CatalogImagesPage() {
           return (
             <li
               key={row.code}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "120px 1fr",
-                gap: 12,
-                padding: 12,
-                border: "1px solid var(--border, #2a2a35)",
-                borderRadius: 8,
-                background: row.on_shelf ? "rgba(108, 99, 255, 0.06)" : "transparent",
-              }}
+              className={`deck-catalog-row${row.on_shelf ? " deck-catalog-row--shelf" : ""}`}
             >
-              {/* Preview slot */}
-              <div
-                style={{
-                  width: 120,
-                  height: 150,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: "rgba(255,255,255,0.04)",
-                  borderRadius: 6,
-                  overflow: "hidden",
-                  fontSize: 11,
-                  color: "var(--muted, #888)",
-                }}
-              >
+              <div className="deck-catalog-preview">
                 {previewUrl ? (
                   <img
                     src={previewUrl}
@@ -220,21 +223,7 @@ export function CatalogImagesPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                   <strong style={{ fontSize: 15 }}>{row.name}</strong>
-                  {row.on_shelf ? (
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontWeight: 700,
-                        letterSpacing: "0.05em",
-                        padding: "2px 6px",
-                        background: "rgba(108,99,255,0.18)",
-                        borderRadius: 4,
-                        color: "#c4b5fd",
-                      }}
-                    >
-                      ON SHELF
-                    </span>
-                  ) : null}
+                  {row.on_shelf ? <span className="deck-catalog-badge">ON SHELF</span> : null}
                 </div>
                 <div className="muted small">
                   Code {row.code} · {row.bottle_size_label ?? `${row.bottle_size_ml ?? "?"} mL`}
@@ -243,20 +232,14 @@ export function CatalogImagesPage() {
                 </div>
                 <input
                   type="url"
+                  className="mono"
                   placeholder="https://... image URL"
                   value={state.draft}
                   onChange={(e) => onDraftChange(row.code, e.target.value)}
-                  style={{
-                    padding: "6px 10px",
-                    border: "1px solid var(--border, #ccc)",
-                    borderRadius: 6,
-                    width: "100%",
-                    fontFamily: "monospace",
-                    fontSize: 12,
-                  }}
+                  style={{ width: "100%", fontSize: 12 }}
                 />
                 {state.error ? (
-                  <span style={{ color: "#ef4444", fontSize: 12 }}>{state.error}</span>
+                  <span className="msg error" style={{ fontSize: 12, padding: "4px 8px" }}>{state.error}</span>
                 ) : null}
                 <div style={{ display: "flex", gap: 6 }}>
                   <button
@@ -276,7 +259,7 @@ export function CatalogImagesPage() {
                     className="btn secondary"
                     style={{ textDecoration: "none" }}
                   >
-                    Google images ↗
+                    Google images <IconExternal />
                   </a>
                 </div>
               </div>
@@ -285,18 +268,18 @@ export function CatalogImagesPage() {
         })}
       </ul>
 
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16 }}>
+      <div className="deck-pager">
         <button type="button" className="btn secondary" onClick={goPrev} disabled={!hasPrev || loading}>
-          ← Prev
+          <IconChevronLeft /> Prev
         </button>
-        <span className="muted small">
+        <span className="muted small" style={{ fontVariantNumeric: "tabular-nums" }}>
           {offset + 1}–{offset + rows.length} of {total.toLocaleString()}
         </span>
         <button type="button" className="btn secondary" onClick={goNext} disabled={!hasNext || loading}>
-          Next →
+          Next <IconChevronRight />
         </button>
       </div>
-    </div>
+    </DeckPage>
   );
 }
 

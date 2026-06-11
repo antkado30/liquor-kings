@@ -23,10 +23,12 @@ import { ScheduledTemplateBanner } from "../components/ScheduledTemplateBanner";
 import { SmartCards } from "../components/SmartCards";
 import { VerifyMlccBanner } from "../components/VerifyMlccBanner";
 import type { StoreVerificationMeta } from "../api/home";
+import { PlaceholderBottle, tintForCategory } from "../components/BottleArt";
 import {
   IconCart,
   IconChevronRight,
   IconSparkles,
+  IconX,
 } from "../components/Icons";
 import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
 import { VisionCandidatePicker } from "../components/VisionCandidatePicker";
@@ -326,7 +328,7 @@ export function ScannerPage() {
   );
 
   return (
-    <div className="page scanner-page">
+    <div className="page scanner-page scanhm-page">
       {/*
         Header redesign (task #90, 2026-06-07). Per Tony, all the
         scattered top icons (chat, dashboard, orders, browse, settings,
@@ -336,21 +338,17 @@ export function ScannerPage() {
         screen. Bottom tab Cart navigates to /cart (full page); top-right
         cart icon opens the inline drawer (quick peek + adjust).
       */}
-      <header className="top-bar">
-        <h1 className="top-bar-title">Liquor Kings</h1>
+      <header className="top-bar scanhm-header">
+        <h1 className="scanhm-wordmark">
+          <span className="scanhm-wordmark__liquor">Liquor</span>{" "}
+          <span className="scanhm-wordmark__kings">Kings</span>
+        </h1>
         <div className="top-bar-actions">
           <button
             type="button"
-            className="icon-btn cart-btn"
+            className="icon-btn cart-btn scanhm-cart-btn"
             onClick={() => setShowCart(true)}
             aria-label="Open cart drawer"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#fff",
-              position: "relative",
-            }}
           >
             <IconCart size={24} strokeWidth={1.85} />
             {cart.totalItems > 0 ? (
@@ -389,19 +387,21 @@ export function ScannerPage() {
         is ready" is the highest-attention nudge we ever show. Renders
         nothing when no template's scheduler has fired today.
       */}
-      <ScheduledTemplateBanner
-        cart={cart}
-        onLoaded={() => setShowCart(true)}
-      />
-      {needsMlccVerification ? (
-        <VerifyMlccBanner
-          onVerified={() => {
-            // Bump the refresh key so SmartCards re-fetches and
-            // hides the banner naturally (last_verified_at now stamped).
-            setVerifyRefreshKey((k) => k + 1);
-          }}
+      <div className="scanhm-zone scanhm-zone--banners">
+        <ScheduledTemplateBanner
+          cart={cart}
+          onLoaded={() => setShowCart(true)}
         />
-      ) : null}
+        {needsMlccVerification ? (
+          <VerifyMlccBanner
+            onVerified={() => {
+              // Bump the refresh key so SmartCards re-fetches and
+              // hides the banner naturally (last_verified_at now stamped).
+              setVerifyRefreshKey((k) => k + 1);
+            }}
+          />
+        ) : null}
+      </div>
 
       {/*
         AI Assistant hero card (task #92, 2026-06-07). Tony's call:
@@ -412,50 +412,56 @@ export function ScannerPage() {
       <button
         type="button"
         onClick={() => navigate("/assistant")}
-        style={aiHeroBtnStyle}
+        className="scanhm-hero"
         aria-label="Open AI assistant"
       >
-        <div style={aiHeroIconWrapStyle}>
+        <div className="scanhm-hero__icon">
           <IconSparkles size={26} strokeWidth={1.9} />
         </div>
-        <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-          <div style={aiHeroEyebrowStyle}>YOUR AI ASSISTANT</div>
-          <div style={aiHeroTitleStyle}>
+        <div className="scanhm-hero__body">
+          <div className="scanhm-hero__eyebrow">Your AI assistant</div>
+          <div className="scanhm-hero__title">
             Ask anything — your store, your catalog, or liquor in general
           </div>
         </div>
-        <span style={{ color: "rgba(255,255,255,0.5)" }}>
-          <IconChevronRight size={20} />
-        </span>
+        <IconChevronRight size={20} className="scanhm-hero__chevron" aria-hidden />
       </button>
 
-      <SmartCards
-        onTapProduct={(code) => {
-          void getProductByCode(code)
-            .then((p) => {
-              if (p) {
-                void openFamily(p);
-              } else {
-                // Doctrine: no silent failures. Tell the user instead of a dead tap.
-                setToast("Couldn't open that bottle — try again.");
+      <div className="scanhm-zone scanhm-zone--cards">
+        {storeMeta === undefined ? <SmartCardsSkeleton /> : null}
+        <SmartCards
+          onTapProduct={(code) => {
+            void getProductByCode(code)
+              .then((p) => {
+                if (p) {
+                  void openFamily(p);
+                } else {
+                  // Doctrine: no silent failures. Tell the user instead of a dead tap.
+                  setToast("Couldn't open that bottle — try again.");
+                  setTimeout(() => setToast(null), 2500);
+                }
+              })
+              .catch(() => {
+                setToast("Couldn't open that bottle — check your connection.");
                 setTimeout(() => setToast(null), 2500);
-              }
-            })
-            .catch(() => {
-              setToast("Couldn't open that bottle — check your connection.");
-              setTimeout(() => setToast(null), 2500);
-            });
-        }}
-        onStoreMeta={setStoreMeta}
-        refreshKey={verifyRefreshKey}
-      />
+              });
+          }}
+          onStoreMeta={setStoreMeta}
+          refreshKey={verifyRefreshKey}
+        />
+      </div>
 
-      <BarcodeScanner
-        active={true}
-        onScan={handleScan}
-        onPhotoCapture={visionBusy ? undefined : handlePhotoCapture}
-        hideManualInput={true}
-      />
+      <div className="scanhm-camera">
+        <p className="scanhm-camera__hint">
+          Point at a barcode on the bottle or shelf tag
+        </p>
+        <BarcodeScanner
+          active={true}
+          onScan={handleScan}
+          onPhotoCapture={visionBusy ? undefined : handlePhotoCapture}
+          hideManualInput={true}
+        />
+      </div>
 
       {upcBeingMapped ? (
         <div className="upc-mapping-banner" role="status" aria-live="polite">
@@ -474,42 +480,59 @@ export function ScannerPage() {
               setUpcMappingExpectedQuery(null);
             }}
           >
-            ×
+            <IconX size={18} strokeWidth={2} />
           </button>
         </div>
       ) : null}
 
-      <SearchBar
-        value={search.query}
-        onChange={search.setQuery}
-        placeholder={
-          upcBeingMapped
-            ? `Map UPC ${upcBeingMapped} — search MLCC name…`
-            : undefined
-        }
-      />
+      <div className="scanhm-search">
+        <SearchBar
+          value={search.query}
+          onChange={search.setQuery}
+          placeholder={
+            upcBeingMapped
+              ? `Map UPC ${upcBeingMapped} — search MLCC name…`
+              : undefined
+          }
+        />
+      </div>
 
-      {scanInFlight ? (
-        <p className="banner" role="status" aria-live="polite">
-          Looking up code…
-        </p>
+      <div className="scanhm-statuses">
+        {scanInFlight ? (
+          <div className="scanhm-status scanhm-status--lookup" role="status" aria-live="polite">
+            <div className="scanhm-shimmer scanhm-shimmer--status" aria-hidden />
+            <span>Looking up code…</span>
+          </div>
+        ) : null}
+        {networkWarn ? (
+          <p className="scanhm-status scanhm-status--warn">Having trouble connecting…</p>
+        ) : null}
+        {notFoundMsg ? (
+          <p className="scanhm-status scanhm-status--warn">Product not found — try searching</p>
+        ) : null}
+        {toast ? <p className="scanhm-status scanhm-status--ok">{toast}</p> : null}
+        {search.error ? (
+          <p className="scanhm-status scanhm-status--err">{search.error}</p>
+        ) : null}
+      </div>
+
+      {search.loading && search.results.length === 0 ? (
+        <div className="scanhm-results-skeleton" aria-hidden>
+          <div className="scanhm-shimmer scanhm-shimmer--result" />
+          <div className="scanhm-shimmer scanhm-shimmer--result" />
+          <div className="scanhm-shimmer scanhm-shimmer--result" />
+        </div>
       ) : null}
-      {networkWarn ? <p className="banner toast--warning">Having trouble connecting…</p> : null}
-      {notFoundMsg ? <p className="banner banner-warn">Product not found — try searching</p> : null}
-      {toast ? <p className="banner banner-ok">{toast}</p> : null}
-
-      {search.loading ? <p className="muted center">Searching…</p> : null}
-      {search.error ? <p className="banner banner-err">{search.error}</p> : null}
 
       {search.results.length > 0 ? (
-        <ul className="result-list">
+        <ul className="scanhm-results">
           {search.results.map((p) => {
             const size = p.bottle_size_label ?? `${p.bottle_size_ml ?? ""} ML`;
             return (
               <li key={p.id}>
                 <button
                   type="button"
-                  className="result-row"
+                  className="scanhm-result-row"
                   onClick={() => {
                     const mapUpc = upcBeingMapped;
                     if (mapUpc) {
@@ -533,9 +556,14 @@ export function ScannerPage() {
                     void openFamily(p, { upcForFlag: mapUpc ?? undefined });
                   }}
                 >
-                  <span className="result-name">{p.name}</span>
-                  <span className="result-meta muted">{size}</span>
-                  <span className="result-price">{money(p.licensee_price)}</span>
+                  <ScanResultThumb product={p} />
+                  <div className="scanhm-result-row__main">
+                    <span className="scanhm-result-row__name">{p.name}</span>
+                    <span className="scanhm-result-row__meta">{size}</span>
+                  </div>
+                  <span className="scanhm-result-row__price">
+                    {money(p.licensee_price)}
+                  </span>
                 </button>
               </li>
             );
@@ -544,11 +572,18 @@ export function ScannerPage() {
             <li>
               <button
                 type="button"
-                className="result-load-more"
+                className="scanhm-result-more"
                 onClick={() => void search.loadMore()}
                 disabled={search.loadingMore}
               >
-                {search.loadingMore ? "Loading…" : "Load more results"}
+                {search.loadingMore ? (
+                  <span className="scanhm-result-more__loading">
+                    <span className="scanhm-shimmer scanhm-shimmer--pill" aria-hidden />
+                    Loading…
+                  </span>
+                ) : (
+                  "Load more results"
+                )}
               </button>
             </li>
           ) : null}
@@ -770,20 +805,7 @@ export function ScannerPage() {
         />
       ) : null}
       {visionError && !visionResult ? (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 80,
-            left: 12,
-            right: 12,
-            padding: "10px 14px",
-            borderRadius: 10,
-            background: "rgba(248, 113, 113, 0.18)",
-            borderLeft: "3px solid #f87171",
-            color: "#fecaca",
-            zIndex: 1100,
-          }}
-        >
+        <div className="scanhm-vision-error">
           Vision error: {visionError}
         </div>
       ) : null}
@@ -791,46 +813,36 @@ export function ScannerPage() {
   );
 }
 
+function SmartCardsSkeleton() {
+  return (
+    <div className="scanhm-cards-skeleton">
+      <div className="scanhm-shimmer scanhm-shimmer--card" />
+      <div className="scanhm-shimmer scanhm-shimmer--card" />
+    </div>
+  );
+}
 
-/* ─── AI Assistant hero card styles (task #92, 2026-06-07) ───────── */
-
-const aiHeroBtnStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 14,
-  width: "100%",
-  background:
-    "linear-gradient(135deg, rgba(124, 92, 255, 0.22), rgba(58, 130, 247, 0.12))",
-  border: "1px solid rgba(140, 110, 255, 0.32)",
-  borderRadius: 14,
-  padding: "13px 14px",
-  margin: "10px 0",
-  color: "#fff",
-  cursor: "pointer",
-};
-
-const aiHeroIconWrapStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 42,
-  height: 42,
-  borderRadius: 12,
-  background: "rgba(140, 110, 255, 0.22)",
-  color: "#cbb8ff",
-  flexShrink: 0,
-};
-
-const aiHeroEyebrowStyle: React.CSSProperties = {
-  fontSize: 9,
-  fontWeight: 800,
-  letterSpacing: "0.1em",
-  color: "rgba(203, 184, 255, 0.85)",
-  marginBottom: 2,
-};
-
-const aiHeroTitleStyle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 800,
-  lineHeight: 1.25,
-};
+function ScanResultThumb({ product }: { product: MlccProduct }) {
+  const [errored, setErrored] = useState(false);
+  const url = product.imageUrl;
+  const showImage = !!url && !errored;
+  return (
+    <div className="scanhm-result-thumb">
+      {showImage ? (
+        <img
+          src={url ?? undefined}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          onError={() => setErrored(true)}
+        />
+      ) : (
+        <PlaceholderBottle
+          tint={tintForCategory(product.category)}
+          name={product.name}
+          seed={product.id}
+        />
+      )}
+    </div>
+  );
+}

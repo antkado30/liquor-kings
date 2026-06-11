@@ -30,7 +30,6 @@ import {
 import { OnboardingActivation } from "./OnboardingActivation";
 import {
   IconAlert,
-  IconLoader,
   IconSparkles,
   IconStore,
 } from "./Icons";
@@ -40,6 +39,31 @@ type AuthGateProps = {
 };
 
 type SignupStep = 1 | 2;
+
+function AuthAlert({ message }: { message: string }) {
+  return (
+    <p className="auth-alert" role="alert">
+      <IconAlert size={16} strokeWidth={2} aria-hidden />
+      <span>{message}</span>
+    </p>
+  );
+}
+
+function AuthLoadingSkeleton() {
+  return (
+    <div className="auth-shell auth-shell--loading">
+      <div className="auth-card auth-card--skeleton" aria-hidden>
+        <div className="auth-shimmer auth-shimmer--brand" />
+        <div className="auth-shimmer auth-shimmer--line" />
+        <div className="auth-shimmer auth-shimmer--tabs" />
+        <div className="auth-shimmer auth-shimmer--input" />
+        <div className="auth-shimmer auth-shimmer--input" />
+        <div className="auth-shimmer auth-shimmer--btn" />
+      </div>
+      <p className="auth-subtitle auth-subtitle--loading">Loading your account…</p>
+    </div>
+  );
+}
 
 export function AuthGate({ children }: AuthGateProps) {
   const [session, setSession] = useState<Session | null>(null);
@@ -247,36 +271,29 @@ export function AuthGate({ children }: AuthGateProps) {
   }
 
   if (loading) {
-    return (
-      <div className="onboarding-shell onboarding-shell--loading">
-        <span className="settings-spinner" aria-hidden>
-          <IconLoader size={28} strokeWidth={2} />
-        </span>
-        <p className="onboarding-subtitle">Loading your account…</p>
-      </div>
-    );
+    return <AuthLoadingSkeleton />;
   }
 
   if (scannerMisconfigured) {
     return (
-      <div className="onboarding-shell">
-        <div className="onboarding-card">
-          <div className="onboarding-brand">
-            <span className="onboarding-brand__icon" aria-hidden>
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <span className="auth-brand__badge auth-brand__badge--warn" aria-hidden>
               <IconAlert size={22} strokeWidth={2} />
             </span>
             <div>
-              <h1 className="onboarding-title">Scanner misconfigured</h1>
-              <p className="onboarding-subtitle">
+              <h1 className="auth-wordmark">
+                <span className="auth-wordmark__liquor">Liquor</span>{" "}
+                <span className="auth-wordmark__kings">Kings</span>
+              </h1>
+              <p className="auth-subtitle">
                 This build is missing required configuration. Contact the person
                 who set up your scanner.
               </p>
             </div>
           </div>
-          <p className="onboarding-error" role="alert">
-            <IconAlert size={16} strokeWidth={2} aria-hidden />
-            <span>{scannerMisconfigured.reason}</span>
-          </p>
+          <AuthAlert message={scannerMisconfigured.reason} />
         </div>
       </div>
     );
@@ -297,15 +314,18 @@ export function AuthGate({ children }: AuthGateProps) {
 
   if (!session) {
     return (
-      <div className="onboarding-shell">
-        <div className="onboarding-card">
-          <div className="onboarding-brand">
-            <span className="onboarding-brand__icon" aria-hidden>
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <span className="auth-brand__badge" aria-hidden>
               <IconSparkles size={22} strokeWidth={1.9} />
             </span>
             <div>
-              <h1 className="onboarding-title">Liquor Kings</h1>
-              <p className="onboarding-subtitle">
+              <h1 className="auth-wordmark">
+                <span className="auth-wordmark__liquor">Liquor</span>{" "}
+                <span className="auth-wordmark__kings">Kings</span>
+              </h1>
+              <p className="auth-subtitle">
                 {mode === "login"
                   ? "Sign in to start scanning and ordering."
                   : "Create your store account in two quick steps."}
@@ -313,12 +333,12 @@ export function AuthGate({ children }: AuthGateProps) {
             </div>
           </div>
 
-          <div className="onboarding-tabs" role="tablist" aria-label="Account mode">
+          <div className="auth-tabs" role="tablist" aria-label="Account mode">
             <button
               type="button"
               role="tab"
               aria-selected={mode === "login"}
-              className={`onboarding-tab${mode === "login" ? " onboarding-tab--active" : ""}`}
+              className={`auth-tab${mode === "login" ? " auth-tab--active" : ""}`}
               onClick={() => {
                 setMode("login");
                 resetErrors();
@@ -330,7 +350,7 @@ export function AuthGate({ children }: AuthGateProps) {
               type="button"
               role="tab"
               aria-selected={mode === "signup"}
-              className={`onboarding-tab${mode === "signup" ? " onboarding-tab--active" : ""}`}
+              className={`auth-tab${mode === "signup" ? " auth-tab--active" : ""}`}
               onClick={() => {
                 setMode("signup");
                 resetErrors();
@@ -341,13 +361,13 @@ export function AuthGate({ children }: AuthGateProps) {
           </div>
 
           {mode === "signup" ? (
-            <div className="onboarding-progress" aria-label="Signup progress">
-              <span className="onboarding-progress__label">
+            <div className="auth-progress" aria-label="Signup progress">
+              <span className="auth-progress__label">
                 Step {signupStep} of 2
               </span>
-              <div className="onboarding-progress__track">
+              <div className="auth-progress__track">
                 <div
-                  className="onboarding-progress__fill"
+                  className="auth-progress__fill"
                   style={{ width: signupStep === 1 ? "50%" : "100%" }}
                 />
               </div>
@@ -355,65 +375,60 @@ export function AuthGate({ children }: AuthGateProps) {
           ) : null}
 
           {mode === "login" ? (
-            <form className="onboarding-form" onSubmit={handleSignIn}>
-              <label className="onboarding-field">
-                <span className="onboarding-field__label">Email</span>
+            <form className="auth-form" onSubmit={handleSignIn}>
+              <label className="auth-field">
+                <span className="auth-field__label">Email</span>
                 <input
                   type="email"
                   autoComplete="username"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="onboarding-input"
+                  className="auth-input"
                   placeholder="you@example.com"
                   disabled={submitting}
                 />
               </label>
-              <label className="onboarding-field">
-                <span className="onboarding-field__label">Password</span>
+              <label className="auth-field">
+                <span className="auth-field__label">Password</span>
                 <input
                   type="password"
                   autoComplete="current-password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="onboarding-input"
+                  className="auth-input"
                   disabled={submitting}
                 />
               </label>
 
-              {errorMsg ? (
-                <p className="onboarding-error" role="alert">
-                  <IconAlert size={16} strokeWidth={2} aria-hidden />
-                  <span>{errorMsg}</span>
-                </p>
-              ) : null}
+              {errorMsg ? <AuthAlert message={errorMsg} /> : null}
 
               <button
                 type="submit"
                 disabled={submitting}
-                className="onboarding-btn onboarding-btn--primary onboarding-btn--block"
+                className="auth-btn auth-btn--primary auth-btn--block"
               >
                 {submitting ? "Signing in…" : "Sign in"}
               </button>
             </form>
           ) : signupStep === 1 ? (
-            <form className="onboarding-form" onSubmit={goToSignupStep2}>
-              <p className="onboarding-section-title">Step 1 — Your account</p>
-              <label className="onboarding-field">
-                <span className="onboarding-field__label">Store name</span>
+            <form className="auth-form" onSubmit={goToSignupStep2}>
+              <p className="auth-section-title">Step 1 — Your account</p>
+              <label className="auth-field">
+                <span className="auth-field__label">Store name</span>
                 <input
                   type="text"
                   required
                   value={storeName}
                   onChange={(e) => setStoreName(e.target.value)}
-                  className="onboarding-input"
+                  className="auth-input"
                   placeholder="Your store name"
                   disabled={submitting}
                 />
               </label>
-              <label className="onboarding-field">
-                <span className="onboarding-field__label">
+              <label className="auth-field">
+                <span className="auth-field__label">
                   Liquor license number
                 </span>
                 <input
@@ -422,26 +437,26 @@ export function AuthGate({ children }: AuthGateProps) {
                   required
                   value={liquorLicense}
                   onChange={(e) => setLiquorLicense(e.target.value)}
-                  className="onboarding-input"
+                  className="auth-input"
                   placeholder="1234567"
                   disabled={submitting}
                 />
               </label>
-              <label className="onboarding-field">
-                <span className="onboarding-field__label">Email</span>
+              <label className="auth-field">
+                <span className="auth-field__label">Email</span>
                 <input
                   type="email"
                   autoComplete="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="onboarding-input"
+                  className="auth-input"
                   placeholder="you@example.com"
                   disabled={submitting}
                 />
               </label>
-              <label className="onboarding-field">
-                <span className="onboarding-field__label">Password</span>
+              <label className="auth-field">
+                <span className="auth-field__label">Password</span>
                 <input
                   type="password"
                   autoComplete="new-password"
@@ -449,86 +464,81 @@ export function AuthGate({ children }: AuthGateProps) {
                   minLength={8}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="onboarding-input"
+                  className="auth-input"
                   placeholder="Minimum 8 characters"
                   disabled={submitting}
                 />
               </label>
 
-              {errorMsg ? (
-                <p className="onboarding-error" role="alert">
-                  <IconAlert size={16} strokeWidth={2} aria-hidden />
-                  <span>{errorMsg}</span>
-                </p>
-              ) : null}
+              {errorMsg ? <AuthAlert message={errorMsg} /> : null}
 
               <button
                 type="submit"
-                className="onboarding-btn onboarding-btn--primary onboarding-btn--block"
+                className="auth-btn auth-btn--primary auth-btn--block"
               >
                 Continue
               </button>
             </form>
           ) : (
-            <form className="onboarding-form" onSubmit={handleSignUp}>
-              <p className="onboarding-section-title">
+            <form className="auth-form" onSubmit={handleSignUp}>
+              <p className="auth-section-title">
                 Step 2 — MLCC connection
               </p>
-              <p className="onboarding-hint">
+              <p className="auth-hint">
                 Same username and password you use at lara.michigan.gov (MILO).
                 We encrypt them and only use them to place orders on your
                 behalf.
               </p>
-              <label className="onboarding-field">
-                <span className="onboarding-field__label">MLCC username</span>
+              <label className="auth-field">
+                <span className="auth-field__label">MLCC username</span>
                 <input
                   type="text"
                   required
                   value={mlccUsername}
                   onChange={(e) => setMlccUsername(e.target.value)}
-                  className="onboarding-input"
+                  className="auth-input"
                   autoComplete="off"
                   disabled={submitting}
                 />
               </label>
-              <label className="onboarding-field">
-                <span className="onboarding-field__label">MLCC password</span>
+              <label className="auth-field">
+                <span className="auth-field__label">MLCC password</span>
                 <input
                   type="password"
                   required
                   value={mlccPassword}
                   onChange={(e) => setMlccPassword(e.target.value)}
-                  className="onboarding-input"
+                  className="auth-input"
                   autoComplete="off"
                   disabled={submitting}
                 />
               </label>
 
-              <details className="onboarding-details">
+              <details className="auth-details">
                 <summary>Store address (optional)</summary>
-                <label className="onboarding-field">
-                  <span className="onboarding-field__label">Street</span>
+                <label className="auth-field">
+                  <span className="auth-field__label">Street</span>
                   <input
                     type="text"
                     value={addressLine1}
                     onChange={(e) => setAddressLine1(e.target.value)}
-                    className="onboarding-input"
+                    className="auth-input"
                     disabled={submitting}
                   />
                 </label>
-                <div className="onboarding-field-row">
-                  <label className="onboarding-field">
-                    <span className="onboarding-field__label">City</span>
+                <div className="auth-field-row">
+                  <label className="auth-field">
+                    <span className="auth-field__label">City</span>
                     <input
                       type="text"
                       value={city}
                       onChange={(e) => setCity(e.target.value)}
-                      className="onboarding-input"
+                      className="auth-input"
                       disabled={submitting}
                     />
                   </label>
-                  <label className="onboarding-field">
-                    <span className="onboarding-field__label">State</span>
+                  <label className="auth-field">
+                    <span className="auth-field__label">State</span>
                     <input
                       type="text"
                       maxLength={2}
@@ -536,36 +546,31 @@ export function AuthGate({ children }: AuthGateProps) {
                       onChange={(e) =>
                         setStateAbbr(e.target.value.toUpperCase())
                       }
-                      className="onboarding-input"
+                      className="auth-input"
                       disabled={submitting}
                     />
                   </label>
-                  <label className="onboarding-field">
-                    <span className="onboarding-field__label">ZIP</span>
+                  <label className="auth-field">
+                    <span className="auth-field__label">ZIP</span>
                     <input
                       type="text"
                       inputMode="numeric"
                       maxLength={10}
                       value={postalCode}
                       onChange={(e) => setPostalCode(e.target.value)}
-                      className="onboarding-input"
+                      className="auth-input"
                       disabled={submitting}
                     />
                   </label>
                 </div>
               </details>
 
-              {errorMsg ? (
-                <p className="onboarding-error" role="alert">
-                  <IconAlert size={16} strokeWidth={2} aria-hidden />
-                  <span>{errorMsg}</span>
-                </p>
-              ) : null}
+              {errorMsg ? <AuthAlert message={errorMsg} /> : null}
 
-              <div className="onboarding-actions">
+              <div className="auth-actions">
                 <button
                   type="button"
-                  className="onboarding-btn onboarding-btn--secondary"
+                  className="auth-btn auth-btn--secondary"
                   disabled={submitting}
                   onClick={() => {
                     resetErrors();
@@ -577,19 +582,14 @@ export function AuthGate({ children }: AuthGateProps) {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="onboarding-btn onboarding-btn--primary"
+                  className="auth-btn auth-btn--primary"
                 >
                   {submitting ? "Creating account…" : "Create account"}
                 </button>
               </div>
 
-              <p className="onboarding-hint">
-                <IconStore
-                  size={14}
-                  strokeWidth={1.8}
-                  style={{ verticalAlign: "middle", marginRight: 6 }}
-                  aria-hidden
-                />
+              <p className="auth-hint auth-hint--icon">
+                <IconStore size={14} strokeWidth={1.8} aria-hidden />
                 Next we&apos;ll verify your MLCC connection (~30–60s) before
                 opening the scanner.
               </p>

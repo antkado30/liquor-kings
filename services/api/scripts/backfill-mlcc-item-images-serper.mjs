@@ -334,6 +334,9 @@ async function visionCheckOnce(item, buf, mediaType) {
     `a proof or age statement that CONTRADICTS one in the target name; a ` +
     `multi-bottle pack or gift set when the target is a single bottle; not a ` +
     `product photo (logo, person, store shelf, meme). ` +
+    `PACK RULE: if the target name contains a pack count like "4PK", "10PK", ` +
+    `"15PK", "20PK", the product IS a multi-bottle pack — pack/display/bucket ` +
+    `shots are CORRECT for those and a single-bottle shot is also acceptable. ` +
     `SIZE RULE: judge size ONLY from readable label text (e.g. "750ML" ` +
     `printed on the label). NEVER estimate size from bottle proportions — ` +
     `you cannot tell 375ml from 750ml in an isolated product shot. If no ` +

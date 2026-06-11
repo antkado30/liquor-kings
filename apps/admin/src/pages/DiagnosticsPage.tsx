@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { DeckHeader, DeckPage, DeckSkeleton } from "../deck/DeckUi";
 import { getDiagnosticsOverview, parseJson } from "../api/operatorReview";
 import { Msg } from "../operator-review/components/Msg";
 import { useOperatorSession } from "../session/OperatorSessionContext";
@@ -376,25 +377,22 @@ export function DiagnosticsPage() {
   }, [load]);
 
   return (
-    <div className="review-view diagnostics-page">
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-        <h2 className="section-title" style={{ margin: 0 }}>
-          Diagnostics
-        </h2>
-        <button type="button" className="secondary" onClick={() => void load()} disabled={loading}>
-          Refresh
-        </button>
-      </div>
+    <DeckPage>
+      <DeckHeader
+        title="Diagnostics"
+        subtitle={
+          <>
+            Store-scoped execution aggregates and recent <code>lk_system_diagnostics</code> rows for
+            this operator store plus <strong>global</strong> rows (<code>store_id</code> null). See meta
+            notes below for limits.
+          </>
+        }
+        icon="diagnostics"
+        onRefresh={() => void load()}
+        loading={loading}
+      />
 
-      <p className="muted">
-        Store-scoped execution aggregates and recent <code>lk_system_diagnostics</code> rows for this
-        operator store plus <strong>global</strong> rows (<code>store_id</code> null). See meta notes
-        below for limits.
-      </p>
-
-      {loading && !data ? (
-        <p className="muted">Loading…</p>
-      ) : null}
+      {loading && !data ? <DeckSkeleton rows={6} variant="card" /> : null}
       <Msg type={msg.type} text={msg.text} />
 
       {data ? (
@@ -871,6 +869,6 @@ export function DiagnosticsPage() {
           </div>
         </>
       ) : null}
-    </div>
+    </DeckPage>
   );
 }

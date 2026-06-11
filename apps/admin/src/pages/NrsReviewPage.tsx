@@ -23,6 +23,14 @@ import {
   type CatalogSearchResult,
   type NrsReviewRow,
 } from "../api/nrsReview";
+import {
+  DeckBanner,
+  DeckEmpty,
+  DeckHeader,
+  DeckPage,
+  DeckSkeleton,
+  IconCheckSmall,
+} from "../deck/DeckUi";
 
 function money(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -128,7 +136,7 @@ export function NrsReviewPage() {
       setResolvedCount((n) => n + 1);
       setFlash({
         kind: "ok",
-        text: `✓ Mapped UPC ${current.upc} → ${res.mlccName ?? candidate.name} (${candidate.code})`,
+        text: `Mapped UPC ${current.upc} → ${res.mlccName ?? candidate.name} (${candidate.code})`,
       });
       advance();
     },
@@ -149,7 +157,7 @@ export function NrsReviewPage() {
       setResolvedCount((n) => n + 1);
       setFlash({
         kind: "ok",
-        text: `✓ Mapped UPC ${current.upc} → ${res.mlccName ?? displayName ?? mlccCode}`,
+        text: `Mapped UPC ${current.upc} → ${res.mlccName ?? displayName ?? mlccCode}`,
       });
       // Reset search state when moving on
       setSearchOpen(false);
@@ -236,30 +244,36 @@ export function NrsReviewPage() {
   }, [resolvedCount, skippedCount, totalPending]);
 
   return (
-    <div className="nrs-review-page">
-      <header className="nrs-review-header">
-        <h1>Catalog review queue</h1>
-        <p className="muted small">
-          Tier 2 ambiguous NRS matches. Pick the correct MLCC product to write a permanent UPC mapping.
-          Keys: <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> = resolve · <kbd>S</kbd> = skip · <kbd>R</kbd> = refresh
-        </p>
-      </header>
+    <DeckPage narrow>
+      <DeckHeader
+        title="Catalog review queue"
+        subtitle={
+          <>
+            Tier 2 ambiguous NRS matches. Pick the correct MLCC product to write a permanent UPC mapping.
+            Keys: <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> = resolve · <kbd>S</kbd> = skip · <kbd>R</kbd> = refresh
+          </>
+        }
+        icon="catalog"
+        onRefresh={() => void loadInitial()}
+        loading={loading}
+      />
 
-      {flash.kind === "ok" ? <div className="banner banner-ok">{flash.text}</div> : null}
-      {flash.kind === "err" ? <div className="banner banner-err">{flash.text}</div> : null}
+      {flash.kind === "ok" ? <DeckBanner kind="ok">{flash.text}</DeckBanner> : null}
+      {flash.kind === "err" ? <DeckBanner kind="err">{flash.text}</DeckBanner> : null}
 
-      {loading ? (
-        <p className="muted center">Loading review queue…</p>
-      ) : null}
+      {loading ? <DeckSkeleton rows={3} variant="card" /> : null}
 
       {!loading && !current ? (
-        <div className="card nrs-review-empty">
-          <h2>Inbox zero 🎉</h2>
-          <p className="muted">No pending matches in the queue. Refresh (R) to check for new ones.</p>
-          <button type="button" className="btn primary" onClick={() => void loadInitial()}>
-            Refresh
-          </button>
-        </div>
+        <DeckEmpty
+          title="Inbox zero"
+          action={
+            <button type="button" className="btn primary" onClick={() => void loadInitial()}>
+              Refresh
+            </button>
+          }
+        >
+          No pending matches in the queue. Refresh (R) to check for new ones.
+        </DeckEmpty>
       ) : null}
 
       {current ? (
@@ -339,7 +353,7 @@ export function NrsReviewPage() {
                     Close
                   </button>
                 </div>
-                {searchLoading ? <p className="muted small">Searching…</p> : null}
+                {searchLoading ? <DeckSkeleton rows={2} variant="row" /> : null}
                 {!searchLoading && searchQuery.trim().length >= 2 && searchResults.length === 0 ? (
                   <p className="muted small">No matches in MLCC catalog. Try a shorter or different name.</p>
                 ) : null}
@@ -353,7 +367,9 @@ export function NrsReviewPage() {
                           onClick={() => void handleResolveCode(r.code, r.name)}
                           disabled={acting}
                         >
-                          <span className="nrs-review-candidate-key">✓</span>
+                          <span className="nrs-review-candidate-key" aria-hidden>
+                            <IconCheckSmall size={16} />
+                          </span>
                           <span className="nrs-review-candidate-body">
                             <span className="nrs-review-candidate-name">{r.name}</span>
                             <span className="nrs-review-candidate-attrs muted small">
@@ -388,7 +404,9 @@ export function NrsReviewPage() {
         </div>
       ) : null}
 
-      <footer className="nrs-review-footer muted small">{progressLabel}</footer>
-    </div>
+      <footer className="nrs-review-footer muted small" style={{ fontVariantNumeric: "tabular-nums" }}>
+        {progressLabel}
+      </footer>
+    </DeckPage>
   );
 }

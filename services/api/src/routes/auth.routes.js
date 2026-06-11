@@ -376,4 +376,158 @@ router.patch(
   },
 );
 
+/**
+ * POST /auth/me/stores — add ANOTHER store to the signed-in owner's
+ * account (multi-store V1, Tony 2026-06-10: "multi-store has to be a
+ * version one feature... it has to be under that person's name").
+ *
+ * Same-owner rule enforced structurally: the new store is linked to
+ * req.auth_user_id (the verified session user) — there is no way to
+ * attach it to anyone else. Service-role callers are refused; this is
+ * an owner action, not an ops action.
+ *
+ * Mirrors the signup flow's store-creation steps (validate → encrypt
+ * creds → create store → link membership, with rollback) minus the
+ * auth-user creation. The new store starts unverified — the client
+ * runs the standard activation probe against it after switching.
+ *
+ * Body: { store_name, liquor_license, mlcc_username, mlcc_password,
+ *         address_line1?, city?, state?, postal_code? }
+ * Returns 201 { ok, store_id, store_name }.
+ */
+/**
+ * GET /auth/me/stores — list every store on the signed-in owner's
+ * account (id + name + license tail) for the store-switcher UI.
+ */
+router.get("/me/stores", resolveAuthenticatedStore, async (req, res) => {
+  try {
+    if (req.auth_mode !== "user" || !req.auth_user_id) {
+      return res.status(403).json({ ok: false, error: "owner_session_required" });
+    }
+    const { data: memberships, error: memErr } = await supabase
+      .from("store_users")
+      .select("store_id, role, stores ( id, store_name, liquor_license, is_active )")
+      .eq("user_id", req.auth_user_id)
+      .eq("is_active", true);
+    if (memErr) {
+      return res.status(500).json({ ok: false, error: memErr.message });
+    }
+    const stores = (memberships ?? [])
+      .map((m) => m.stores)
+      .filter((s) => s && s.is_active !== false)
+      .map((s) => ({
+        store_id: s.id,
+        store_name: s.store_name,
+        // Last 4 of the license — enough to tell twins apart, never the
+        // full number in a list payload.
+        license_tail: String(s.liquor_license ?? "").slice(-4) || null,
+      }));
+    return res.json({ ok: true, stores });
+  } catch (e) {
+    return res
+      .status(500)
+      .json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+router.post(
+  "/me/stores",
+  express.json(),
+  resolveAuthenticatedStore,
+  async (req, res) => {
+    try {
+      if (req.auth_mode !== "user" || !req.auth_user_id) {
+        return res.status(403).json({ ok: false, error: "owner_session_required" });
+      }
+      const userId = req.auth_user_id;
+      const body = req.body ?? {};
+      const store_name = trimField(body.store_name);
+      const liquor_license = trimField(body.liquor_license, 20);
+      const mlcc_username = trimField(body.mlcc_username, 200);
+      const mlcc_password = String(body.mlcc_password ?? "");
+      const address_line1 = trimField(body.address_line1);
+      const city = trimField(body.city, 80);
+      const state = trimField(body.state, 4).toUpperCase();
+      const postal_code = trimField(body.postal_code, 10);
+
+      if (!store_name) {
+        return res.status(400).json({ ok: false, error: "store_name_required" });
+      }
+      if (!isLicenseNumber(liquor_license)) {
+        return res.status(400).json({ ok: false, error: "liquor_license_invalid" });
+      }
+      if (!mlcc_username || !mlcc_password) {
+        return res.status(400).json({ ok: false, error: "mlcc_credentials_required" });
+      }
+
+      // Each MLCC license is one store — refuse a duplicate license on
+      // this account (or anyone's; licenses are state-unique).
+      const { data: dupe, error: dupeErr } = await supabase
+        .from("stores")
+        .select("id")
+        .eq("liquor_license", liquor_license)
+        .limit(1)
+        .maybeSingle();
+      if (dupeErr) {
+        return res.status(500).json({ ok: false, error: dupeErr.message });
+      }
+      if (dupe) {
+        return res.status(409).json({ ok: false, error: "license_already_registered" });
+      }
+
+      let mlcc_password_encrypted;
+      try {
+        mlcc_password_encrypted = encryptCredential(mlcc_password);
+      } catch (encErr) {
+        return res.status(500).json({
+          ok: false,
+          error: "credential_encryption_failed",
+          details: encErr?.message,
+        });
+      }
+
+      const { data: store, error: storeErr } = await supabase
+        .from("stores")
+        .insert({
+          store_name,
+          liquor_license,
+          mlcc_username,
+          mlcc_password_encrypted,
+          address_line1: address_line1 || null,
+          city: city || null,
+          state: state || "MI",
+          postal_code: postal_code || null,
+          is_active: true,
+        })
+        .select("id, store_name")
+        .single();
+      if (storeErr) {
+        return res.status(500).json({ ok: false, error: storeErr.message });
+      }
+
+      const { error: linkErr } = await supabase.from("store_users").insert({
+        user_id: userId,
+        store_id: store.id,
+        is_active: true,
+        role: "owner",
+      });
+      if (linkErr) {
+        // Roll back the orphaned store so the license isn't burned.
+        await supabase.from("stores").delete().eq("id", store.id);
+        return res.status(500).json({ ok: false, error: linkErr.message });
+      }
+
+      return res.status(201).json({
+        ok: true,
+        store_id: store.id,
+        store_name: store.store_name,
+      });
+    } catch (e) {
+      return res
+        .status(500)
+        .json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+);
+
 export default router;

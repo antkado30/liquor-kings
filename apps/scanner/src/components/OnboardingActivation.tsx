@@ -14,7 +14,7 @@ import {
 } from "../api/execution";
 import { humanizeNetworkError } from "../api/me";
 import { MlccCredentialsForm } from "./MlccCredentialsForm";
-import { IconAlert, IconCheck, IconLoader } from "./Icons";
+import { IconAlert, IconCheck, IconLoader, IconPlug } from "./Icons";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 const STAGES: Array<{ id: string; label: string }> = [
@@ -160,48 +160,47 @@ export function OnboardingActivation({
   };
 
   return (
-    <div className="onboarding-activation-backdrop" role="dialog" aria-modal="true">
-      <div className="onboarding-activation-card">
+    <div className="onbd-backdrop" role="dialog" aria-modal="true">
+      <div className="onbd-card">
         {state.kind === "succeeded" ? (
           <>
-            <div className="onboarding-activation-icon onboarding-activation-icon--success">
-              <IconCheck size={28} strokeWidth={2.2} />
+            <div className="onbd-icon onbd-icon--success">
+              <IconCheck size={32} strokeWidth={2.2} />
             </div>
-            <h2 className="onboarding-activation-heading">You&apos;re all set!</h2>
-            <p className="onboarding-activation-copy">
+            <h2 className="onbd-heading">You&apos;re all set!</h2>
+            <p className="onbd-copy">
               Welcome to Liquor Kings, {storeName}. We&apos;ve verified your MLCC
               connection — opening the scanner now.
             </p>
           </>
         ) : state.kind === "failed" ? (
           <>
-            <div className="onboarding-activation-icon onboarding-activation-icon--failed">
+            <div className="onbd-icon onbd-icon--failed">
               <IconAlert size={28} strokeWidth={2} />
             </div>
-            <h2 className="onboarding-activation-heading">
-              Couldn&apos;t verify connection
-            </h2>
-            <p className="onboarding-activation-copy">{state.message}</p>
+            <h2 className="onbd-heading">Couldn&apos;t verify connection</h2>
+            <p className="onbd-copy">{state.message}</p>
 
             {showFixCreds && storeId ? (
-              <div className="onboarding-activation-fix">
-                <p className="onboarding-hint" style={{ marginBottom: 12 }}>
+              <div className="onbd-fix">
+                <p className="onbd-hint">
                   Update the same username and password you use at
                   lara.michigan.gov. We&apos;ll retry the connection check
                   automatically.
                 </p>
-                <MlccCredentialsForm
-                  overrideStoreId={storeId}
-                  passwordRequired
-                  submitLabel="Save & retry connection"
-                  onSaved={() => {
-                    retryProbe();
-                  }}
-                />
+                <div className="onbd-creds">
+                  <MlccCredentialsForm
+                    overrideStoreId={storeId}
+                    passwordRequired
+                    submitLabel="Save & retry connection"
+                    onSaved={() => {
+                      retryProbe();
+                    }}
+                  />
+                </div>
                 <button
                   type="button"
-                  className="onboarding-btn onboarding-btn--ghost onboarding-btn--block"
-                  style={{ marginTop: 10 }}
+                  className="auth-btn auth-btn--ghost auth-btn--block onbd-fix__cancel"
                   onClick={() => setShowFixCreds(false)}
                 >
                   Cancel
@@ -209,17 +208,17 @@ export function OnboardingActivation({
               </div>
             ) : (
               <>
-                <div className="onboarding-activation-actions">
+                <div className="onbd-actions">
                   <button
                     type="button"
-                    className="onboarding-btn onboarding-btn--primary"
+                    className="auth-btn auth-btn--primary"
                     onClick={retryProbe}
                   >
                     Try again
                   </button>
                   <button
                     type="button"
-                    className="onboarding-btn onboarding-btn--secondary"
+                    className="auth-btn auth-btn--secondary"
                     onClick={onComplete}
                   >
                     Skip for now
@@ -228,14 +227,13 @@ export function OnboardingActivation({
                 {storeId ? (
                   <button
                     type="button"
-                    className="onboarding-btn onboarding-btn--primary onboarding-btn--block"
-                    style={{ marginTop: 10 }}
+                    className="auth-btn auth-btn--primary auth-btn--block onbd-fix__open"
                     onClick={() => setShowFixCreds(true)}
                   >
-                    Fix credentials
+                    Update MLCC credentials
                   </button>
                 ) : null}
-                <p className="onboarding-activation-footnote">
+                <p className="onbd-footnote">
                   Common causes: wrong MLCC username or password, MLCC site
                   maintenance, or an account prompt (captcha / 2FA) on MILO.
                 </p>
@@ -244,63 +242,59 @@ export function OnboardingActivation({
           </>
         ) : (
           <>
-            <div className="onboarding-activation-icon onboarding-activation-icon--running">
-              <span className="settings-spinner" aria-hidden>
-                <IconLoader size={28} strokeWidth={2} />
-              </span>
+            <div className="onbd-icon onbd-icon--running">
+              <IconPlug size={26} strokeWidth={1.85} />
             </div>
-            <h2 className="onboarding-activation-heading">
-              Verifying your MLCC connection…
-            </h2>
-            <p className="onboarding-activation-copy">
+            <h2 className="onbd-heading">Verifying your MLCC connection…</h2>
+            <p className="onbd-copy">
               We&apos;re signing into MILO with your credentials to confirm
               everything works before you start scanning. This usually takes
               30–60 seconds — please keep this screen open.
             </p>
             {elapsedSec >= 20 ? (
-              <p className="onboarding-activation-footnote">
+              <p className="onbd-footnote">
                 Still working… {elapsedSec}s elapsed. MLCC can be slow during
                 peak hours.
               </p>
             ) : null}
-            <ul className="onboarding-activation-stages" aria-label="Verification progress">
-              {STAGES.map((stage) => {
-                const reached = stageHasReached(state, stage.id);
-                const active = stageIsActive(state, stage.id);
-                const stageClass = reached
-                  ? "onboarding-activation-stage--done"
-                  : active
-                    ? "onboarding-activation-stage--active"
-                    : "onboarding-activation-stage--pending";
-                return (
-                  <li
-                    key={stage.id}
-                    className={`onboarding-activation-stage ${stageClass}`}
-                  >
-                    <span
-                      className={`onboarding-activation-stage__icon ${
-                        reached
-                          ? "onboarding-activation-stage__icon--done"
-                          : active
-                            ? "onboarding-activation-stage__icon--active"
-                            : "onboarding-activation-stage__icon--pending"
-                      }`}
-                      aria-hidden
-                    >
-                      {reached ? (
-                        <IconCheck size={13} strokeWidth={2.5} />
-                      ) : active ? (
-                        <IconLoader size={13} strokeWidth={2.2} />
-                      ) : null}
-                    </span>
-                    <span>{stage.label}</span>
-                  </li>
-                );
-              })}
-            </ul>
+            <ActivationProgress state={state} />
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function ActivationProgress({ state }: { state: ActivationState }) {
+  return (
+    <div className="onbd-progress" role="status" aria-live="polite">
+      <ol className="onbd-progress__list">
+        {STAGES.map((stage) => {
+          const reached = stageHasReached(state, stage.id);
+          const active = stageIsActive(state, stage.id);
+          const status = reached ? "done" : active ? "active" : "pending";
+          return (
+            <li
+              key={stage.id}
+              className={`onbd-progress__step onbd-progress__step--${status}`}
+              aria-current={status === "active" ? "step" : undefined}
+            >
+              <span className="onbd-progress__icon" aria-hidden>
+                {status === "done" ? (
+                  <IconCheck size={12} strokeWidth={2.75} />
+                ) : status === "active" ? (
+                  <IconLoader
+                    size={12}
+                    strokeWidth={2.75}
+                    className="onbd-progress__spin"
+                  />
+                ) : null}
+              </span>
+              <span className="onbd-progress__label">{stage.label}</span>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }

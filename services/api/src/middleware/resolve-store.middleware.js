@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import supabase from "../config/supabase.js";
 import { logSystemDiagnostic, DIAGNOSTIC_KIND } from "../services/diagnostics.service.js";
-import { verifySupabaseAccessToken } from "../lib/access-token.js";
+import { verifySupabaseAccessTokenAny } from "../lib/access-token.js";
 
 function timingSafeEqualStrings(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false;
@@ -42,11 +42,13 @@ export async function resolveAuthenticatedStore(req, res, next) {
     return next();
   }
 
-  // Fast path: verify the Supabase JWT locally (no network hop) when the JWT
-  // secret is configured. Falls back to the authoritative getUser() call on any
-  // miss, so this is a pure speedup with identical security semantics.
-  // (Instant-feel: removes a per-request round-trip to GoTrue, 2026-06-09.)
-  let authUserId = verifySupabaseAccessToken(token)?.userId ?? null;
+  // Fast path: verify the Supabase JWT locally (no network hop). HS256 via
+  // the legacy shared secret when configured, OR ES256 via the project's
+  // public JWKS (Tony's project uses the new asymmetric keys — no secret
+  // needed at all, 2026-06-10). Falls back to the authoritative getUser()
+  // call on any miss, so this is a pure speedup with identical security
+  // semantics. (Instant-feel: removes a per-request GoTrue round-trip.)
+  let authUserId = (await verifySupabaseAccessTokenAny(token))?.userId ?? null;
 
   if (!authUserId) {
     const { data: userData, error: userErr } =

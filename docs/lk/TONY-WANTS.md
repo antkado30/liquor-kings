@@ -52,6 +52,14 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   spinner on every tab switch.
 - ✅ **Sync auth token** (2026-06-07) — JWT read from an in-memory session
   mirror instead of awaiting `getSession()` before every API call.
+- ✅ **Server-side local JWT verification — ZERO config (2026-06-10, in the
+  undeployed batch).** The old plan needed SUPABASE_JWT_SECRET, but Tony's
+  project rotated to asymmetric ES256 signing keys (no shared secret
+  exists). New: `access-token.js` verifies ES256 tokens against the
+  project's public JWKS (fetched once, cached 10 min, rate-limited refetch
+  on key rotation) — kills the per-request GoTrue network hop with NOTHING
+  to configure. 8/8 adversarial tests (tamper, kid-spoof, wrong issuer,
+  expired, alg=none all rejected). getUser() fallback retained on any miss.
 - ✅ **Code-split the bundle** (2026-06-07) — the 7 non-home pages + the
   Assistant/Analytics overlays are now lazy-loaded into their own small
   chunks (Browse 15KB, Templates 10KB, etc.), prefetched on idle so first
@@ -69,9 +77,12 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   so sort/filter indexes give negligible read gain for real write+migration
   cost. The `count:"exact"` removal + payload trim were the real DB wins.
   Revisit only if the catalog grows 10x or EXPLAIN shows a real hotspot.
-- ⏳ **Facet aggregation** — the 3 category/ada/size facets each scan all
-  ~13.8k rows to count in JS; replace with a GROUP BY RPC (now masked by
-  client-side facet cache, so low priority).
+- ✅ **Facet aggregation** (2026-06-10, in the undeployed batch) — the 3
+  category/ada/size facets each scanned ~13.8k rows for JS counting +
+  4 min/max queries. Now ONE `browse_facets()` RPC (migration
+  `20260610234500`, pglast-validated inner+outer) returns the whole blob
+  via Postgres GROUP BYs. JS path retained as automatic fallback, so
+  deploy order doesn't matter — run the migration to switch it on.
 - 💡 Co-locate API + DB region (bigger move, later).
 - ✅ **Split the Chromium worker into its own Fly service (deploy-speed fix)**
   (2026-06-08). DONE + verified in prod. API/web (`liquor-kings`) is now a slim
@@ -236,7 +247,14 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
 - ✅ **Public landing page** at liquor-kings.fly.dev.
 - ✅ **Privacy-conscious placeholders.** No real Colony or other-store
   data in public-facing forms ("Your store name" / "1234567").
-- ✅ **$119/month pricing** on the landing page (not $49).
+- ✅ ~~**$119/month pricing** on the landing page (not $49).~~ **REVERSED
+  2026-06-10 (Tony):** public dollar amount REMOVED from the homepage —
+  competitors shouldn't read our pricing off the landing page. Now says
+  "One flat monthly rate… full pricing shown at signup." Self-serve stays
+  fully automated (NO "call us" — Tony explicit); exact price appears
+  inside the signup flow before commitment. $119 remains the internal
+  number + in ToS (legal disclosure; lawyer pass will revisit). In the
+  undeployed batch.
 - ✅ **Order time copy: "1.5-to-2-hour MLCC order → 5-to-10 minutes."**
   Not "30 min → 5 min."
 - ✅ **Founder Console / Owner view / Data center.** Admin dashboard at
@@ -313,6 +331,15 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   website scraping, manual curation via /admin/images, or a
   combination. NEEDS STRATEGY DECISION before execution.
 
+- ✅ **Photos-first catalog ordering** (Tony, 2026-06-10: "any bottle that
+  has a photo, push it to the top of the catalog"). BUILT same day, in the
+  undeployed batch: generated `featured_sort` column (migration
+  `20260610233000`) — default "Featured" sort = photographed bottles A-Z,
+  then placeholders A-Z. Self-reordering as photo coverage grows (in-store
+  captures and backfill writes recompute the column automatically). Also
+  fixed: comma-in-name cursor pagination bug (quoted PostgREST predicate).
+  RUN MIGRATION BEFORE NEXT DEPLOY.
+
 **Earlier items (still active):**
 
 - ✅ **Edit MLCC credentials post-signup.** Settings page + inline
@@ -335,6 +362,29 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   switch, account-skip-of-activation. (#88, 2026-06-06)
 - ⏳ **Real Sentry DSN setup** (replace placeholder).
 - ⏳ **cron-job.org setup** for daily price-book freshness ping.
+
+- ⏳ **OBSERVABILITY CENTER — "capture every single little detail" (Tony,
+  2026-06-10).** Dev-facing control center: every action in the system
+  gets an event row with a pullable ID — customer says "something went
+  wrong" → pull the run/event ID → see exactly what happened. Includes
+  funnel/attribution telemetry: signup clicks, IPs, device, timestamps.
+  ALREADY EXISTS (build on, don't duplicate): execution_runs (per-run ID +
+  stage evidence + artifacts + heartbeats — already pullable in Command
+  Deck Review), lk_system_diagnostics (auth failures, store mismatches,
+  photo events), upc_match_audits + upc_lookup_logs (every scan),
+  mlcc_price_book_runs, /admin/health, Sentry hooks (DSN pending).
+  THE GAP: (a) one unified `lk_events` append-only table (event_id, ts,
+  store_id, user_id, ip, user_agent, kind, payload jsonb) + tiny
+  middleware emitter; (b) landing/signup funnel events incl. IP; (c)
+  Command Deck "Events" explorer with search-by-any-ID; (d) privacy
+  policy update to disclose IP/telemetry collection (required). BUILD IN
+  A FRESH SESSION — first item alongside the MILO delta-check.
+- 💡 **Enterprise / chain accounts (Tony, 2026-06-10):** sell to big names
+  (he named Meijer/Kroger-class + local chains like Arden's/Jake's) at
+  way above $119. Realistic ladder: independents → MI family-owned chains
+  (3-20 stores; multi-store dashboard, chain pricing — STRONG near-term
+  segment) → regional grocers (needs SOC2-type posture, procurement
+  cycles, maybe EDI). Doctrine work doubles as the security story.
 
 ### Future / V2 / post-launch
 - 💡 **Inventory management.** Par levels, on-hand quantity, reorder
@@ -362,8 +412,30 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   model.
 - 💡 **Multi-staff teammate visibility** (currently RLS is own-row only
   for V1 single-owner stores).
-- 💡 **Store-chooser UI** for users belonging to multiple stores
-  (V1 picks first active membership).
+- ~~💡 **Store-chooser UI** for users belonging to multiple stores~~
+  **PROMOTED TO V1 — Tony, 2026-06-10: "multi-store has to be a version
+  one feature, that was always in my vision."** Requirements:
+  (a) one OWNER account holds multiple stores — additional stores must be
+  under the SAME person's account (not separate people);
+  (b) pricing: first store at base price, each additional ~$80/mo
+  (CONFIRM base number with Tony — voice note said "$190", locked price
+  history says $119);
+  (c) store switcher in the scanner (the middleware + store_users are
+  ALREADY multi-store; client currentStore.ts just picks first — needs
+  picker UI + X-Store-Id plumbing which already exists);
+  (d) "Add another store" flow: new endpoint creating store + membership
+  + MLCC creds + activation probe for the second license;
+  (e) later: chain-level dashboard (cross-store analytics) — V1.5/V2.
+  Build order: backend add-store endpoint → switcher UI → billing tiers
+  when Stripe lands.
+  **STATUS 2026-06-10 EOD: (c)+(d) BUILT same day, in the undeployed
+  batch.** Backend: GET/POST /auth/me/stores (same-owner enforced via
+  session user, duplicate-license 409, rollback-safe). Frontend (Cursor,
+  verified KEEP): Settings "Your stores" switcher (setCurrentStoreId +
+  clearAllCache + home redirect) + Add-store modal riding the existing
+  VerifyMlccBanner activation. REMAINING: (b) billing tiers w/ Stripe;
+  (e) chain dashboard. PRICING CONFIRMED 2026-06-10: $119 base store,
+  ~$80 each additional ("$190" was a voice-to-text artifact).
 
 ---
 

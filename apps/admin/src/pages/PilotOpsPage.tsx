@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  DeckEmpty,
+  DeckHeader,
+  DeckPage,
+  DeckPill,
+  DeckSection,
+  DeckSkeleton,
+  DeckTrendGlyph,
+} from "../deck/DeckUi";
+import {
   getPilotOpsNotifications,
   getPilotOpsQualitySummary,
   getPilotOpsStoreOverview,
@@ -62,49 +71,26 @@ const formatTs = (value: string | null | undefined) => {
   return t.toLocaleString();
 };
 
-const trendGlyph = (code: string) => {
-  if (code === "improving") return "↑";
-  if (code === "worsening") return "↓";
-  return "→";
-};
-
 const healthRank = (status: string) =>
   status === "needs_attention" ? 0 : status === "degraded" ? 1 : 2;
 
-const statusColor = (kind: "health" | "workflow" | "overdue", value: string) => {
-  if (kind === "health") {
-    if (value === "needs_attention") return { bg: "#fee2e2", fg: "#991b1b" };
-    if (value === "degraded") return { bg: "#fef3c7", fg: "#92400e" };
-    return { bg: "#dcfce7", fg: "#166534" };
-  }
-  if (kind === "workflow") {
-    if (value === "escalated") return { bg: "#fecaca", fg: "#7f1d1d" };
-    if (value === "watching") return { bg: "#dbeafe", fg: "#1e3a8a" };
-    if (value === "resolved") return { bg: "#dcfce7", fg: "#14532d" };
-    return { bg: "#e5e7eb", fg: "#374151" };
-  }
-  if (value === "overdue") return { bg: "#fecaca", fg: "#7f1d1d" };
-  if (value === "follow_up") return { bg: "#fde68a", fg: "#854d0e" };
-  return { bg: "#e5e7eb", fg: "#374151" };
-};
+function healthPillTone(status: string) {
+  if (status === "needs_attention") return "health-attention" as const;
+  if (status === "degraded") return "health-degraded" as const;
+  return "health-ok" as const;
+}
 
-function Pill({ label, kind, value }: { label: string; kind: "health" | "workflow" | "overdue"; value: string }) {
-  const c = statusColor(kind, value);
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "2px 10px",
-        borderRadius: 999,
-        fontSize: 12,
-        fontWeight: 600,
-        background: c.bg,
-        color: c.fg,
-      }}
-    >
-      {label}
-    </span>
-  );
+function workflowPillTone(status: string) {
+  if (status === "escalated") return "workflow-escalated" as const;
+  if (status === "watching") return "workflow-watching" as const;
+  if (status === "resolved") return "workflow-resolved" as const;
+  return "workflow-default" as const;
+}
+
+function overduePillTone(isOverdue: boolean, requiresFollowUp: boolean) {
+  if (isOverdue) return "overdue" as const;
+  if (requiresFollowUp) return "follow-up" as const;
+  return "neutral" as const;
 }
 
 export function PilotOpsPage() {
@@ -282,25 +268,23 @@ export function PilotOpsPage() {
   );
 
   return (
-    <div className="review-view">
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-        <h2 className="section-title" style={{ margin: 0 }}>
-          Pilot Ops
-        </h2>
-        <button type="button" className="secondary" onClick={() => void loadStores()} disabled={loading}>
-          Refresh
-        </button>
-      </div>
-
-      <p className="muted" style={{ marginTop: 0 }}>
-        Internal pilot operations triage. List is prioritized by <code>needs_attention</code>, then{" "}
-        <code>degraded</code>, with overdue follow-up surfaced first.
-      </p>
+    <DeckPage>
+      <DeckHeader
+        title="Pilot Ops"
+        subtitle={
+          <>
+            Internal pilot operations triage. List is prioritized by <code>needs_attention</code>, then{" "}
+            <code>degraded</code>, with overdue follow-up surfaced first.
+          </>
+        }
+        icon="pilot"
+        onRefresh={() => void loadStores()}
+        loading={loading}
+      />
 
       <Msg type={msg.type} text={msg.text} />
 
-      <div className="card" style={{ marginBottom: 12 }}>
-        <h3 className="section-title">Pilot Ops quality snapshot</h3>
+      <DeckSection title="Pilot Ops quality snapshot">
         {!qualitySummary ? (
           <p className="muted">Quality summary unavailable.</p>
         ) : (
@@ -402,10 +386,9 @@ export function PilotOpsPage() {
             </p>
           </div>
         )}
-      </div>
+      </DeckSection>
 
-      <div className="card" style={{ marginBottom: 12 }}>
-        <h3 className="section-title">Quality trend (recent vs previous window)</h3>
+      <DeckSection title="Quality trend (recent vs previous window)">
         {!timeComparison ? (
           <p className="muted">Trend data unavailable.</p>
         ) : (
@@ -417,13 +400,14 @@ export function PilotOpsPage() {
               {String((timeComparison.previous as Record<string, unknown> | undefined)?.start ?? "")} —{" "}
               {String((timeComparison.previous as Record<string, unknown> | undefined)?.end ?? "")}
             </div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <div className="deck-table-wrap">
+            <table className="deck-table">
               <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
-                  <th style={{ padding: "4px 8px 4px 0" }}>Metric</th>
-                  <th style={{ padding: 4 }}>Recent</th>
-                  <th style={{ padding: 4 }}>Previous</th>
-                  <th style={{ padding: 4 }}>Trend</th>
+                <tr>
+                  <th>Metric</th>
+                  <th>Recent</th>
+                  <th>Previous</th>
+                  <th>Trend</th>
                 </tr>
               </thead>
               <tbody>
@@ -467,25 +451,25 @@ export function PilotOpsPage() {
                   const trend = (timeComparison.trend as Record<string, unknown> | undefined) ?? {};
                   const code = String(trend[trendKey] ?? "flat");
                   return (
-                    <tr key={label} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                      <td style={{ padding: "6px 8px 6px 0" }}>{label}</td>
-                      <td style={{ padding: 6 }}>{r}</td>
-                      <td style={{ padding: 6 }}>{p}</td>
-                      <td style={{ padding: 6 }}>
-                        {trendGlyph(code)} {code}
+                    <tr key={label}>
+                      <td>{label}</td>
+                      <td>{r}</td>
+                      <td>{p}</td>
+                      <td>
+                        <DeckTrendGlyph code={code} />
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         )}
-      </div>
+      </DeckSection>
 
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <h3 className="section-title">Stores</h3>
+      <DeckSection title="Stores">
+        <div className="row" style={{ justifyContent: "flex-end", alignItems: "center", marginBottom: 10 }}>
           <label className="muted" style={{ fontSize: 12 }}>
             <input
               type="checkbox"
@@ -496,34 +480,25 @@ export function PilotOpsPage() {
             show only needs attention / overdue
           </label>
         </div>
-        {loading && stores.length === 0 ? <p className="muted">Loading…</p> : null}
-        {!loading && visibleStores.length === 0 ? <p className="muted">No stores match the current view.</p> : null}
+        {loading && stores.length === 0 ? <DeckSkeleton rows={4} variant="row" /> : null}
+        {!loading && visibleStores.length === 0 ? (
+          <DeckEmpty title="No stores match">Try clearing the follow-up filter or refresh the list.</DeckEmpty>
+        ) : null}
         {visibleStores.length > 0 ? (
           <div style={{ display: "grid", gap: 8 }}>
             {visibleStores.map((s) => (
               <button
                 key={s.store_id}
                 type="button"
-                className="secondary"
+                className={`deck-store-btn${selectedStoreId === s.store_id ? " deck-store-btn--selected" : ""}`}
                 onClick={() => setSelectedStoreId(s.store_id)}
-                style={{
-                  textAlign: "left",
-                  border:
-                    selectedStoreId === s.store_id
-                      ? "2px solid #4f46e5"
-                      : undefined,
-                }}
               >
                 <div className="row" style={{ justifyContent: "space-between" }}>
                   <strong>{s.store_name ?? s.store_id}</strong>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <Pill label={s.health_status} kind="health" value={s.health_status} />
-                    <Pill
-                      label={s.pilot_ops_status}
-                      kind="workflow"
-                      value={s.pilot_ops_status}
-                    />
-                    <Pill
+                    <DeckPill label={s.health_status} tone={healthPillTone(s.health_status)} />
+                    <DeckPill label={s.pilot_ops_status} tone={workflowPillTone(s.pilot_ops_status)} />
+                    <DeckPill
                       label={
                         s.attention_overdue?.is_overdue
                           ? "overdue"
@@ -531,20 +506,17 @@ export function PilotOpsPage() {
                             ? "follow-up pending"
                             : "no follow-up"
                       }
-                      kind="overdue"
-                      value={
-                        s.attention_overdue?.is_overdue
-                          ? "overdue"
-                          : s.attention_overdue?.requires_follow_up
-                            ? "follow_up"
-                            : "none"
-                      }
+                      tone={overduePillTone(
+                        s.attention_overdue?.is_overdue === true,
+                        s.attention_overdue?.requires_follow_up === true,
+                      )}
                     />
                   </div>
                 </div>
                 <div className="muted" style={{ fontSize: 12 }}>
-                  completion {s.completion_rate_pct ?? 0}% · runs {s.total_recent_runs} · failed checks{" "}
-                  {s.runs_with_failed_checks}
+                  completion <span style={{ fontVariantNumeric: "tabular-nums" }}>{s.completion_rate_pct ?? 0}%</span> · runs{" "}
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>{s.total_recent_runs}</span> · failed checks{" "}
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>{s.runs_with_failed_checks}</span>
                 </div>
                 <div className="muted" style={{ fontSize: 12 }}>
                   follow-up reason:{" "}
@@ -559,11 +531,12 @@ export function PilotOpsPage() {
             ))}
           </div>
         ) : null}
-      </div>
+      </DeckSection>
 
-      <div className="card">
-        <h3 className="section-title">Selected store pilot detail</h3>
-        {!detail ? <p className="muted">Select a store to load pilot overview.</p> : null}
+      <DeckSection title="Selected store pilot detail">
+        {!detail ? (
+          <DeckEmpty title="No store selected">Pick a store from the list above to load pilot overview.</DeckEmpty>
+        ) : null}
         {detail ? (
           <>
             <div className="card" style={{ marginBottom: 12 }}>
@@ -571,17 +544,15 @@ export function PilotOpsPage() {
                 Health and follow-up
               </h4>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                <Pill
+                <DeckPill
                   label={String(selectedStoreRow?.health_status ?? "unknown")}
-                  kind="health"
-                  value={String(selectedStoreRow?.health_status ?? "healthy")}
+                  tone={healthPillTone(String(selectedStoreRow?.health_status ?? "healthy"))}
                 />
-                <Pill
+                <DeckPill
                   label={String(selectedStoreRow?.pilot_ops_status ?? "unreviewed")}
-                  kind="workflow"
-                  value={String(selectedStoreRow?.pilot_ops_status ?? "unreviewed")}
+                  tone={workflowPillTone(String(selectedStoreRow?.pilot_ops_status ?? "unreviewed"))}
                 />
-                <Pill
+                <DeckPill
                   label={
                     attentionOverdue?.is_overdue
                       ? "overdue"
@@ -589,14 +560,10 @@ export function PilotOpsPage() {
                         ? "follow-up pending"
                         : "no follow-up"
                   }
-                  kind="overdue"
-                  value={
-                    attentionOverdue?.is_overdue
-                      ? "overdue"
-                      : attentionOverdue?.requires_follow_up
-                        ? "follow_up"
-                        : "none"
-                  }
+                  tone={overduePillTone(
+                    attentionOverdue?.is_overdue === true,
+                    attentionOverdue?.requires_follow_up === true,
+                  )}
                 />
               </div>
               <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
@@ -656,7 +623,7 @@ export function PilotOpsPage() {
               ) : (
                 <div style={{ display: "grid", gap: 6 }}>
                   {workflowHistory.slice(0, 8).map((h) => (
-                    <div key={h.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+                    <div key={h.id} className="deck-mini-card">
                       <div style={{ fontSize: 12 }}>
                         <strong>{h.changed_by || "unknown_operator"}</strong> · {formatTs(h.changed_at)}
                       </div>
@@ -681,7 +648,7 @@ export function PilotOpsPage() {
               ) : (
                 <div style={{ display: "grid", gap: 6 }}>
                   {notifications.map((n) => (
-                    <div key={n.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+                    <div key={n.id} className="deck-mini-card">
                       <div style={{ fontSize: 12 }}>
                         <strong>{n.notification_kind}</strong> · {formatTs(n.triggered_at)}
                       </div>
@@ -706,8 +673,8 @@ export function PilotOpsPage() {
             </pre>
           </>
         ) : null}
-      </div>
-    </div>
+      </DeckSection>
+    </DeckPage>
   );
 }
 

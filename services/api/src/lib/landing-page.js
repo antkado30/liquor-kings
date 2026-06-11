@@ -419,9 +419,16 @@ export function landingPageHtml() {
           <div style="font-size: 14px; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.08em;">
             Store
           </div>
-          <div class="price">$119 <span class="price-unit">/ month</span></div>
+          <!--
+            Public dollar amount removed 2026-06-10 (Tony: competitors
+            shouldn't read our pricing off the homepage). Self-serve stays
+            fully automated — the exact price is shown inside signup
+            BEFORE any commitment. No "call us" friction, ever.
+          -->
+          <div class="price">One flat monthly rate</div>
           <div style="color: var(--fg-muted); font-size: 14px;">
-            Per liquor license. Cancel anytime.
+            Per liquor license. Cancel anytime. Full pricing shown at signup —
+            before you commit to anything.
           </div>
           <ul class="pricing-features">
             <li><span class="check">✓</span> Unlimited orders + templates</li>
