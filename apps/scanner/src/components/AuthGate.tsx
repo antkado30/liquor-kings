@@ -92,6 +92,10 @@ export function AuthGate({ children }: AuthGateProps) {
     useState<string>("");
   const [pendingActivationStoreId, setPendingActivationStoreId] =
     useState<string | null>(null);
+  /** Non-null when the account boot failed/timed out — renders a Retry screen. */
+  const [bootError, setBootError] = useState<string | null>(null);
+  /** Bumped by the Retry button; re-runs the boot effect. */
+  const [bootAttempt, setBootAttempt] = useState(0);
 
   useEffect(() => {
     if (scannerMisconfigured) {
@@ -99,35 +103,90 @@ export function AuthGate({ children }: AuthGateProps) {
       return;
     }
 
-    supabase.auth.getSession().then(async ({ data }) => {
-      setSession(data.session);
-      if (data.session) {
-        await resolveCurrentStoreIdFromSession();
-        const profile = await getMyStoreProfile();
-        if (profile.ok && profile.mlcc_credentials_last_verified_at) {
-          setPendingActivation(false);
+    let cancelled = false;
+
+    /*
+      Account-boot hardening (2026-06-12 P0: "Loading your account…" spun
+      for 5+ minutes). Two booby traps lived here:
+        1. The boot chain had NO catch/finally — any rejection meant
+           setLoading(false) never ran: permanent skeleton.
+        2. resolveCurrentStoreIdFromSession's Supabase REST call has no
+           timeout — a hanging connection froze the await forever.
+      Now every leg is time-bounded, every failure lands in a visible
+      error screen with a Retry button, and loading ALWAYS resolves.
+      (Quality mandate: if data isn't ready the UI says so — it never
+      freezes, never spins blind.)
+    */
+    const withTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
+        ),
+      ]);
+
+    void (async () => {
+      setBootError(null);
+      setLoading(true);
+      try {
+        const { data } = await withTimeout(
+          supabase.auth.getSession(),
+          10_000,
+          "auth session check",
+        );
+        if (cancelled) return;
+        setSession(data.session);
+        if (data.session) {
+          await withTimeout(
+            resolveCurrentStoreIdFromSession(),
+            10_000,
+            "store membership lookup",
+          );
+          if (cancelled) return;
+          // getMyStoreProfile is internally bounded (8s timeout + retry).
+          const profile = await getMyStoreProfile();
+          if (!cancelled && profile.ok && profile.mlcc_credentials_last_verified_at) {
+            setPendingActivation(false);
+          }
         }
+      } catch {
+        if (!cancelled) {
+          setBootError(
+            "We couldn't load your account — the connection looks slow or down.",
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
+    })();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
+      /*
+        IMPORTANT: this callback must stay synchronous. Awaiting
+        resolveCurrentStoreIdFromSession here is a documented supabase-js
+        deadlock: the callback holds the auth lock that getSession()
+        (called inside the resolve) then waits on. Defer to a macrotask
+        so the lock is released first.
+      */
+      setSession(next);
+      if (event === "SIGNED_OUT" || !next) {
+        clearCurrentStoreId();
+        setPendingActivation(false);
+        setPendingActivationStoreId(null);
+      } else if (event === "SIGNED_IN") {
+        setTimeout(() => {
+          void resolveCurrentStoreIdFromSession().catch(() => {
+            /* next API call will surface the missing store loudly */
+          });
+        }, 0);
+      }
     });
 
-    const { data: sub } = supabase.auth.onAuthStateChange(
-      async (event, next) => {
-        setSession(next);
-        if (event === "SIGNED_OUT" || !next) {
-          clearCurrentStoreId();
-          setPendingActivation(false);
-          setPendingActivationStoreId(null);
-        } else if (event === "SIGNED_IN") {
-          await resolveCurrentStoreIdFromSession();
-        }
-      },
-    );
-
     return () => {
+      cancelled = true;
       sub.subscription.unsubscribe();
     };
-  }, []);
+  }, [bootAttempt]);
 
   function resetErrors() {
     setErrorMsg(null);
@@ -272,6 +331,29 @@ export function AuthGate({ children }: AuthGateProps) {
 
   if (loading) {
     return <AuthLoadingSkeleton />;
+  }
+
+  if (bootError) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <span className="auth-brand__badge auth-brand__badge--warn" aria-hidden>
+              <IconAlert size={18} strokeWidth={2} />
+            </span>
+            <span className="auth-brand__name">Liquor Kings</span>
+          </div>
+          <AuthAlert message={bootError} />
+          <button
+            type="button"
+            className="btn btn-block"
+            onClick={() => setBootAttempt((a) => a + 1)}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (scannerMisconfigured) {

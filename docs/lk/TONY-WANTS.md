@@ -41,6 +41,15 @@ app failed its founder on its core job, on a deadline, in his own store.
 This section sits ABOVE every list in this file on purpose. It expires
 never.
 
+**Status 2026-06-12:** The wedge that killed both real orders is root-caused
+and DEAD (worker zombie-browser starvation — see journal + 06-12 commit).
+Deployed in v147 + worker: camera sleeps under overlays (the overheat),
+360px grid thumbs + capped fulls (the image burn), validate failures explain
+themselves in one sentence + one-tap retry, dead-man auto-restart so the
+worker can never silently wedge for days again, submit gate armed on the
+worker (had been silently dry-run since the 06-08 split). Mandate clock:
+3 consecutive real weekly orders in-app — first attempt next week.
+
 ---
 
 > **What this is:** A permanent, living list of everything Tony has asked
