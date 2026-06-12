@@ -264,13 +264,34 @@ export async function loginToMilo(credentials, options = {}) {
   let context;
   let page;
 
-  const runFlow = async () => {
+  const runFlow = async (token) => {
     if (outputDir) {
       await mkdir(outputDir, { recursive: true });
     }
 
     try {
       browser = await launchChromium({ headless, slowMo });
+      /*
+        ZOMBIE-BROWSER SEAL (2026-06-12, the worker-wedge incident).
+        withOverallTimeout() races a timer against this flow, but JS can't
+        cancel the losing side: when the overall timeout fired mid-launch,
+        the retry loop reset `browser = undefined` and this late-resolving
+        launch's handle was LOST — a zombie Chromium. On slow-MILO nights
+        zombies accumulated until the machine was starved and EVERY
+        subsequent login timed out, forever (29 consecutive failures,
+        2026-06-09 → 06-11). The token lets the abandoned flow detect it
+        lost the race and close its own browser.
+      */
+      if (token) {
+        token.launched = browser;
+        if (token.abandoned) {
+          await browser.close().catch(() => {});
+          throw createMiloError("MILO_LOGIN_TIMEOUT", "Login attempt abandoned after overall timeout", {
+            url: loginUrl,
+            executionRunId,
+          });
+        }
+      }
       const contextOptions = {};
       if (outputDir) {
         contextOptions.recordVideo = { dir: outputDir };
@@ -484,15 +505,24 @@ export async function loginToMilo(credentials, options = {}) {
     browser = undefined;
     context = undefined;
     page = undefined;
+    // Per-attempt abandon token — see the zombie-browser seal in runFlow.
+    const token = { abandoned: false, launched: null };
     try {
-      return await withOverallTimeout(runFlow(), timeoutMs);
+      return await withOverallTimeout(runFlow(token), timeoutMs);
     } catch (error) {
       lastError = error;
+      // Mark the attempt abandoned FIRST: if runFlow is still mid-launch
+      // (overall timeout won the race), its late-resolving launch will see
+      // this flag and close its own browser.
+      token.abandoned = true;
       if (error?.code === "MILO_LOGIN_TIMEOUT" && page) {
         const screenshotPath = await captureFailureScreenshot(page, outputDir, artifacts, "error-overall-timeout");
         error.screenshotPath = error.screenshotPath || screenshotPath;
       }
-      if (browser) {
+      if (token.launched) {
+        await token.launched.close().catch(() => {});
+      }
+      if (browser && browser !== token.launched) {
         await browser.close().catch(() => {});
       }
       const canRetry = attempt < maxAttempts && RETRYABLE_LOGIN_CODES.has(error?.code);

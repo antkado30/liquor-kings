@@ -132,6 +132,10 @@ router.post("/items/:code/photo", async (req, res) => {
     .from("mlcc_items")
     .update({
       image_url: pub.publicUrl,
+      // In-store captures are already client-downscaled before upload, so
+      // the same file serves as the grid thumb. A stale serper thumb must
+      // never outrank in-store truth (precedence: in_store beats all).
+      image_thumb_url: pub.publicUrl,
       image_source: "in_store",
       image_updated_at: nowIso,
     })
@@ -186,6 +190,10 @@ router.post("/items/:code/photo-report", async (req, res) => {
     .from("mlcc_items")
     .update({
       image_url: null,
+      // A reported-wrong photo must vanish EVERYWHERE — leaving the grid
+      // thumb behind would keep showing the lie in Browse (doctrine:
+      // the catalog never lies, loudly or quietly).
+      image_thumb_url: null,
       image_source: "reported_wrong",
       image_updated_at: new Date().toISOString(),
     })

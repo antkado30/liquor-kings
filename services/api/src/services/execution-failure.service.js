@@ -16,9 +16,34 @@ export function normalizeFailureType(value) {
 }
 
 export function classifyFailureType({ errorMessage, explicitType }) {
+  /*
+    Explicit UNKNOWN means "caller has no type" — it must NOT short-circuit
+    message classification below (found 2026-06-12: worker call sites pass
+    `?? FAILURE_TYPE.UNKNOWN`, which made the message sniffing dead code on
+    every untyped error). UNKNOWN remains the final fallback, not a verdict.
+  */
   const normalizedExplicit = normalizeFailureType(explicitType);
-  if (normalizedExplicit) {
+  if (normalizedExplicit && normalizedExplicit !== FAILURE_TYPE.UNKNOWN) {
     return normalizedExplicit;
+  }
+
+  /*
+    Preserve the RPA stages' rich typed vocabulary (2026-06-12, the
+    worker-wedge incident). The stages throw precisely-typed codes —
+    MILO_LOGIN_NETWORK_ERROR, MILO_LOGIN_INVALID_CREDENTIALS, LK_DECRYPT_
+    FAILED, … — but this function only recognized the 6 legacy enum values
+    and flattened everything else to UNKNOWN at the recording boundary.
+    Result: 29 consecutive identical failures recorded as "UNKNOWN" with
+    nothing actionable in the UI or Command Deck. Boundary contract
+    (doctrine #1): a typed code crossing this boundary survives verbatim.
+    Only well-formed SCREAMING_SNAKE codes pass; arbitrary strings still
+    fall through to message classification below.
+  */
+  if (typeof explicitType === "string") {
+    const v = explicitType.trim().toUpperCase();
+    if (v && v !== "UNKNOWN" && /^[A-Z][A-Z0-9_]{3,64}$/.test(v)) {
+      return v;
+    }
   }
 
   const msg = String(errorMessage ?? "").toLowerCase();

@@ -68,6 +68,8 @@ export type SubmissionState =
       progressStage: string | null;
       progressMessage: string | null;
       lastPolledAt: number;
+      /** When THIS polling phase began — drives the elapsed-time UI. */
+      startedAtMs: number;
     }
   | {
       kind: "validateDone";
@@ -75,6 +77,14 @@ export type SubmissionState =
       finalStatus: RunStatus;
       cartId: string;
       validateResult: ValidateResult | null;
+      /**
+       * Why the run failed, when finalStatus !== "succeeded". Quality
+       * mandate (2026-06-12): "finished as failed" with no explanation is
+       * itself a failure. Feed these through humanizeRunFailure() for the
+       * one-sentence UI copy.
+       */
+      failureType: string | null;
+      failureMessage: string | null;
     }
   // Submit flow
   | { kind: "submitStarting"; cartId: string }
@@ -86,12 +96,15 @@ export type SubmissionState =
       progressStage: string | null;
       progressMessage: string | null;
       lastPolledAt: number;
+      /** When THIS polling phase began — drives the elapsed-time UI. */
+      startedAtMs: number;
     }
   | {
       kind: "submitDone";
       runId: string;
       finalStatus: RunStatus;
       failureType: string | null;
+      failureMessage: string | null;
       progressMessage: string | null;
     }
   // Terminal error
@@ -179,6 +192,7 @@ export function useSubmission(
     ): Promise<{
       status: RunStatus;
       failureType: string | null;
+      failureMessage: string | null;
       progressMessage: string | null;
       validateResult: ValidateResult | null;
     }> => {
@@ -207,6 +221,7 @@ export function useSubmission(
           return {
             status,
             failureType: s.failure_type,
+            failureMessage: s.failure_message ?? null,
             progressMessage,
             validateResult: s.validate_result ?? null,
           };
@@ -302,6 +317,8 @@ export function useSubmission(
             finalStatus: cached.finalStatus,
             cartId: cached.cartId,
             validateResult: cached.validateResult,
+            failureType: null,
+            failureMessage: null,
           });
           preValidateCache.invalidateCache();
           return;
@@ -325,6 +342,7 @@ export function useSubmission(
             progressStage: "validate",
             progressMessage: "Finishing the MLCC check already in progress…",
             lastPolledAt: Date.now(),
+            startedAtMs: Date.now(),
           });
           let latched: PreValidateHit | null = null;
           try {
@@ -340,6 +358,8 @@ export function useSubmission(
               finalStatus: latched.finalStatus,
               cartId: latched.cartId,
               validateResult: latched.validateResult,
+              failureType: null,
+              failureMessage: null,
             });
             preValidateCache.invalidateCache();
             return;
@@ -383,6 +403,7 @@ export function useSubmission(
       }
 
       // Phase 1.c: poll
+      const validatePollStart = Date.now();
       setState({
         kind: "validatePolling",
         runId,
@@ -390,6 +411,7 @@ export function useSubmission(
         progressStage: null,
         progressMessage: null,
         lastPolledAt: Date.now(),
+        startedAtMs: validatePollStart,
       });
       try {
         const terminal = await pollUntilTerminal(runId, ({ status, progressStage, progressMessage }) =>
@@ -400,6 +422,7 @@ export function useSubmission(
             progressStage,
             progressMessage,
             lastPolledAt: Date.now(),
+            startedAtMs: validatePollStart,
           }),
         );
         setState({
@@ -408,6 +431,8 @@ export function useSubmission(
           finalStatus: terminal.status,
           cartId,
           validateResult: terminal.validateResult,
+          failureType: terminal.failureType,
+          failureMessage: terminal.failureMessage,
         });
       } catch (e) {
         setState({
@@ -443,6 +468,7 @@ export function useSubmission(
     }
 
     // Phase 2.b: poll
+    const submitPollStart = Date.now();
     setState({
       kind: "submitPolling",
       runId,
@@ -451,6 +477,7 @@ export function useSubmission(
       progressStage: null,
       progressMessage: null,
       lastPolledAt: Date.now(),
+      startedAtMs: submitPollStart,
     });
     try {
       const terminal = await pollUntilTerminal(runId, ({ status, progressStage, progressMessage }) =>
@@ -462,13 +489,18 @@ export function useSubmission(
           progressStage,
           progressMessage,
           lastPolledAt: Date.now(),
+          startedAtMs: submitPollStart,
         }),
       );
       setState({
         kind: "submitDone",
         runId,
         finalStatus: terminal.status,
-        failureType: null,
+        // Was hardcoded null (found 2026-06-12) — the submit flow threw
+        // the failure explanation away. Quality mandate: every failure
+        // states its reason.
+        failureType: terminal.failureType,
+        failureMessage: terminal.failureMessage,
         progressMessage: terminal.progressMessage,
       });
     } catch (e) {

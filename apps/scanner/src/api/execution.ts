@@ -97,6 +97,9 @@ export type RunSummary = {
   progress_stage: string | null;
   progress_message: string | null;
   failure_type: string | null;
+  /** Raw failure detail from the worker — server has sent this all along;
+   * the client used to drop it (fixed 2026-06-12, quality mandate). */
+  failure_message?: string | null;
   timestamps?: {
     queued_at?: string | null;
     started_at?: string | null;

@@ -23,6 +23,7 @@ import {
   isDisqualifyingMismatch,
   mlccCategoryMatchesAnyHint,
 } from "./mlcc-category-ontology.js";
+import { isMlccSpecialEditionName } from "./mlcc-product-family.js";
 
 const DEBUG = process.env.DEBUG_UPC_FILTER === "1";
 const STANDARD_BOTTLE_SIZES_ML = [50, 100, 200, 375, 500, 700, 750, 1000, 1750];
@@ -722,8 +723,27 @@ function scoreSize(upcData, mlcc, reasons) {
   const targets = plausibleSizes.length > 0 ? plausibleSizes : [upcData.size_ml].filter((s) => Number.isFinite(s));
   const m = mlcc.bottle_size_ml != null ? Number(mlcc.bottle_size_ml) : null;
   if (!targets.length) {
-    reasons.push("Size: unknown on UPC (10 neutral)");
-    return { score: 10, disqualified: false };
+    // Size-preference rule (Tony, 2026-06-10 — the Maker's/JD/Fireball
+    // fifth-UPC-mapped-to-nip class): when the UPC database gives us NO
+    // size, the old flat "10 neutral" let a 50ml nip outrank a fifth on
+    // name noise. Real-world prior: a consumer bottle UPC with unknown
+    // size is overwhelmingly a standard retail size — 750ml first, then
+    // liters/handles, then small formats, with nips dead last. The
+    // spread (12 → 2) is wider than name-similarity noise (±4), so a
+    // nip can never beat an otherwise-equal fifth again.
+    if (m == null || !Number.isFinite(m)) {
+      reasons.push("Size: unknown on UPC, MLCC size missing (6 neutral)");
+      return { score: 6, disqualified: false };
+    }
+    let prior;
+    if (m === 750) prior = 12;
+    else if (m === 1000 || m === 1750) prior = 10;
+    else if (m === 375 || m === 500 || m === 700 || m === 200) prior = 8;
+    else if (m === 100) prior = 4;
+    else if (m <= 50) prior = 2;
+    else prior = 6;
+    reasons.push(`Size: unknown on UPC — retail-likelihood prior for ${m}ml (${prior})`);
+    return { score: prior, disqualified: false };
   }
   if (m == null || !Number.isFinite(m)) {
     reasons.push("Size: MLCC size missing (0)");
@@ -811,6 +831,27 @@ export function scoreUpcToMlccCandidate(upcData, mlccCandidate) {
     reasons.push(`Marker conflict: UPC markers ${JSON.stringify(upcMarkers)} vs MLCC markers ${JSON.stringify(mlccMarkers)}`);
   }
 
+  // Special-edition penalty (Tony, 2026-06-10 — scanned a regular 1800
+  // Silver fifth, the LIONS EDITION opened). Editions share the base
+  // bottle's UPC and "LIONS"/"WREXHAM"/etc. aren't qualifier-set tokens,
+  // so when both names share a token like SILVER the edition survives
+  // marker-conflict and can outrank the base on name noise. Same
+  // detector the resolution path uses (mlcc-product-family.js) — one
+  // source of truth. Penalized hard (-25 ≫ ±4 name noise), NOT
+  // disqualified: if the edition is the only real candidate the picker
+  // may still show it — it just can never outrank the base product.
+  const upcText = `${String(upcData.name ?? "")} ${String(upcData.rawTitle ?? "")}`;
+  const editionPenalty =
+    isMlccSpecialEditionName(String(mlccCandidate.name ?? "")) &&
+    !isMlccSpecialEditionName(upcText)
+      ? -25
+      : 0;
+  if (editionPenalty !== 0) {
+    reasons.push(
+      `Special edition: MLCC name is a special/limited edition the UPC title doesn't mention (${editionPenalty})`,
+    );
+  }
+
   const disqualified = Boolean(
     b.disqualified || c.disqualified || z.disqualified || p.disqualified || n.disqualified || markerConflict,
   );
@@ -822,7 +863,10 @@ export function scoreUpcToMlccCandidate(upcData, mlccCandidate) {
 
   const total = disqualified
     ? 0
-    : brandScore + categoryScore + sizeScore + proofScore + nameSimilarityScore;
+    : Math.max(
+        0,
+        brandScore + categoryScore + sizeScore + proofScore + nameSimilarityScore + editionPenalty,
+      );
 
   const breakdown = {
     brandScore,
@@ -832,6 +876,7 @@ export function scoreUpcToMlccCandidate(upcData, mlccCandidate) {
     sizeScore,
     proofScore,
     nameSimilarityScore,
+    editionPenalty,
     markerConflict,
     upcMarkers,
     mlccMarkers,

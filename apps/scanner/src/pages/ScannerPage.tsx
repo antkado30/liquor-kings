@@ -456,7 +456,22 @@ export function ScannerPage() {
           Point at a barcode on the bottle or shelf tag
         </p>
         <BarcodeScanner
-          active={true}
+          /*
+           * Quality mandate (2026-06-12): the camera + ZXing decode loop
+           * must SLEEP whenever an overlay covers it. It used to run
+           * hardcoded-active behind the cart drawer for entire validate
+           * waits — camera streaming + ~4.5 full-frame JS decodes/sec the
+           * whole time. That burns CPU, heats the phone, and lags every
+           * tap. Camera resumes the moment the overlay closes.
+           */
+          active={
+            !showProductCard &&
+            !showCart &&
+            !showDashboard &&
+            !upcCandidates &&
+            !visionResult &&
+            !confirmSignOut
+          }
           onScan={handleScan}
           onPhotoCapture={visionBusy ? undefined : handlePhotoCapture}
           hideManualInput={true}
@@ -824,7 +839,9 @@ function SmartCardsSkeleton() {
 
 function ScanResultThumb({ product }: { product: MlccProduct }) {
   const [errored, setErrored] = useState(false);
-  const url = product.imageUrl;
+  // Same overheat class as the Browse grid (quality mandate 2026-06-12):
+  // tiny row thumbs must never decode multi-MB originals.
+  const url = product.imageThumbUrl ?? product.imageUrl;
   const showImage = !!url && !errored;
   return (
     <div className="scanhm-result-thumb">

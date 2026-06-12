@@ -203,6 +203,30 @@ export async function acquireSession({ storeId, licenseNumber }) {
     return { reused: false, reason: "liveness_probe_failed" };
   }
 
+  /*
+    Deep probe (2026-06-12, the worker-wedge incident). page.url() is
+    answered from local state — it can pass while the underlying CDP
+    connection/renderer is dead, handing the caller a corpse that times
+    out 15s later in Stage 3. One real round-trip to the browser process
+    (capped at 2s) proves the session can actually execute work before we
+    hand it out. Costs ~5ms on a healthy session.
+  */
+  try {
+    await Promise.race([
+      held.session.page.evaluate("1"),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("cdp_probe_timeout")), 2_000),
+      ),
+    ]);
+  } catch (err) {
+    log("deep probe failed — closing held session", {
+      sessionId: held.sessionId,
+      error: err?.message || String(err),
+    });
+    await teardownHeldSession("cdp_probe_failed");
+    return { reused: false, reason: "cdp_probe_failed" };
+  }
+
   // Reusable!
   held.busy = true;
   held.acquiredAt = Date.now();

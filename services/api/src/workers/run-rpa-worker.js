@@ -91,6 +91,21 @@ async function main() {
       `workerId=${workerId} idlePollMs=${IDLE_POLL_MS}`,
   );
 
+  /*
+    DEAD-MAN SWITCH (2026-06-12, the worker-wedge incident). On 2026-06-09
+    the machine got into a state where EVERY login attempt timed out
+    (zombie Chromium accumulation starving the box) and it ground through
+    29 consecutive identical failures over two days, burning ~2 minutes of
+    queue time per doomed run while real orders piled up behind it. A
+    process can't always heal itself — but it CAN refuse to keep lying.
+    After N consecutive Stage-1 (login) failures, tear down everything and
+    exit non-zero; Fly restarts the machine from a clean slate (fresh
+    Chromium, fresh memory). One restart fixes what days of grinding
+    didn't. Doctrine: loud failures only.
+  */
+  const STAGE1_DEADMAN_THRESHOLD = 3;
+  let consecutiveStage1Failures = 0;
+
   while (!shuttingDown) {
     inFlight = true;
     let result;
@@ -114,6 +129,35 @@ async function main() {
       continue;
     }
     inFlight = false;
+
+    // Dead-man bookkeeping: only claimed runs move the counter. Stage-1
+    // failures increment; any run that gets PAST Stage 1 (success OR a
+    // later-stage failure) proves the browser/network path works and
+    // resets it. Idle polls don't touch it.
+    if (result?.claimed !== false) {
+      if (result?.failed === true && result?.stage === "stage1_login") {
+        consecutiveStage1Failures += 1;
+        console.warn(
+          `[rpa-worker] stage1 failure ${consecutiveStage1Failures}/${STAGE1_DEADMAN_THRESHOLD} ` +
+            `(error=${result?.error ?? "unknown"})`,
+        );
+        if (consecutiveStage1Failures >= STAGE1_DEADMAN_THRESHOLD) {
+          console.error(
+            `[rpa-worker] DEAD-MAN: ${consecutiveStage1Failures} consecutive Stage-1 login ` +
+              `failures — this machine is likely wedged (zombie browsers / starved memory). ` +
+              `Tearing down and exiting 1 so Fly restarts us clean.`,
+          );
+          try {
+            await forceCloseRpaSessions("stage1_deadman");
+          } catch {
+            /* exiting anyway */
+          }
+          process.exit(1);
+        }
+      } else {
+        consecutiveStage1Failures = 0;
+      }
+    }
 
     if (result?.claimed === false) {
       // Queue was empty — quiet poll cadence.

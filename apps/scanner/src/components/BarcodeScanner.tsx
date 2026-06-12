@@ -64,11 +64,19 @@ async function buildZxingDecodeHints(): Promise<Map<ZxDecodeHintType, unknown> |
   return hints;
 }
 
-function rotateCanvas(source: HTMLCanvasElement, degrees: number): HTMLCanvasElement {
+function rotateCanvas(
+  source: HTMLCanvasElement,
+  degrees: number,
+  scratch?: HTMLCanvasElement,
+): HTMLCanvasElement {
   if (degrees === 0) return source;
-  const canvas = document.createElement("canvas");
+  // Reuse the caller's scratch canvas when provided — the live decode loop
+  // runs every DETECT_INTERVAL_MS and allocating a fresh ~1MP canvas per
+  // rotation per tick was a measurable CPU/GC burn (overheating phones).
+  const canvas = scratch ?? document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   if (!ctx) return source;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   const w = source.width;
   const h = source.height;
   if (degrees === 90 || degrees === 270) {
@@ -102,22 +110,33 @@ async function tryDecodeCanvas(
 async function decodeBarcodeFromCanvas(
   reader: ZxingCanvasReader,
   sourceCanvas: HTMLCanvasElement,
+  opts?: { rotations?: readonly number[]; scratch?: HTMLCanvasElement },
 ): Promise<string | null> {
-  for (const degrees of ROTATIONS) {
-    const canvas = degrees === 0 ? sourceCanvas : rotateCanvas(sourceCanvas, degrees);
+  const rotations = opts?.rotations ?? ROTATIONS;
+  for (const degrees of rotations) {
+    const canvas =
+      degrees === 0 ? sourceCanvas : rotateCanvas(sourceCanvas, degrees, opts?.scratch);
     const code = await tryDecodeCanvas(reader, canvas);
     if (code) return code;
   }
   return null;
 }
 
-function captureVideoFrame(video: HTMLVideoElement): HTMLCanvasElement | null {
-  const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth || VIDEO_IDEAL_WIDTH;
-  canvas.height = video.videoHeight || VIDEO_IDEAL_HEIGHT;
+function captureVideoFrame(
+  video: HTMLVideoElement,
+  reusable?: HTMLCanvasElement,
+): HTMLCanvasElement | null {
+  // Reuse one canvas across ticks — the decode loop fires every
+  // DETECT_INTERVAL_MS and a fresh 1280x720 allocation per tick churned
+  // ~4MB of bitmap through the GC several times a second.
+  const canvas = reusable ?? document.createElement("canvas");
+  const w = video.videoWidth || VIDEO_IDEAL_WIDTH;
+  const h = video.videoHeight || VIDEO_IDEAL_HEIGHT;
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(video, 0, 0, w, h);
   return canvas;
 }
 
@@ -265,6 +284,17 @@ export function BarcodeScanner({
   const barcodePhotoInputRef = useRef<HTMLInputElement>(null);
   const lastScanRef = useRef(0);
   const lastZxingScanRef = useRef<{ code: string; at: number } | null>(null);
+  // Reused across decode ticks so the loop doesn't allocate fresh ~1MP
+  // canvases several times a second (GC churn → heat on iPhone).
+  const frameCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rotateScratchRef = useRef<HTMLCanvasElement | null>(null);
+  const tickCountRef = useRef(0);
+  // Pause the camera + decode loop whenever the page itself is hidden
+  // (app backgrounded, tab switched) — scanning a screen nobody can see
+  // just burns battery.
+  const [pageVisible, setPageVisible] = useState(
+    typeof document === "undefined" ? true : document.visibilityState !== "hidden",
+  );
   const [scanning, setScanning] = useState(false);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState("");
@@ -353,7 +383,15 @@ export function BarcodeScanner({
   }, []);
 
   useEffect(() => {
-    if (!active || engine === "unsupported") {
+    const onVisibility = () => {
+      setPageVisible(document.visibilityState !== "hidden");
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  useEffect(() => {
+    if (!active || !pageVisible || engine === "unsupported") {
       stopCamera();
       return;
     }
@@ -477,10 +515,25 @@ export function BarcodeScanner({
             const now = Date.now();
             if (now - lastScanRef.current < COOLDOWN_MS) return;
 
-            const canvas = captureVideoFrame(vid);
+            if (!frameCanvasRef.current) {
+              frameCanvasRef.current = document.createElement("canvas");
+            }
+            const canvas = captureVideoFrame(vid, frameCanvasRef.current);
             if (!canvas) return;
 
-            const raw = await decodeBarcodeFromCanvas(zxReader, canvas);
+            // Any-angle support without the constant burn: try the upright
+            // frame every tick, the full 90/180/270 sweep every 3rd tick.
+            // A rotated barcode still reads within ~660ms (well under the
+            // 2s scan cooldown); idle CPU drops ~4x.
+            tickCountRef.current += 1;
+            const fullSweep = tickCountRef.current % 3 === 0;
+            if (!rotateScratchRef.current) {
+              rotateScratchRef.current = document.createElement("canvas");
+            }
+            const raw = await decodeBarcodeFromCanvas(zxReader, canvas, {
+              rotations: fullSweep ? ROTATIONS : [0],
+              scratch: rotateScratchRef.current,
+            });
             if (!raw) return;
 
             const prev = lastZxingScanRef.current;
@@ -503,7 +556,7 @@ export function BarcodeScanner({
       cancelled = true;
       stopCamera();
     };
-  }, [active, engine, handleSuccessfulScan, reportCameraError, stopCamera]);
+  }, [active, pageVisible, engine, handleSuccessfulScan, reportCameraError, stopCamera]);
 
   useEffect(() => {
     if (troubleTimerRef.current) {

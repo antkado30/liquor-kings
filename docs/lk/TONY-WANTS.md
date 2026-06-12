@@ -1,5 +1,48 @@
 # Tony Wants — Permanent Wishlist & Directives
 
+---
+
+# ⚡ THE QUALITY MANDATE — PERMANENT, ABOVE EVERYTHING (Tony, 2026-06-11)
+
+> "The quality. Quality. THE QUALITY is the most important thing. I can't
+> emphasize this anymore. Everything should be instant. Everything should
+> work in an instant. This is what I meant from the start — reliability,
+> quality — that's what 'no one can fathom this product' MEANS."
+
+**The evidence that triggered this:** 2026-06-10, placing a REAL order —
+phone OVERHEATING, every button tap taking 5-10 SECONDS, search missing
+obvious bottles, validate hanging then dying with no explanation. The
+app failed its founder on its core job, on a deadline, in his own store.
+
+**The mandate, permanent and absolute:**
+
+1. **FEATURE FREEZE until the core loop is unbreakable.** Not one new
+   feature until search → cart → validate → submit survives THREE
+   consecutive real weekly orders in-app, start to finish.
+2. **Instant is the spec, not the goal.** Every tap responds
+   immediately — perceived wait on any interaction is a P0 bug. If data
+   isn't ready, the UI says so beautifully in <100ms; it never freezes,
+   never spins blind, never heats the phone.
+3. **A phone overheating means we are burning the user's hand with our
+   waste.** Profile it, find it, kill it. (Suspects to start: image
+   payload sizes in the photo-heavy catalog, render thrash, polling
+   loops, the cross-region hop.)
+4. **Nothing fails silently, ever.** Every failure states its reason in
+   one human sentence and offers one-tap retry. "finished as failed" is
+   itself a failure.
+5. **Quality outranks everything** — features, photos, polish, deadlines,
+   momentum, excitement. When in doubt between building and hardening:
+   HARDEN. This is the doctrine's spine and the moat ("this never lies
+   to me" is what $119/mo buys).
+6. **Every session, before anything else:** would Tony's dad hit a wait,
+   a freeze, a lie, or a mystery anywhere in the core loop today? If
+   yes, that's the work. There is no other work.
+
+This section sits ABOVE every list in this file on purpose. It expires
+never.
+
+---
+
 > **What this is:** A permanent, living list of everything Tony has asked
 > Liquor Kings to be, do, or become. Updated as things land. Checkmarks
 > mean shipped to prod. Read this AT THE START of every session before
@@ -95,6 +138,26 @@ Perceived latency is a bug class under the Integrity Doctrine. Status:
   liquor-kings-worker` (claim is atomic — safe).
 
 ---
+
+## 🔥🔥🔥 #1A — CATALOG/UPC TRUTH AUDIT (Tony, 2026-06-10 late night, during a REAL order with his mom)
+
+> "Bottles wouldn't pop up on our end but on MLCC they popped up normally
+> with every size. Scanned a fifth of 1800 Silver and the LIONS EDITION
+> popped up. Check EVERY mapped UPC→code. I will not tolerate mismatches."
+
+Two diseases witnessed: (1) Bushmills Red Bush 750 missing from our
+catalog while live on MILO — PRIME SUSPECT: STALE PRICE BOOK (cron-job.org
+daily sync was NEVER set up; MLCC also ROTATES CODES — their portal showed
+"Product code changed from 2836 to 5703"!). (2) Special-edition UPC
+collision (Lions = Casamigos-combo class, new face). SHIPPED IN TREE
+(undeployed): isMlccSpecialEditionName — base product now beats editions
+in UPC resolution + mapping swap. BUILT: scripts/audit-upc-mappings.mjs —
+audits EVERY mapping vs independent NRS source name (containment/size/
+variant/edition scoring), verdicts OK/DEAD_CODE/SUSPICIOUS/BAD/UNVERIFIED,
+CSV + summary; --apply deletes only BAD+DEAD_CODE (recoverable). MUST DO:
+refresh price book NOW + cron-job.org FOREVER (steps re-given), run audit,
+review CSV, deploy edition fix. Ranks WITH validate-speed as next session's
+twin missions.
 
 ## 🔥🔥 #1 ACTIVE FOCUS — VALIDATE SPEED + RELIABILITY (Tony, 2026-06-10 night)
 

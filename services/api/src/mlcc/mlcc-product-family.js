@@ -27,6 +27,19 @@ export function isMlccComboName(name) {
 }
 
 /**
+ * Special/limited-edition SKU detector (Tony's 1800-Silver-→-Lions scan,
+ * 2026-06-10 night). Same disease as combos: editions share the base
+ * bottle's UPC, so resolution must prefer the base product. A scan of a
+ * regular fifth must NEVER open the Lions/McLaren/collector variant.
+ * @param {string | null | undefined} name
+ */
+export function isMlccSpecialEditionName(name) {
+  return /lions|mclaren|wrexham|collector|edition|\bltd\b|\blto\b|anniv|holiday|camo|jersey|all star|deadpool/i.test(
+    String(name ?? ""),
+  );
+}
+
+/**
  * Strip trailing size-only tokens; keep (HOL), flavor words, and core line name.
  * Combo "W/..." segments are cut FIRST so a gift-combo SKU normalizes to its
  * base product line ("CASAMIGOS REPOSADO W/50ML REPO W/" → "CASAMIGOS

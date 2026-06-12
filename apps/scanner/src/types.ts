@@ -17,6 +17,13 @@ export interface MlccProduct {
   /** UPCitemdb product image when present (scanner UPC flows). */
   imageUrl?: string | null;
   /**
+   * Grid-sized (~360px WebP) thumbnail of the catalog photo. Served by
+   * /browse since 2026-06-12 (quality mandate — the grid must never
+   * decode multi-MB originals). NULL until the thumb backfill reaches
+   * the code; always fall back to imageUrl.
+   */
+  imageThumbUrl?: string | null;
+  /**
    * ISO date (YYYY-MM-DD) of the most recent MLCC price book that
    * contained this product. Stored by the price-book ingestor. Used
    * client-side (task #44) to flag products that haven't appeared in

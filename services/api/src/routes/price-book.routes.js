@@ -30,6 +30,7 @@ import {
   familyNameSearchPrefix,
   filterToFamily,
   isMlccComboName,
+  isMlccSpecialEditionName,
   normalizeMlccNameBaseForFamily,
   sanitizeIlikeForFamily,
 } from "../mlcc/mlcc-product-family.js";
@@ -1059,7 +1060,7 @@ export async function priceBookUpcHandler(req, res) {
       */
       if (
         mlccItem &&
-        isMlccComboName(mlccItem.name) &&
+        (isMlccComboName(mlccItem.name) || isMlccSpecialEditionName(mlccItem.name)) &&
         mapping.confidenceSource !== "user_confirmed"
       ) {
         const { data: upcSiblings } = await supabase
@@ -1068,7 +1069,7 @@ export async function priceBookUpcHandler(req, res) {
           .eq("upc", upc)
           .limit(10);
         const regular = (upcSiblings ?? [])
-          .filter((r) => !isMlccComboName(r.name))
+          .filter((r) => !isMlccComboName(r.name) && !isMlccSpecialEditionName(r.name))
           .sort((a, b) => String(a.ada_number ?? "").localeCompare(String(b.ada_number ?? "")))[0];
         if (regular) {
           console.log(
@@ -1143,7 +1144,10 @@ export async function priceBookUpcHandler(req, res) {
       .slice()
       .sort(
         (a, b) =>
+          // Base product beats gift combos AND special editions (Lions/
+          // McLaren class, 2026-06-10) — editions share the base UPC.
           Number(isMlccComboName(a.name)) - Number(isMlccComboName(b.name)) ||
+          Number(isMlccSpecialEditionName(a.name)) - Number(isMlccSpecialEditionName(b.name)) ||
           String(a.ada_number ?? "").localeCompare(String(b.ada_number ?? "")),
       )[0] ?? null;
     if (localRow) {

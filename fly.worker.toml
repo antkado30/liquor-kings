@@ -25,10 +25,14 @@ kill_timeout = "5m"
   LK_CHROMIUM_SANDBOX = "off"
   # The worker reaches the API over the public URL to claim runs.
   API_BASE_URL = "https://liquor-kings.fly.dev"
-  # MUST match the API app's effective value. Stage 5 real submission requires
-  # this = "yes" AND per-store arming; if "no", orders fall back to dry_run.
-  # If liquor-kings has this overridden by a secret, set the same secret here.
-  LK_ALLOW_ORDER_SUBMISSION = "no"
+  # Stage 5 real-submission gate — set as a SECRET, not here (2026-06-12):
+  #   fly secrets set LK_ALLOW_ORDER_SUBMISSION=yes -a liquor-kings-worker
+  # The toml used to hardcode "no", and with no secret overriding it every
+  # real submit after the worker split would have silently dry-run. With the
+  # line removed, a missing value still safely means dry_run — but arming is
+  # an explicit operator action now, not a forgotten default. The other two
+  # gates (metadata.mode=submit + per-store allow_order_submission) still
+  # apply on top.
 
 # No [http_service] — the worker is outbound-only and serves nothing.
 

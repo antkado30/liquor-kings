@@ -809,7 +809,11 @@ function ToastClearer({
  */
 function BrowseCardImage({ product }: { product: MlccProduct }) {
   const [errored, setErrored] = useState(false);
-  const url = product.imageUrl;
+  // Thumb first (≈360px WebP, ~10-25KB) — decoding multi-MB originals
+  // into 150px tiles is the phone-overheating class (quality mandate,
+  // 2026-06-12). Fall back to the full image until the backfill reaches
+  // this code, then to the placeholder if that errors too.
+  const url = product.imageThumbUrl ?? product.imageUrl;
   const showImage = !!url && !errored;
   return (
     <div className="browse-card__img browse-card-img-slot">

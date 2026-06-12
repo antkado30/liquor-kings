@@ -27,6 +27,7 @@
  * submit a cart that hasn't been confirmed against MLCC's live view.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { validateCart, type CartValidationResult } from "../api/cart";
 import {
   getRunSummary,
@@ -59,6 +60,7 @@ import {
   generateValidQuantities,
   getOrderingRuleDisplay,
 } from "../lib/mlcc-ordering-rules";
+import { humanizeRunFailure } from "../lib/run-failure-human";
 
 function money(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
@@ -231,6 +233,7 @@ export function CartDrawer({
    */
   useHideTabBar();
   useLockBodyScroll();
+  const navigate = useNavigate();
   const {
     items,
     groupedByAda,
@@ -935,6 +938,11 @@ export function CartDrawer({
               state.kind === "validateStarting" ||
               state.kind === "submitStarting"
             }
+            startedAtMs={
+              state.kind === "validatePolling" || state.kind === "submitPolling"
+                ? state.startedAtMs
+                : undefined
+            }
           />
         ) : null}
 
@@ -958,9 +966,12 @@ export function CartDrawer({
         ) : null}
 
         {state.kind === "validateDone" && state.finalStatus !== "succeeded" ? (
-          <div className="banner banner-warn">
-            MLCC validate finished as <strong>{state.finalStatus}</strong>. Review the cart and try again.
-          </div>
+          <RunFailureCard
+            failureType={state.failureType}
+            failureMessage={state.failureMessage}
+            onRetryValidate={() => void startValidate(items)}
+            onOpenSettings={() => navigate("/settings")}
+          />
         ) : null}
 
         {/* ─── Action buttons (idle / validateDone) ───────────────────────── */}
@@ -1159,19 +1170,12 @@ export function CartDrawer({
         ) : null}
 
         {state.kind === "submitDone" && state.finalStatus !== "succeeded" ? (
-          <>
-            <div className="banner banner-warn">
-              Submit finished as {state.finalStatus}.{" "}
-              {state.progressMessage ??
-                (state.failureType ? `Failure type: ${state.failureType}` : "No further details were provided.")}
-            </div>
-            <button type="button" className="btn secondary btn-block" onClick={handleRetry}>
-              Back to cart
-            </button>
-            <button type="button" className="btn btn-block" onClick={onClose}>
-              Close
-            </button>
-          </>
+          <RunFailureCard
+            failureType={state.failureType}
+            failureMessage={state.failureMessage}
+            onRetryValidate={() => void startValidate(items)}
+            onOpenSettings={() => navigate("/settings")}
+          />
         ) : null}
 
         {state.kind === "error" ? (
@@ -1779,6 +1783,93 @@ function ValidateResultPanel({
   );
 }
 
+function formatElapsedMs(startedAtMs: number): string {
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
+  const mins = Math.floor(elapsedSec / 60);
+  const secs = elapsedSec % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function honestSlowMessage(elapsedSec: number): string | null {
+  if (elapsedSec > 75) {
+    return "MILO is slow today. We keep at it until it answers — you can keep scanning, this continues in the background.";
+  }
+  if (elapsedSec >= 30) {
+    return "MILO is taking longer than usual — still working.";
+  }
+  return null;
+}
+
+/**
+ * Live elapsed clock for RPA polling phases. Ticks every second from
+ * startedAtMs; cleaned up on unmount.
+ */
+function PollingElapsedStatus({ startedAtMs }: { startedAtMs: number }) {
+  const [elapsedSec, setElapsedSec] = useState(() =>
+    Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)),
+  );
+
+  useEffect(() => {
+    const tick = () => {
+      setElapsedSec(Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)));
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [startedAtMs]);
+
+  const slowNote = honestSlowMessage(elapsedSec);
+
+  return (
+    <div className="rpa-progress__elapsed-row">
+      <span className="rpa-progress__elapsed" aria-label="Elapsed time">
+        {formatElapsedMs(startedAtMs)}
+      </span>
+      {slowNote ? (
+        <p className="rpa-progress__slow-note muted small">{slowNote}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Human failure card — one sentence headline, one-tap retry, quiet
+ * technical detail for support (quality mandate 2026-06-12).
+ */
+function RunFailureCard({
+  failureType,
+  failureMessage,
+  onRetryValidate,
+  onOpenSettings,
+}: {
+  failureType: string | null;
+  failureMessage: string | null;
+  onRetryValidate: () => void;
+  onOpenSettings: () => void;
+}) {
+  const { sentence, action } = humanizeRunFailure(failureType, failureMessage);
+
+  return (
+    <div className="drawer-run-failure" role="alert">
+      <p className="drawer-run-failure__headline">{sentence}</p>
+      <button
+        type="button"
+        className="btn primary btn-block"
+        onClick={action === "check_credentials" ? onOpenSettings : onRetryValidate}
+      >
+        {action === "check_credentials" ? "Open Settings" : "Try again"}
+      </button>
+      <details className="drawer-run-failure__details">
+        <summary>Technical detail</summary>
+        <pre className="drawer-run-failure__detail-body">
+          {failureType ?? "(none)"}
+          {failureMessage ? `\n${failureMessage}` : ""}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
 /**
  * Stage-by-stage progress panel rendered during a Validate or Submit RPA
  * run. Replaces the boring "Validating against MLCC…" banner with a
@@ -1801,6 +1892,7 @@ function RpaProgressPanel({
   stages,
   currentStageIndex,
   preStage,
+  startedAtMs,
 }: {
   headline: { title: string; sub?: string };
   stages: ReadonlyArray<{ id: string; label: string }>;
@@ -1812,6 +1904,8 @@ function RpaProgressPanel({
    * explaining the wait.
    */
   preStage: boolean;
+  /** When set, show live elapsed timer + honest slow-progress copy. */
+  startedAtMs?: number;
 }) {
   return (
     <div className="rpa-progress" role="status" aria-live="polite">
@@ -1820,6 +1914,7 @@ function RpaProgressPanel({
         {headline.sub ? (
           <div className="rpa-progress__sub muted small">{headline.sub}</div>
         ) : null}
+        {startedAtMs != null ? <PollingElapsedStatus startedAtMs={startedAtMs} /> : null}
       </div>
       <ol className="rpa-progress__list">
         {stages.map((stage, idx) => {

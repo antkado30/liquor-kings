@@ -61,6 +61,7 @@
 
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
+import sharp from "sharp";
 import { extractBottleSizeMl } from "../src/lib/upcitemdb.js";
 
 // ── Verification tunables ──────────────────────────────────────────────────
@@ -80,6 +81,26 @@ const STOPWORDS = new Set([
   "the", "of", "and", "with", "a", "an", "&",
   "pack", "bottle", "bottles", "btl", "case",
 ]);
+
+/*
+  Known sub-brand / product-line collisions: lines that share a parent
+  brand with a flagship product, so brand-token matching alone can't tell
+  them apart (Rule 3 below). Lowercase phrases, matched against the result
+  title/snippet. Add to this list whenever a new one is caught.
+*/
+const SUBBRAND_CONFLICT_PHRASES = [
+  "parrot bay",
+  "country cocktails",
+  "downhome punch",
+  "down home punch",
+  "smirnoff ice",
+  "malibu splash",
+  "bacardi breezer",
+  "jose cuervo playamar",
+  "crown royal washington apple", // pre-mixed RTD line vs the whisky
+  "hard seltzer",
+  "ranch water",
+];
 
 function normalizeTokens(s) {
   return String(s ?? "")
@@ -138,6 +159,27 @@ function verifyMatch({ mlccItem, candidateText }) {
   for (const t of candTokens) {
     if (VARIANT_TOKENS.has(t) && !nameTokens.has(t)) {
       return { ok: false, reason: `wrong variant (mentions "${t}")` };
+    }
+  }
+  /*
+    Rule 3 — sub-brand / product-line conflicts (the Parrot Bay lesson,
+    2026-06-12: "CAPTAIN MORGAN COCONUT RUM" got a PARROT BAY photo —
+    Parrot Bay is a Captain Morgan PRODUCT LINE, so brand tokens matched
+    and no flavor variant tripped Rule 2). Phrase-based and curated to
+    stay precise: retailer titles are full of site fluff ("| Total Wine"),
+    so a generic unknown-token reject would nuke good candidates. The
+    vision gate carries the general version of this rule; this catches
+    the known offenders before we spend a vision call.
+  */
+  const candLower = String(candidateText ?? "").toLowerCase();
+  const targetLower = String(mlccItem.name ?? "").toLowerCase();
+  for (const phrase of SUBBRAND_CONFLICT_PHRASES) {
+    // Exempt only when the TARGET ITSELF is that product line (full-phrase
+    // match — "smirnoff" alone must not exempt a SMIRNOFF ICE candidate
+    // from a plain SMIRNOFF VODKA target). If MLCC abbreviates the line
+    // name, the SKU just falls to the placeholder — safe direction.
+    if (candLower.includes(phrase) && !targetLower.includes(phrase)) {
+      return { ok: false, reason: `different product line ("${phrase}")` };
     }
   }
   const candSize = extractBottleSizeMl(candidateText);
@@ -328,7 +370,12 @@ async function visionCheckOnce(item, buf, mediaType) {
     `(TN)=Tennessee, FLVD=flavored, LIQ=liqueur, RTD=ready to drink. ` +
     `Never fail a photo because the label doesn't literally contain a ` +
     `catalog abbreviation. ` +
-    `Does this photo show this product? FAIL if: different brand; different ` +
+    `Does this photo show this product? FAIL if: different brand; a ` +
+    `DIFFERENT PRODUCT LINE or sub-brand of the same parent brand (e.g. a ` +
+    `PARROT BAY bottle when the target is plain CAPTAIN MORGAN COCONUT RUM — ` +
+    `if the label prominently shows a line name that is NOT in the target ` +
+    `name, it is the WRONG product even when the parent brand matches); ` +
+    `different ` +
     `flavor or named variant (e.g. raspberry when target is plain, Double ` +
     `Oaked when target is the standard expression); the label READABLY shows ` +
     `a proof or age statement that CONTRADICTS one in the target name; a ` +
@@ -447,22 +494,62 @@ async function downloadImage(imageUrl) {
   return { ok: true, buf, contentType, mediaType, ext };
 }
 
+// Right-size at birth (quality mandate, 2026-06-12): we used to upload the
+// ORIGINAL retailer bytes (often 1-3 MB) and let phones melt decoding them
+// into 150px grid tiles. Now every accepted photo is stored twice, both
+// WebP: a capped full for the ProductCard detail view and a ~360px thumb
+// for the Browse grid / candidate pickers.
+const FULL_MAX_WIDTH = 1600;
+const FULL_QUALITY = 82;
+const THUMB_WIDTH = 360;
+const THUMB_QUALITY = 72;
+
 async function uploadImage(code, dl) {
-  const path = `${code}.${dl.ext}`;
+  let fullBuf;
+  let thumbBuf;
+  try {
+    fullBuf = await sharp(dl.buf)
+      .rotate() // honor EXIF orientation
+      .resize({ width: FULL_MAX_WIDTH, withoutEnlargement: true })
+      .webp({ quality: FULL_QUALITY })
+      .toBuffer();
+    thumbBuf = await sharp(dl.buf)
+      .rotate()
+      .resize({ width: THUMB_WIDTH, withoutEnlargement: true })
+      .webp({ quality: THUMB_QUALITY })
+      .toBuffer();
+  } catch (e) {
+    return { ok: false, reason: `sharp re-encode failed: ${e.message}` };
+  }
+
+  const fullPath = `full/${code}.webp`;
   const { error: upErr } = await supabase.storage
     .from(STORAGE_BUCKET)
-    .upload(path, dl.buf, { contentType: dl.contentType, upsert: true });
+    .upload(fullPath, fullBuf, { contentType: "image/webp", upsert: true });
   if (upErr) return { ok: false, reason: `upload failed: ${upErr.message}` };
-  const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
-  if (!data?.publicUrl) return { ok: false, reason: "no public url" };
-  return { ok: true, publicUrl: data.publicUrl };
+
+  const thumbPath = `thumbs/${code}.webp`;
+  const { error: thumbErr } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .upload(thumbPath, thumbBuf, { contentType: "image/webp", upsert: true });
+  if (thumbErr) return { ok: false, reason: `thumb upload failed: ${thumbErr.message}` };
+
+  const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(fullPath);
+  const { data: thumbData } = supabase.storage
+    .from(STORAGE_BUCKET)
+    .getPublicUrl(thumbPath);
+  if (!data?.publicUrl || !thumbData?.publicUrl) {
+    return { ok: false, reason: "no public url" };
+  }
+  return { ok: true, publicUrl: data.publicUrl, thumbUrl: thumbData.publicUrl };
 }
 
-async function updateAllCodeRows(code, imageUrl) {
+async function updateAllCodeRows(code, imageUrl, thumbUrl) {
   let upd = supabase
     .from("mlcc_items")
     .update({
       image_url: imageUrl,
+      image_thumb_url: thumbUrl ?? null,
       image_source: "serper_google_images",
       image_updated_at: new Date().toISOString(),
     })
@@ -588,7 +675,7 @@ async function main() {
       console.log(`${tag} — ✗ ${hosted.reason}`);
       return false;
     }
-    const ok = await updateAllCodeRows(item.code, hosted.publicUrl);
+    const ok = await updateAllCodeRows(item.code, hosted.publicUrl, hosted.thumbUrl);
     if (ok) {
       console.log(`${tag} — ✓${note} ${hosted.publicUrl}`);
       return true;
