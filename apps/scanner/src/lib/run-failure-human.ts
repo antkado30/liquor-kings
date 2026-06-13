@@ -57,8 +57,40 @@ const EXACT: Record<string, HumanFailure> = {
     sentence: "We couldn't unlock your saved MLCC credentials. Re-enter them in Settings.",
     action: "check_credentials",
   },
+  LK_NO_CREDENTIALS: {
+    sentence: "No MLCC credentials are saved for this store yet. Add them in Settings.",
+    action: "check_credentials",
+  },
+  LK_INVALID_RPA_ITEMS: {
+    sentence: "Some cart lines are missing their MLCC codes. Remove and re-add those bottles, then validate again.",
+    action: "retry",
+  },
+  LK_MISSING_LICENSE_NUMBER: {
+    sentence: "Your store's liquor license number is missing. Add it in Settings, then try again.",
+    action: "check_credentials",
+  },
   BELOW_9L_MINIMUM: {
     sentence: "MLCC requires at least 9 liters per ADA — one of your suppliers is under the minimum.",
+    action: "retry",
+  },
+  MLCC_CART_MISMATCH_BEFORE_SUBMIT: {
+    sentence:
+      "Stopped for your protection — MILO's cart didn't exactly match your order, so nothing was submitted. Validate again and review.",
+    action: "retry",
+  },
+  MLCC_POSSIBLE_DUPLICATE_SUBMIT: {
+    sentence:
+      "Paused for your protection — a recent submit attempt ended uncertainly. Check MILO's order history first: the order may already be in.",
+    action: "contact_support",
+  },
+  LK_RUN_REAPED: {
+    sentence:
+      "We lost contact with the order robot mid-run. Before retrying, check MILO's order history — the order may or may not have gone through.",
+    action: "retry",
+  },
+  MILO_STAGE3_TIMEOUT: {
+    sentence:
+      "MILO was too slow while we added your items — the run stopped safely. Try again; large carts can take a few minutes.",
     action: "retry",
   },
   INVALID_SPLIT_QUANTITIES: {
@@ -87,6 +119,20 @@ const PREFIXES: Array<{ prefix: string; human: HumanFailure }> = [
     prefix: "MLCC_LICENSE_STORE_",
     human: {
       sentence: "We couldn't get past MILO's store-selection screen. Try again shortly.",
+      action: "retry",
+    },
+  },
+  {
+    prefix: "MILO_STAGE3_",
+    human: {
+      sentence: "We hit a snag adding items to MILO's cart. Nothing was ordered — try again.",
+      action: "retry",
+    },
+  },
+  {
+    prefix: "MILO_STAGE5_",
+    human: {
+      sentence: "Checkout hit a safety stop before anything was placed. Try again — if it repeats, we'll dig in.",
       action: "retry",
     },
   },

@@ -1150,10 +1150,26 @@ export function CartDrawer({
         ) : null}
 
         {/* ─── Submit terminal states ─────────────────────────────────────── */}
-        {state.kind === "submitDone" && state.finalStatus === "succeeded" ? (
+        {/*
+          AUDIT #15 (P0, 2026-06-12): "succeeded" alone is NOT proof an
+          order was placed — the Stage-5 triple gate can downgrade a
+          submit to dry_run and the run still finalizes succeeded. The
+          green banner (and the cart clear!) now require the worker's
+          explicit submitted=true. A prepared-but-not-submitted run shows
+          the amber truth and PRESERVES the cart for retry once armed.
+        */}
+        {state.kind === "submitDone" &&
+        state.finalStatus === "succeeded" &&
+        state.submitResult?.submitted === true ? (
           <>
             <div className="banner banner-ok">
-              Order submitted to MILO. Check the Orders page for confirmation numbers.
+              Order submitted to MILO
+              {Array.isArray(state.submitResult.confirmation_numbers) &&
+              state.submitResult.confirmation_numbers.length > 0
+                ? ` — ${state.submitResult.confirmation_numbers.length} confirmation${
+                    state.submitResult.confirmation_numbers.length === 1 ? "" : "s"
+                  } received.`
+                : ". Check the Orders page for confirmation numbers."}
             </div>
             <button
               type="button"
@@ -1165,6 +1181,35 @@ export function CartDrawer({
               }}
             >
               Done
+            </button>
+          </>
+        ) : null}
+
+        {state.kind === "submitDone" &&
+        state.finalStatus === "succeeded" &&
+        state.submitResult?.submitted !== true ? (
+          <>
+            <div className="banner banner-warn">
+              <strong>Nothing was ordered.</strong> MILO accepted the cart as a
+              practice run, but live ordering isn&apos;t switched on for this
+              store yet — your order was NOT submitted. Your cart is saved
+              right here.
+            </div>
+            {state.submitResult?.dry_run_reason ? (
+              <details className="drawer-run-failure__detail">
+                <summary>Technical detail</summary>
+                <p>{state.submitResult.dry_run_reason}</p>
+              </details>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-block"
+              onClick={() => {
+                reset();
+                onClose();
+              }}
+            >
+              Close — keep my cart
             </button>
           </>
         ) : null}

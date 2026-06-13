@@ -845,7 +845,9 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       status: "failed",
       workerNotes: "RPA worker could not decrypt stored MLCC credentials",
       errorMessage: dbResult.error,
-      failureType: FAILURE_TYPE.UNKNOWN,
+      // Precise code (audit 2026-06-12): the classifier preserves typed
+      // codes now — UNKNOWN here hid an actionable "re-enter credentials".
+      failureType: "LK_DECRYPT_FAILED",
       failureDetails: { code: "LK_DECRYPT_FAILED" },
       evidence: [
         ...stepEvidence,
@@ -887,7 +889,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       workerNotes: "RPA worker has no MLCC credentials available (DB or env)",
       errorMessage:
         "No MLCC credentials available: stores.mlcc_password_encrypted is empty AND MILO_USERNAME/MILO_PASSWORD env vars are unset",
-      failureType: FAILURE_TYPE.UNKNOWN,
+      failureType: "LK_NO_CREDENTIALS",
       failureDetails: { code: "LK_NO_CREDENTIALS" },
       evidence: [
         ...stepEvidence,
@@ -939,7 +941,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       workerNotes: "RPA worker found invalid cart item mapping for stage 3",
       errorMessage:
         "Cart items have missing or invalid mlcc_code/quantity for RPA execution",
-      failureType: FAILURE_TYPE.UNKNOWN,
+      failureType: "LK_INVALID_RPA_ITEMS",
       failureDetails: { invalid_items: invalidItems.length },
       evidence: [
         ...stepEvidence,
@@ -970,7 +972,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       workerNotes: "RPA worker missing license number",
       errorMessage:
         "RPA worker could not resolve license number from payload.store.liquor_license, payload.metadata.license_number, or MILO_TEST_LICENSE env",
-      failureType: FAILURE_TYPE.UNKNOWN,
+      failureType: "LK_MISSING_LICENSE_NUMBER",
       evidence: [
         ...stepEvidence,
         buildNoSubmitAttestationEvidence("rpa_navigate", "rpa_run"),
@@ -1381,6 +1383,15 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         ],
       });
 
+      /*
+        AUDIT #16 (P1, 2026-06-12): this success return was missing
+        `runSucceeded = true`, so the finally released the session as
+        UNHEALTHY and tore down a perfectly good warm browser after every
+        successful cart reset — including the signup activation probe and
+        the VerifyMlccBanner. The user's next validate then paid the
+        ~2-minute cold path instead of the ~30-45s warm one.
+      */
+      runSucceeded = true;
       return {
         success: true,
         claimed: true,
@@ -1406,10 +1417,28 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       ),
     );
 
+    // AUDIT #19: throttled live progress so the scanner's progress line
+    // shows "Adding item X of N" instead of a minutes-long blind wait.
+    let lastStage3Beat = 0;
     try {
       session = await addItemsToCart(session, normalizedItems, {
         captureArtifacts: true,
         mlccLookup,
+        onProgress: ({ done, total }) => {
+          const now = Date.now();
+          if (now - lastStage3Beat < 8_000 && done < total) return;
+          lastStage3Beat = now;
+          void heartbeatRun({
+            apiBaseUrl,
+            runId: run.id,
+            storeId,
+            workerId,
+            progressStage: "rpa_add_items",
+            progressMessage: `Adding items to MILO cart — ${done} of ${total}`,
+          }).catch(() => {
+            /* a missed heartbeat must never affect the run */
+          });
+        },
       });
     } catch (stage3Error) {
       const failure = summarizeFailure(
@@ -1607,6 +1636,215 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       };
     }
     // ─── End validate-only short-circuit ──────────────────────────────────
+
+    /*
+      AUDIT #17 (P0, 2026-06-12) — BOUNDARY COMPARISON BEFORE LIVE SUBMIT
+      (Integrity Doctrine discipline #11: what we sent === what came back;
+      mismatch = LOUD ALERT).
+
+      Stage 3 verifies items against the live MILO cart and demotes
+      rejects — but a PARTIAL outcome (81 of 84 verified) flowed straight
+      through Stage 4 into Stage 5, silently submitting a short order the
+      user never approved. The pre-submit modal shows the LOCAL cart, so
+      no layer caught it.
+
+      Gate (live submits only — dry runs are rehearsals and their results
+      already surface rejections):
+        1. every requested code must be VERIFIED in the active MILO cart
+           at the exact requested quantity (session.itemsAdded is already
+           the exact-quantity-verified set), and
+        2. the active cart must contain nothing we didn't request.
+      Any mismatch REFUSES Stage 5 with a typed, listable failure. A
+      blocked short order beats a placed wrong order, always — the user
+      reviews and re-runs.
+    */
+    /*
+      AUDIT #20 (P0-class, 2026-06-12) — DUPLICATE-SUBMIT TRIPWIRE.
+      If a recent submit attempt for THIS store died AT CHECKOUT in an
+      AMBIGUOUS way (reaped mid-click, confirmation timeout with failed
+      backstop, unknown crash), MILO may or may not have placed that
+      order — the only safe move is to REFUSE the next live submit until
+      a human checks MILO's order history. Definitively-safe checkout
+      failures (error toast = MILO rejected it; our own safety/boundary
+      refusals) don't trip this. Window: 30 minutes. Concurrent same-store
+      runs are structurally impossible (one_running_run_per_store index),
+      so only the failed-ambiguous window matters.
+    */
+    if (allowOrderSubmission) {
+      const SAFE_CHECKOUT_FAILURES = new Set([
+        "MILO_STAGE5_ERROR_TOAST",
+        "MILO_STAGE5_SAFETY_GATE_VIOLATION",
+        "MLCC_CART_MISMATCH_BEFORE_SUBMIT",
+      ]);
+      const tripwireCutoffIso = new Date(Date.now() - 30 * 60_000).toISOString();
+      const { data: recentFailed, error: tripwireErr } = await workerSupabase
+        .from("execution_runs")
+        .select("id, finished_at, progress_stage, failure_type")
+        .eq("store_id", storeId)
+        .eq("status", "failed")
+        .gte("finished_at", tripwireCutoffIso)
+        .eq("progress_stage", "rpa_checkout");
+      if (tripwireErr) {
+        // Fail SAFE: if we cannot evaluate the tripwire, refuse the live
+        // submit rather than risk a double order (doctrine: loud > wrong).
+        await finalizeRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          status: "failed",
+          workerNotes: "Stage 5 refused: duplicate-submit tripwire could not be evaluated",
+          errorMessage: `Could not check recent submit history before live submission: ${tripwireErr.message}`,
+          failureType: "MLCC_POSSIBLE_DUPLICATE_SUBMIT",
+          failureDetails: { tripwire_error: tripwireErr.message },
+          evidence: [
+            ...stepEvidence,
+            buildNoSubmitAttestationEvidence("stage5_dup_tripwire", "rpa_run"),
+          ],
+        });
+        return {
+          success: false,
+          claimed: true,
+          failed: true,
+          runId: run.id,
+          stage: "stage5_dup_tripwire",
+          error: "MLCC_POSSIBLE_DUPLICATE_SUBMIT",
+        };
+      }
+      const ambiguousDeaths = (recentFailed ?? []).filter(
+        (r) => !SAFE_CHECKOUT_FAILURES.has(String(r.failure_type ?? "")),
+      );
+      if (ambiguousDeaths.length > 0) {
+        await finalizeRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          status: "failed",
+          workerNotes:
+            "Stage 5 refused: a recent submit attempt died at checkout ambiguously — possible order already placed",
+          errorMessage:
+            `Refusing live submit: ${ambiguousDeaths.length} submit attempt(s) for this store died at checkout within the last 30 minutes with an ambiguous outcome. Check MILO's order history (/milo/account/orders) — the order may already exist.`,
+          failureType: "MLCC_POSSIBLE_DUPLICATE_SUBMIT",
+          failureDetails: {
+            ambiguous_runs: ambiguousDeaths.map((r) => ({
+              run_id: r.id,
+              finished_at: r.finished_at,
+              failure_type: r.failure_type,
+            })),
+            window_minutes: 30,
+          },
+          evidence: [
+            ...stepEvidence,
+            buildEvidenceEntry({
+              kind: "duplicate_submit_tripwire",
+              stage: "stage5_dup_tripwire",
+              message:
+                "Live submission refused — recent ambiguous checkout death for this store",
+              attributes: { ambiguous_runs: ambiguousDeaths },
+            }),
+            buildNoSubmitAttestationEvidence("stage5_dup_tripwire", "rpa_run"),
+          ],
+        });
+        return {
+          success: false,
+          claimed: true,
+          failed: true,
+          runId: run.id,
+          stage: "stage5_dup_tripwire",
+          error: "MLCC_POSSIBLE_DUPLICATE_SUBMIT",
+        };
+      }
+    }
+
+    if (allowOrderSubmission) {
+      const verifiedByCode = new Map(
+        (Array.isArray(session?.itemsAdded) ? session.itemsAdded : []).map(
+          (i) => [String(i.code), Number(i.quantity)],
+        ),
+      );
+      const boundaryMismatches = [];
+      for (const want of normalizedItems) {
+        const got = verifiedByCode.get(String(want.code));
+        if (got == null) {
+          boundaryMismatches.push({
+            code: want.code,
+            requested: want.quantity,
+            in_cart: 0,
+            kind: "missing_or_rejected",
+          });
+        } else if (Number(got) !== Number(want.quantity)) {
+          boundaryMismatches.push({
+            code: want.code,
+            requested: want.quantity,
+            in_cart: got,
+            kind: "quantity_mismatch",
+          });
+        }
+      }
+      const requestedCodes = new Set(
+        normalizedItems.map((i) => String(i.code)),
+      );
+      for (const row of session?.cartVerification?.activeCart ?? []) {
+        const codeStr = String(row?.code ?? "");
+        if (codeStr && !requestedCodes.has(codeStr)) {
+          boundaryMismatches.push({
+            code: codeStr,
+            requested: 0,
+            in_cart: Number(row?.quantity ?? 0),
+            kind: "unexpected_item_in_cart",
+          });
+        }
+      }
+
+      if (boundaryMismatches.length > 0) {
+        const missingCount = boundaryMismatches.filter(
+          (m) => m.kind === "missing_or_rejected",
+        ).length;
+        const failure = summarizeFailure(
+          `Refusing live submit: MILO cart does not match the approved order (${boundaryMismatches.length} mismatch${boundaryMismatches.length === 1 ? "" : "es"}: ${missingCount} missing/rejected)`,
+          "MLCC_CART_MISMATCH_BEFORE_SUBMIT",
+          {
+            stage: "stage5_boundary_gate",
+            mismatches: boundaryMismatches,
+            requested_count: normalizedItems.length,
+            verified_count: verifiedByCode.size,
+          },
+        );
+        await finalizeRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          status: "failed",
+          workerNotes:
+            "Stage 5 refused: boundary comparison found cart/order mismatch (doctrine #11)",
+          errorMessage: failure.message,
+          failureType: failure.failureType,
+          failureDetails: failure.details,
+          evidence: [
+            ...stepEvidence,
+            buildEvidenceEntry({
+              kind: "boundary_comparison",
+              stage: "stage5_boundary_gate",
+              message:
+                "Requested order vs verified MILO cart mismatch — live submission refused",
+              attributes: {
+                mismatches: boundaryMismatches,
+                requested_count: normalizedItems.length,
+                verified_count: verifiedByCode.size,
+              },
+            }),
+            buildNoSubmitAttestationEvidence("stage5_boundary_gate", "rpa_run"),
+          ],
+        });
+        return {
+          success: false,
+          claimed: true,
+          failed: true,
+          runId: run.id,
+          stage: "stage5_boundary_gate",
+          error: "MLCC_CART_MISMATCH_BEFORE_SUBMIT",
+        };
+      }
+    }
 
     await heartbeatRun({
       apiBaseUrl,

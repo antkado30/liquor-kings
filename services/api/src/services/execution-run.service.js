@@ -310,6 +310,28 @@ const buildRunSummary = (run, operatorActions = []) => {
         }
       : null;
 
+  /*
+    FULL-SYSTEM-AUDIT #15 (P0, 2026-06-12): a Stage-5 run that the triple
+    gate downgraded to dry_run still finalizes status "succeeded" — and the
+    truth ("NOT submitted") lived only in workerNotes/evidence, which the
+    scanner never reads. The client then told the user "Order submitted to
+    MILO" with no order existing. Lift the rpa_run_summary evidence to a
+    top-level submit_result (same pattern as validate_result above) so the
+    UI can tell submitted-for-real from prepared-but-not-submitted.
+  */
+  const rpaRunSummaryEntry = evidence.find((e) => e?.kind === "rpa_run_summary");
+  const submitResult =
+    rpaRunSummaryEntry?.attributes &&
+    typeof rpaRunSummaryEntry.attributes === "object"
+      ? {
+          mode: rpaRunSummaryEntry.attributes.mode ?? null,
+          submitted: rpaRunSummaryEntry.attributes.submitted === true,
+          confirmation_numbers:
+            rpaRunSummaryEntry.attributes.confirmation_numbers ?? null,
+          dry_run_reason: rpaRunSummaryEntry.attributes.dry_run_reason ?? null,
+        }
+      : null;
+
   return {
     run_id: run?.id ?? null,
     store_id: run?.store_id ?? null,
@@ -339,6 +361,7 @@ const buildRunSummary = (run, operatorActions = []) => {
     pending_manual_review: pendingManualReview,
     actionable_next_step: actionableNextStep,
     validate_result: validateResult,
+    submit_result: submitResult,
   };
 };
 
@@ -2467,7 +2490,28 @@ export const claimNextQueuedExecutionRun = async (
     };
   }
 
+  /*
+    AUDIT #21 (P0, 2026-06-12): one running run per store. MILO carts are
+    account-scoped — two concurrent runs for one store would fight over a
+    single cart. Prefilter candidates whose store already has a running
+    run; the partial unique index `one_running_run_per_store` (migration
+    20260613013000) is the race-proof guarantee underneath — if two
+    workers pass this check simultaneously, the second UPDATE hits a
+    23505 unique violation and is treated as a lost claim below.
+  */
+  const { data: runningRows, error: runningErr } = await supabase
+    .from("execution_runs")
+    .select("store_id")
+    .eq("status", "running");
+  if (runningErr) {
+    return serverError(runningErr.message);
+  }
+  const busyStores = new Set((runningRows ?? []).map((r) => r.store_id));
+
   for (const candidate of queue) {
+    if (busyStores.has(candidate.store_id)) {
+      continue;
+    }
     const now = new Date().toISOString();
     const startedAt = candidate.started_at ?? now;
 
@@ -2497,6 +2541,13 @@ export const claimNextQueuedExecutionRun = async (
       .maybeSingle();
 
     if (updateError) {
+      // Unique violation on one_running_run_per_store: another worker won
+      // a run for this store between our prefilter and this UPDATE. Not an
+      // error — mark the store busy and try the next candidate (AUDIT #21).
+      if (updateError.code === "23505") {
+        busyStores.add(candidate.store_id);
+        continue;
+      }
       return serverError(updateError.message);
     }
 
@@ -2569,9 +2620,17 @@ export const reapStaleExecutionRuns = async (
         status: "failed",
         updated_at: nowIso,
         finished_at: nowIso,
-        progress_stage: "reaped",
+        /*
+          AUDIT (2026-06-12): the reaper used to OVERWRITE progress_stage
+          with "reaped", destroying the only record of WHERE the run died
+          — which is exactly what the duplicate-submit tripwire (and any
+          forensic triage) needs. A run reaped at "rpa_checkout" is the
+          dangerous one. Keep the stage; the reaped marker lives in
+          failure_type/details/message. Also: typed failure code instead
+          of UNKNOWN so the UI can explain it honestly.
+        */
         progress_message: "Run reaped — worker heartbeat went stale",
-        failure_type: "UNKNOWN",
+        failure_type: "LK_RUN_REAPED",
         error_message:
           `Orphaned run: no worker heartbeat for over ${staleMinutes} minutes — ` +
           `the worker process likely crashed. Marked failed and NOT auto-retried ` +

@@ -49,6 +49,7 @@ import {
   triggerRpaRunFromCart,
   type RunMode,
   type RunStatus,
+  type SubmitResult,
   type ValidateResult,
 } from "../api/execution";
 
@@ -106,6 +107,12 @@ export type SubmissionState =
       failureType: string | null;
       failureMessage: string | null;
       progressMessage: string | null;
+      /**
+       * Truth source for "did MILO actually receive an order" (audit #15).
+       * A succeeded run with submitResult?.submitted !== true was a
+       * dry-run downgrade — the UI must say NOTHING WAS ORDERED.
+       */
+      submitResult: SubmitResult | null;
     }
   // Terminal error
   | { kind: "error"; message: string; recoverable: boolean };
@@ -195,6 +202,7 @@ export function useSubmission(
       failureMessage: string | null;
       progressMessage: string | null;
       validateResult: ValidateResult | null;
+      submitResult: SubmitResult | null;
     }> => {
       const pollStart = Date.now();
       while (!cancelledRef.current) {
@@ -224,6 +232,7 @@ export function useSubmission(
             failureMessage: s.failure_message ?? null,
             progressMessage,
             validateResult: s.validate_result ?? null,
+            submitResult: s.submit_result ?? null,
           };
         }
         onTick({ status, progressStage, progressMessage });
@@ -502,6 +511,7 @@ export function useSubmission(
         failureType: terminal.failureType,
         failureMessage: terminal.failureMessage,
         progressMessage: terminal.progressMessage,
+        submitResult: terminal.submitResult,
       });
     } catch (e) {
       setState({

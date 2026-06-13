@@ -706,7 +706,20 @@ export async function addItemsToCart(session, items, options = {}) {
   const mlccLookup = options.mlccLookup;
   const normalizedItems = await validateItemsInput(items, { skipPreValidation, mlccLookup });
   const failOnRejected = options.failOnRejected === true;
-  const timeoutMs = Number.isFinite(options.timeoutMs) ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
+  /*
+    AUDIT #18 (2026-06-12): the flat 240s budget couldn't fit big carts —
+    84 sequential adds at a realistic ~2.5-4s each lands AT or PAST the
+    budget, which is exactly the 2026-06-10 "validate ground for 4 minutes
+    then died" failure. Scale with cart size (4s/item + 120s base),
+    bounded at 10 minutes so a wedged page can't hold the worker forever.
+    Explicit options.timeoutMs still wins (test runners).
+  */
+  const timeoutMs = Number.isFinite(options.timeoutMs)
+    ? Number(options.timeoutMs)
+    : Math.min(
+        600_000,
+        Math.max(DEFAULT_TIMEOUT_MS, 120_000 + normalizedItems.length * 4_000),
+      );
   const perItemTimeoutMs = Number.isFinite(options.perItemTimeoutMs) ? Number(options.perItemTimeoutMs) : DEFAULT_PER_ITEM_TIMEOUT_MS;
   const captureArtifacts = options.captureArtifacts ?? true;
 
@@ -941,6 +954,21 @@ export async function addItemsToCart(session, items, options = {}) {
             durationMs: Date.now() - perItemStart,
             batch: batchLabel,
           });
+
+          /*
+            AUDIT #19 (2026-06-12): live progress — big carts used to sit
+            on "Starting RPA Stage 3" for minutes (a blind wait, mandate
+            violation). Caller-provided, sync, and guarded so a callback
+            bug can never sink the stage.
+          */
+          try {
+            options.onProgress?.({
+              done: itemsAdded.length + itemsRejected.length,
+              total: normalizedItems.length,
+            });
+          } catch {
+            /* progress reporting must never affect the run */
+          }
         }
 
         await captureArtifact(page, outputDir, stage3Artifacts, `02-batch-${batchIdx + 1}-typed`);

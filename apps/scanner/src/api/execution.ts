@@ -113,6 +113,21 @@ export type RunSummary = {
    * validate_only that never reached Stage 4).
    */
   validate_result?: ValidateResult | null;
+  /**
+   * Populated for terminal rpa_run (submit) pipelines from the worker's
+   * rpa_run_summary evidence (audit #15, 2026-06-12). `submitted` is the
+   * ONLY trustworthy signal that a real MILO order was placed — a run can
+   * finalize "succeeded" in dry_run mode when the triple gate downgrades
+   * it. The UI must never claim "order submitted" without this.
+   */
+  submit_result?: SubmitResult | null;
+};
+
+export type SubmitResult = {
+  mode: string | null;
+  submitted: boolean;
+  confirmation_numbers: string[] | null;
+  dry_run_reason: string | null;
 };
 
 export type TriggerRpaRunResult =
