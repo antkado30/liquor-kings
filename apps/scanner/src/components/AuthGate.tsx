@@ -27,6 +27,7 @@ import {
   humanizeNetworkError,
   humanizeSignupError,
 } from "../api/me";
+import { fetchWithRetry } from "../api/catalog";
 import { OnboardingActivation } from "./OnboardingActivation";
 import {
   IconAlert,
@@ -269,22 +270,36 @@ export function AuthGate({ children }: AuthGateProps) {
 
     setSubmitting(true);
     try {
-      const res = await fetch("/auth/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: email.trim(),
-          password,
-          store_name: storeName.trim(),
-          liquor_license: liquorLicense.trim(),
-          mlcc_username: mlccUsername.trim(),
-          mlcc_password: mlccPassword,
-          address_line1: addressLine1.trim() || undefined,
-          city: city.trim() || undefined,
-          state: stateAbbr.trim() || undefined,
-          postal_code: postalCode.trim() || undefined,
-        }),
-      });
+      // AUDIT #25 (P1, 2026-06-13): this was a bare `fetch()` — same
+      // unbounded-await class as the original AuthGate boot hang (#6). A
+      // stalled /auth/signup response left a brand-new store owner staring
+      // at a frozen "Creating account…" button forever, with the try/catch/
+      // finally below never running because the await itself never settles.
+      // 20s timeout (signup does password hashing + credential encryption +
+      // multiple DB writes, slower than a typical read). maxRetries: 1 —
+      // deliberately NOT retried: if the first attempt actually succeeded
+      // server-side and only the response was lost, a retry could create a
+      // second store/account for the same signup.
+      const res = await fetchWithRetry(
+        "/auth/signup",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: email.trim(),
+            password,
+            store_name: storeName.trim(),
+            liquor_license: liquorLicense.trim(),
+            mlcc_username: mlccUsername.trim(),
+            mlcc_password: mlccPassword,
+            address_line1: addressLine1.trim() || undefined,
+            city: city.trim() || undefined,
+            state: stateAbbr.trim() || undefined,
+            postal_code: postalCode.trim() || undefined,
+          }),
+        },
+        { maxRetries: 1, timeoutMs: 20000 },
+      );
 
       let body: {
         ok?: boolean;

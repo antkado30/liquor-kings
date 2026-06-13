@@ -181,37 +181,45 @@ export function PilotOpsPage() {
   const loadDetail = useCallback(
     async (storeId: string) => {
       if (!storeId) return;
-      const res = await getPilotOpsStoreOverview(storeId, query);
-      const body = await parseJson(res);
-      if (!res.ok) {
-        if (await handleSessionFailure(res, body)) return;
-        setMsg({
-          type: "error",
-          text: String(body.error ?? "Failed to load selected store pilot detail."),
-        });
-        setDetail(null);
-        return;
-      }
-      setDetail((body.data as Record<string, unknown>) ?? null);
-      setAttentionOverdue((body.attention_overdue as Record<string, unknown> | undefined) ?? null);
-      setWorkflowHistory(
-        Array.isArray(body.workflow_history) ? (body.workflow_history as WorkflowHistoryRow[]) : [],
-      );
-      const wf = (body.workflow_state as Record<string, unknown> | undefined) ?? {};
-      const st = String(wf.pilot_ops_status ?? "unreviewed") as
-        | "unreviewed"
-        | "watching"
-        | "escalated"
-        | "resolved";
-      setWfStatus(st);
-      setWfNote(String(wf.operator_note ?? ""));
-      const notifRes = await getPilotOpsNotifications(buildQuery({ limit: "50" }));
-      const notifBody = await parseJson(notifRes);
-      if (notifRes.ok) {
-        const rows = Array.isArray(notifBody.notifications)
-          ? (notifBody.notifications as PilotNotificationRow[])
-          : [];
-        setNotifications(rows.filter((n) => n.store_id === storeId).slice(0, 12));
+      try {
+        const res = await getPilotOpsStoreOverview(storeId, query);
+        const body = await parseJson(res);
+        if (!res.ok) {
+          if (await handleSessionFailure(res, body)) return;
+          setMsg({
+            type: "error",
+            text: String(body.error ?? "Failed to load selected store pilot detail."),
+          });
+          setDetail(null);
+          return;
+        }
+        setDetail((body.data as Record<string, unknown>) ?? null);
+        setAttentionOverdue((body.attention_overdue as Record<string, unknown> | undefined) ?? null);
+        setWorkflowHistory(
+          Array.isArray(body.workflow_history) ? (body.workflow_history as WorkflowHistoryRow[]) : [],
+        );
+        const wf = (body.workflow_state as Record<string, unknown> | undefined) ?? {};
+        const st = String(wf.pilot_ops_status ?? "unreviewed") as
+          | "unreviewed"
+          | "watching"
+          | "escalated"
+          | "resolved";
+        setWfStatus(st);
+        setWfNote(String(wf.operator_note ?? ""));
+        const notifRes = await getPilotOpsNotifications(buildQuery({ limit: "50" }));
+        const notifBody = await parseJson(notifRes);
+        if (notifRes.ok) {
+          const rows = Array.isArray(notifBody.notifications)
+            ? (notifBody.notifications as PilotNotificationRow[])
+            : [];
+          setNotifications(rows.filter((n) => n.store_id === storeId).slice(0, 12));
+        }
+      } catch {
+        // AUDIT #28 follow-up: getPilotOpsStoreOverview/getPilotOpsNotifications
+        // now use fetchWithRetry, which throws after retries are exhausted on a
+        // persistent network failure. Previously this would propagate as an
+        // unhandled rejection with no user-visible message — surface it instead.
+        setMsg({ type: "error", text: "Network error loading store detail." });
       }
     },
     [query, handleSessionFailure],
@@ -237,6 +245,8 @@ export function PilotOpsPage() {
       setMsg({ type: "success", text: "Pilot workflow state updated." });
       await loadStores();
       await loadDetail(selectedStoreId);
+    } catch {
+      setMsg({ type: "error", text: "Network error updating workflow state." });
     } finally {
       setSavingWf(false);
     }

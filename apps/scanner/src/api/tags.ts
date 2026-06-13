@@ -5,6 +5,7 @@
  */
 import { getAuthBearer } from "../lib/supabase";
 import { getCurrentStoreId } from "../lib/currentStore";
+import { fetchWithRetry } from "./catalog";
 
 const BASE = "/tags";
 
@@ -29,23 +30,34 @@ export async function fetchTagsHtml(codes: string[]): Promise<PrintTagsResult> {
   }
   let res: Response;
   try {
-    res = await fetch(`${BASE}/render`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${bearer}`,
-        "X-Store-Id": storeId,
-        "Content-Type": "application/json",
-        Accept: "text/html, application/json",
+    // AUDIT #25 (P1, 2026-06-13): this was a bare `fetch()` with no
+    // AbortController/timeout — every other api/*.ts client goes through
+    // fetchWithRetry's 8s-default abort + backoff. A hung /tags/render
+    // response (server stall, slow network) left printingTags/printing
+    // stuck `true` forever — an AuthGate-class spinner dead-end on the
+    // Print Tags button. 15s covers HTML+image render for a multi-code
+    // batch; retries are safe (render is read-only/idempotent).
+    res = await fetchWithRetry(
+      `${BASE}/render`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearer}`,
+          "X-Store-Id": storeId,
+          "Content-Type": "application/json",
+          Accept: "text/html, application/json",
+        },
+        /*
+          embedded:true tells the server to suppress the "Print shelf
+          tags — Brother QL-810W" howto banner that's meant for the
+          standalone HTML page. In the scanner's in-app modal, our own
+          Print/Done buttons cover that need; the howto would just
+          crowd the iframe. Bug fix 2026-06-02 evening.
+        */
+        body: JSON.stringify({ codes, embedded: true }),
       },
-      /*
-        embedded:true tells the server to suppress the "Print shelf
-        tags — Brother QL-810W" howto banner that's meant for the
-        standalone HTML page. In the scanner's in-app modal, our own
-        Print/Done buttons cover that need; the howto would just
-        crowd the iframe. Bug fix 2026-06-02 evening.
-      */
-      body: JSON.stringify({ codes, embedded: true }),
-    });
+      { timeoutMs: 15000, maxRetries: 2 },
+    );
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

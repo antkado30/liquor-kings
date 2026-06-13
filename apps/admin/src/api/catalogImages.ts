@@ -7,6 +7,8 @@
  * pattern as the NRS review queue — see VITE_ADMIN_TOKEN docs there.
  */
 
+import { fetchWithRetry } from "./fetchWithRetry";
+
 const BASE = "/admin";
 
 export type UncoveredRow = {
@@ -52,10 +54,16 @@ export async function fetchUncovered(opts: {
   if (opts.offset != null) params.set("offset", String(opts.offset));
   if (opts.q) params.set("q", opts.q);
   if (opts.onShelfOnly) params.set("on_shelf_only", "true");
-  const res = await fetch(
-    `${BASE}/catalog/uncovered?${params.toString()}`,
-    { credentials: "same-origin", headers: authHeaders() },
-  );
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      `${BASE}/catalog/uncovered?${params.toString()}`,
+      { credentials: "same-origin", headers: authHeaders() },
+      { maxRetries: 2, timeoutMs: 15000 },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
   if (!res.ok) {
     return { ok: false, error: `HTTP ${res.status}` };
   }
@@ -70,15 +78,21 @@ export async function setImageUrl(
   code: string,
   imageUrl: string,
 ): Promise<{ ok: true; updated: number } | { ok: false; error: string }> {
-  const res = await fetch(
-    `${BASE}/catalog/${encodeURIComponent(code)}/image`,
-    {
-      method: "PUT",
-      credentials: "same-origin",
-      headers: jsonHeaders(),
-      body: JSON.stringify({ image_url: imageUrl }),
-    },
-  );
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      `${BASE}/catalog/${encodeURIComponent(code)}/image`,
+      {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ image_url: imageUrl }),
+      },
+      { maxRetries: 1, timeoutMs: 15000 },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
   let body: { ok?: boolean; updated?: number; error?: string };
   try {
     body = (await res.json()) as typeof body;
@@ -94,14 +108,20 @@ export async function setImageUrl(
 export async function clearImageUrl(
   code: string,
 ): Promise<{ ok: true; updated: number } | { ok: false; error: string }> {
-  const res = await fetch(
-    `${BASE}/catalog/${encodeURIComponent(code)}/image`,
-    {
-      method: "DELETE",
-      credentials: "same-origin",
-      headers: authHeaders(),
-    },
-  );
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      `${BASE}/catalog/${encodeURIComponent(code)}/image`,
+      {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: authHeaders(),
+      },
+      { maxRetries: 1, timeoutMs: 15000 },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
   let body: { ok?: boolean; updated?: number; error?: string };
   try {
     body = (await res.json()) as typeof body;

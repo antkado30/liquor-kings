@@ -1756,11 +1756,43 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     }
 
     if (allowOrderSubmission) {
-      const verifiedByCode = new Map(
-        (Array.isArray(session?.itemsAdded) ? session.itemsAdded : []).map(
-          (i) => [String(i.code), Number(i.quantity)],
-        ),
-      );
+      /*
+        Truth source (strengthened during the same audit pass): prefer
+        Stage 4's POST-VALIDATE cart (session.adaOrders) over Stage 3's
+        verified set — MILO can demote an item AT VALIDATE (task #53's
+        "validate_demoted" class), and Stage 3's snapshot predates that.
+        An OOS-section item is deliberately treated as missing here: a
+        submit containing OOS lines is a short order, and the client's
+        #55 lock already enforces the same policy — this is the server
+        side of that defense. Fallback to Stage 3's verified set only if
+        adaOrders is somehow absent (it never should be on this path —
+        Stage 4 is mandatory before Stage 5).
+      */
+      const verifiedByCode = new Map();
+      const adaOrdersArr = Array.isArray(session?.adaOrders)
+        ? session.adaOrders
+        : [];
+      if (adaOrdersArr.length > 0) {
+        for (const ada of adaOrdersArr) {
+          for (const it of ada?.items ?? []) {
+            const codeStr = String(it?.code ?? "").trim();
+            if (!codeStr) continue;
+            const q = Number(it?.quantity ?? it?.quantityOrdered ?? NaN);
+            verifiedByCode.set(
+              codeStr,
+              (verifiedByCode.get(codeStr) ?? 0) +
+                (Number.isFinite(q) ? q : 0),
+            );
+          }
+        }
+      } else {
+        for (const i of Array.isArray(session?.itemsAdded)
+          ? session.itemsAdded
+          : []) {
+          verifiedByCode.set(String(i.code), Number(i.quantity));
+        }
+      }
+
       const boundaryMismatches = [];
       for (const want of normalizedItems) {
         const got = verifiedByCode.get(String(want.code));
@@ -1783,13 +1815,12 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       const requestedCodes = new Set(
         normalizedItems.map((i) => String(i.code)),
       );
-      for (const row of session?.cartVerification?.activeCart ?? []) {
-        const codeStr = String(row?.code ?? "");
-        if (codeStr && !requestedCodes.has(codeStr)) {
+      for (const [codeStr, qty] of verifiedByCode) {
+        if (!requestedCodes.has(codeStr)) {
           boundaryMismatches.push({
             code: codeStr,
             requested: 0,
-            in_cart: Number(row?.quantity ?? 0),
+            in_cart: qty,
             kind: "unexpected_item_in_cart",
           });
         }
@@ -1862,10 +1893,22 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     );
 
     try {
+      // AUDIT #24 (P0, 2026-06-13): this was hardcoded to 60_000ms — far
+      // below checkout.js's own documented worst case for a REAL submit:
+      // POST_SUBMIT_WAIT_MS (75s) + HISTORY_FETCH_BUDGET_MS (90s) backstop
+      // + setup/click/capture overhead = up to ~185s. Every large-cart real
+      // submit could hit this 60s ceiling AFTER the Checkout button was
+      // already clicked (order placed on MILO), get reported as "failed:
+      // MILO_STAGE5_TIMEOUT" with a false no-submit attestation, and lose
+      // the confirmation numbers — while checkout.js's own `run()` kept
+      // executing in the background against session.page, racing with this
+      // function's session-release/teardown in the `finally` block.
+      // 240_000ms covers the documented 185s worst case with real margin,
+      // matching checkout.js's own DEFAULT_TIMEOUT_MS (180_000) intent.
       checkedOut = await checkoutOnMilo(session, {
         mode: stage5Mode,
         allowOrderSubmission,
-        timeoutMs: 60_000,
+        timeoutMs: 240_000,
       });
     } catch (stage5Error) {
       const failure = summarizeFailure(

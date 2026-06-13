@@ -9,6 +9,8 @@
  * VITE_ADMIN_TOKEN is build-time only — never log it, never put it in URLs.
  */
 
+import { fetchWithRetry } from "./fetchWithRetry";
+
 const BASE = "/admin";
 
 export type NrsReviewCandidate = {
@@ -83,10 +85,30 @@ export async function fetchPendingReviews(
   const params = new URLSearchParams();
   params.set("limit", String(limit));
   params.set("offset", String(offset));
-  const res = await fetch(`${BASE}/nrs-review/pending?${params.toString()}`, {
-    credentials: "same-origin",
-    headers: authHeaders(),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      `${BASE}/nrs-review/pending?${params.toString()}`,
+      {
+        credentials: "same-origin",
+        headers: authHeaders(),
+      },
+      { maxRetries: 2, timeoutMs: 15000 },
+    );
+  } catch (e) {
+    // AUDIT #28 follow-up: never throw — NrsReviewPage's loadInitial and the
+    // background refill effect set loading/refilling flags around this call
+    // without try/finally. A thrown network error here used to leave those
+    // flags stuck forever.
+    return {
+      ok: false,
+      items: [],
+      total: 0,
+      limit,
+      offset,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
   let body: Record<string, unknown> = {};
   try {
     body = (await res.json()) as Record<string, unknown>;
@@ -117,12 +139,23 @@ export async function resolveReview(
   mlccCode: string,
   confirmedBy?: string,
 ): Promise<NrsReviewResolveResponse> {
-  const res = await fetch(`${BASE}/nrs-review/${encodeURIComponent(reviewId)}/resolve`, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: jsonHeaders(),
-    body: JSON.stringify({ mlccCode, confirmedBy: confirmedBy ?? "operator_review_ui" }),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      `${BASE}/nrs-review/${encodeURIComponent(reviewId)}/resolve`,
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ mlccCode, confirmedBy: confirmedBy ?? "operator_review_ui" }),
+      },
+      { maxRetries: 1, timeoutMs: 15000 },
+    );
+  } catch (e) {
+    // AUDIT #28 follow-up: never throw — NrsReviewPage's handleResolve/
+    // handleResolveCode set `acting` around this call without try/finally.
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
   let body: Record<string, unknown> = {};
   try {
     body = (await res.json()) as Record<string, unknown>;
@@ -152,9 +185,16 @@ export async function searchMlccCatalog(
   const params = new URLSearchParams();
   params.set("search", q);
   params.set("limit", String(limit));
-  const res = await fetch(`/price-book/items?${params.toString()}`, {
-    credentials: "same-origin",
-  });
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      `/price-book/items?${params.toString()}`,
+      { credentials: "same-origin" },
+      { maxRetries: 2, timeoutMs: 15000 },
+    );
+  } catch {
+    return [];
+  }
   if (!res.ok) return [];
   const body = (await res.json()) as { ok?: boolean; items?: unknown[] };
   if (!body.ok || !Array.isArray(body.items)) return [];
@@ -179,12 +219,23 @@ export async function skipReview(
   reviewId: string,
   reason?: string,
 ): Promise<NrsReviewSkipResponse> {
-  const res = await fetch(`${BASE}/nrs-review/${encodeURIComponent(reviewId)}/skip`, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: jsonHeaders(),
-    body: JSON.stringify({ reason: reason ?? "" }),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      `${BASE}/nrs-review/${encodeURIComponent(reviewId)}/skip`,
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ reason: reason ?? "" }),
+      },
+      { maxRetries: 1, timeoutMs: 15000 },
+    );
+  } catch (e) {
+    // AUDIT #28 follow-up: never throw — NrsReviewPage's handleSkip sets
+    // `acting` around this call without try/finally.
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
   let body: Record<string, unknown> = {};
   try {
     body = (await res.json()) as Record<string, unknown>;

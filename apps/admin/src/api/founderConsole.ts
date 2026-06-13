@@ -5,6 +5,8 @@
  * aggregate snapshot powering Tony's god-view dashboard.
  */
 
+import { fetchWithRetry } from "./fetchWithRetry";
+
 const BASE = "/admin";
 
 export type FounderConsoleData = {
@@ -88,10 +90,14 @@ export async function fetchFounderConsole(): Promise<
 > {
   let res: Response;
   try {
-    res = await fetch(`${BASE}/founder-console`, {
-      credentials: "same-origin",
-      headers: authHeaders(),
-    });
+    res = await fetchWithRetry(
+      `${BASE}/founder-console`,
+      {
+        credentials: "same-origin",
+        headers: authHeaders(),
+      },
+      { maxRetries: 2, timeoutMs: 15000 },
+    );
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -118,10 +124,14 @@ export async function fetchSystemHealth(): Promise<
 > {
   let res: Response;
   try {
-    res = await fetch(`${BASE}/health`, {
-      credentials: "same-origin",
-      headers: authHeaders(),
-    });
+    res = await fetchWithRetry(
+      `${BASE}/health`,
+      {
+        credentials: "same-origin",
+        headers: authHeaders(),
+      },
+      { maxRetries: 2, timeoutMs: 15000 },
+    );
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

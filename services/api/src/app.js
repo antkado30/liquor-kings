@@ -5,7 +5,6 @@ import executionRunsRouter from "./routes/execution-runs.routes.js";
 import express from "express";
 import cors from "cors";
 import { Sentry } from "./lib/sentry.js";
-import supabase from "./config/supabase.js";
 import bottlesRouter from "./routes/bottles.routes.js";
 import inventoryRouter from "./routes/inventory.routes.js";
 import { resolveAuthenticatedStore } from "./middleware/resolve-store.middleware.js";
@@ -295,32 +294,6 @@ app.get(["/operator-review", "/operator-review/"], (req, res) => {
     return serveOperatorReviewLegacyHtml(req, res);
   }
   return res.redirect(302, "/operator-review/app/");
-});
-
-app.get("/test-db", async (req, res) => {
-  const { data, error } = await supabase
-    .from("stores")
-    .select("*")
-    .limit(1);
-
-  if (error) {
-    return res.status(500).json({ error: error.message });
-  }
-
-  res.json({ success: true, data });
-});
-
-app.get("/test-bottles", async (req, res) => {
-  const { data, error } = await supabase
-    .from("bottles")
-    .select("*")
-    .limit(5);
-
-  if (error) {
-    return res.status(500).json({ error: error.message });
-  }
-
-  res.json({ success: true, data });
 });
 
 Sentry.setupExpressErrorHandler(app);

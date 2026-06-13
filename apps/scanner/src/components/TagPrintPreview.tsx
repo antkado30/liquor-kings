@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { IconPrinter, IconShare } from "./Icons";
 import { getAuthBearer } from "../lib/supabase";
 import { getCurrentStoreId } from "../lib/currentStore";
+import { fetchWithRetry } from "../api/catalog";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 type TagPrintPreviewProps = {
@@ -82,7 +83,12 @@ export function TagPrintPreview({ html, mlccCode, onClose }: TagPrintPreviewProp
       if (!bearer || !storeId) {
         throw new Error("not_signed_in");
       }
-      const res = await fetch(
+      // AUDIT #25 (P1, 2026-06-13): same unbounded-await class as the
+      // /tags/render and /auth/signup fixes — a bare `fetch()` with no
+      // timeout left "Preparing PDF…" spinning forever on a stalled
+      // response, since the `finally` below never runs until the await
+      // settles. 15s covers PDF render; GET is idempotent so retries are safe.
+      const res = await fetchWithRetry(
         `/tags/render.pdf?code=${encodeURIComponent(mlccCode)}`,
         {
           headers: {
@@ -90,6 +96,7 @@ export function TagPrintPreview({ html, mlccCode, onClose }: TagPrintPreviewProp
             "X-Store-Id": storeId,
           },
         },
+        { timeoutMs: 15000, maxRetries: 2 },
       );
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);

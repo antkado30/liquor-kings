@@ -32,14 +32,26 @@ export async function signInWithPassword(
 ): Promise<PasswordSignInResult> {
   let res: Response;
   try {
-    res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ email: email.trim(), password }),
-    });
+    // AUDIT #28 follow-up: bare fetch with no timeout — same class as the
+    // rest of apps/admin's API layer. A stalled Supabase auth response would
+    // leave SignInView's `busy` state (and "Signing in…" button) stuck
+    // forever with no way out except reloading. 15s is generous for a login
+    // POST but bounds the wait.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email: email.trim(), password }),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (e) {
     return {
       ok: false,

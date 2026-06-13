@@ -87,14 +87,17 @@ export function OrderDetailPage() {
       return;
     }
     setPrintingTags(true);
-    const res = await fetchTagsHtml(codes);
-    setPrintingTags(false);
-    if (!res.ok) {
-      setToast(`Couldn't build tags — ${res.error}`);
-      setTimeout(() => setToast(null), 3000);
-      return;
+    try {
+      const res = await fetchTagsHtml(codes);
+      if (!res.ok) {
+        setToast(`Couldn't build tags — ${res.error}`);
+        setTimeout(() => setToast(null), 3000);
+        return;
+      }
+      setTagsHtml(res.html);
+    } finally {
+      setPrintingTags(false);
     }
-    setTagsHtml(res.html);
   }
 
   async function reorderAll(items: MiloOrderDetail["line_items"]) {
