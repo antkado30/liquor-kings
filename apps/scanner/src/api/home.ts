@@ -26,6 +26,14 @@ export type StoreVerificationMeta = {
   /** Liquor license # — for the pre-submit verification modal (#89). */
   liquor_license?: string | null;
   mlcc_credentials_last_verified_at: string | null;
+  /**
+   * AUDIT #15b (2026-06-13): true only when this store is fully armed for
+   * real MLCC orders (global LK_ALLOW_ORDER_SUBMISSION=yes AND this store's
+   * allow_order_submission=true). When false, the pre-submit modal tells the
+   * user up front that Submit will run as a preview/dry-run only — no
+   * surprise "nothing was ordered" after a 2-minute wait.
+   */
+  allow_order_submission?: boolean;
 };
 
 export type GetSmartCardsResult =

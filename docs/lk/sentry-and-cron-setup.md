@@ -19,31 +19,46 @@ unless you spot it. After this, you get email alerts.
    we'll hit)
 3. Create an organization called something like `liquor-kings`
 
-### Step 2: create two projects
+### Step 2: create three projects
 
-You need **two separate projects** because the API (Node.js) and the
-scanner (React) get tracked differently.
+You need **three separate projects** — API, scanner, and admin all get
+tracked separately (Tony already created these: `liquor-kings-api`,
+`liquor-kings-scanner`, `liquor-kings-admin`):
 
-1. Create a project → pick **Node.js** → name it `liquor-kings-api`
-2. Create a project → pick **React** → name it `liquor-kings-scanner`
+1. Project → **Node.js** → `liquor-kings-api`
+2. Project → **React** → `liquor-kings-scanner`
+3. Project → **React** → `liquor-kings-admin`
 
 For each one, Sentry shows you a **DSN** (Data Source Name). It looks
-like `https://abc123@o456.ingest.sentry.io/789012`. Copy both.
+like `https://abc123@o456.ingest.sentry.io/789012`. Copy all three.
 
-### Step 3: paste them into Fly secrets
+### Step 3: wire them up
+
+**API + worker DSN** (read at runtime via `process.env.SENTRY_DSN` — `fly
+secrets` works fine for this one):
 
 ```bash
-# Backend DSN (Node project)
-fly secrets set SENTRY_DSN="<your-node-dsn>" -a liquor-kings
+fly secrets set SENTRY_DSN="<api-node-dsn>" -a liquor-kings
+fly secrets set SENTRY_DSN="<api-node-dsn>" -a liquor-kings-worker
+```
 
-# Frontend DSN (React project)
-fly secrets set VITE_SENTRY_DSN="<your-react-dsn>" -a liquor-kings
+**Admin + scanner DSNs** (AUDIT #29, 2026-06-13): these get baked in by Vite
+at *build* time (`import.meta.env.VITE_SENTRY_DSN`) — a Fly *secret* is a
+*runtime* env var and never reaches the Docker build, so `fly secrets set
+VITE_SENTRY_DSN=...` silently does nothing in production. Instead, paste the
+two React DSNs into `fly.toml`'s `[build.args]` section (DSNs are
+public-by-design — safe to commit):
+
+```toml
+[build.args]
+  VITE_SENTRY_DSN_ADMIN = "<admin-react-dsn>"
+  VITE_SENTRY_DSN_SCANNER = "<scanner-react-dsn>"
 ```
 
 ### Step 4: deploy + verify
 
 ```bash
-cd ~/dev/liquor-kings && npm run deploy
+cd ~/dev/liquor-kings && npm run deploy && npm run deploy:worker
 ```
 
 After deploy, check the API logs — you should see:
@@ -52,11 +67,16 @@ After deploy, check the API logs — you should see:
 [sentry] initialized for environment production, release <git sha>
 ```
 
-(Instead of the old `[sentry] SENTRY_DSN not set` line.)
+(Instead of the old `[sentry] SENTRY_DSN not set` line.) The worker logs the
+same line on boot now too (AUDIT #29 — it never called `initSentry()`
+before).
 
 **Smoke test:** Open `https://liquor-kings.fly.dev/health-crash` (or any
 fake URL that 500s). The error should appear in your Sentry dashboard
-within ~30 seconds.
+within ~30 seconds. For the SPAs, open the scanner/admin in prod, open devtools
+console, and confirm you do NOT see "[sentry] VITE_SENTRY_DSN not set" —
+then trigger any error to confirm it lands in the right `liquor-kings-admin`
+/ `liquor-kings-scanner` project.
 
 ---
 

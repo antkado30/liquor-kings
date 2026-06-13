@@ -215,6 +215,15 @@ type CartDrawerProps = {
    */
   storeName?: string | null;
   storeLicense?: string | null;
+  /**
+   * AUDIT #15b (2026-06-13): is this store armed for real MLCC orders right
+   * now (global LK_ALLOW_ORDER_SUBMISSION=yes AND this store's
+   * allow_order_submission=true)? When false, the pre-submit modal tells the
+   * user up front that Submit will run as a preview/dry-run only — Tony's
+   * call to be fully transparent about this before the ~2-minute RPA run,
+   * not just after. Defaults to false (safe/preview) when omitted.
+   */
+  allowOrderSubmission?: boolean;
 };
 
 export function CartDrawer({
@@ -224,6 +233,7 @@ export function CartDrawer({
   preValidate,
   storeName,
   storeLicense,
+  allowOrderSubmission = false,
 }: CartDrawerProps) {
   /*
    * Hide the bottom tab bar while the drawer is open. Tony's
@@ -1190,10 +1200,11 @@ export function CartDrawer({
         state.submitResult?.submitted !== true ? (
           <>
             <div className="banner banner-warn">
-              <strong>Nothing was ordered.</strong> MILO accepted the cart as a
-              practice run, but live ordering isn&apos;t switched on for this
-              store yet — your order was NOT submitted. Your cart is saved
-              right here.
+              <strong>Nothing was ordered.</strong>{" "}
+              {allowOrderSubmission
+                ? "MILO accepted the cart as a practice run, but live ordering isn’t switched on for this store yet — your order was NOT submitted."
+                : "As shown before you confirmed, this store isn’t approved for live orders yet — MILO checked the cart and pricing as a preview, but nothing was submitted."}{" "}
+              Your cart is saved right here.
             </div>
             {state.submitResult?.dry_run_reason ? (
               <details className="drawer-run-failure__detail">
@@ -1482,6 +1493,7 @@ export function CartDrawer({
           }
           storeName={storeName ?? null}
           storeLicense={storeLicense ?? null}
+          allowOrderSubmission={allowOrderSubmission}
           onCancel={() => setConfirmSubmit(false)}
           onConfirm={() => {
             setConfirmSubmit(false);

@@ -649,6 +649,14 @@ export function ScannerPage() {
            */
           storeName={storeMeta?.store_name ?? null}
           storeLicense={storeMeta?.liquor_license ?? null}
+          /*
+           * AUDIT #15b (2026-06-13): tell the user UP FRONT — before they
+           * commit to the ~2-minute RPA run — whether this store is armed
+           * for real MLCC orders or Submit will run as a preview only.
+           * Defaults to false (preview) if storeMeta hasn't loaded yet,
+           * which is the safe assumption.
+           */
+          allowOrderSubmission={storeMeta?.allow_order_submission ?? false}
           onClose={() => setShowCart(false)}
           onSubmit={() => {
             setShowCart(false);

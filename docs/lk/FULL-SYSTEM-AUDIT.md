@@ -44,7 +44,7 @@ for Tony's call first. Known bug CLASSES are swept globally, not spot-fixed.
 | 13 | P1 | Infra | Zero error reporting (SENTRY_DSN + VITE_SENTRY_DSN unset; code is Sentry-ready both sides) | ⚪ Tony: sentry.io signup (~10 min) |
 | 14 | P0 | Server | **UPC catalog-truth WRITES wide open** — /upc/:upc/confirm (writes user_confirmed mappings, exempt from safety swaps), /flag, /report-no-match had NO auth. Anyone could remap any barcode for every store | 🟢 sealed + deployed v149 |
 | 15 | P0 | E2E | **Submit could lie: "Order submitted to MILO" on a dry-run downgrade.** Stage-5 triple gate silently downgrades submit→dry_run; run finalizes "succeeded"; truth lived only in workerNotes/evidence; green banner showed AND cleared the user's cart. Any not-yet-armed store's first submit = phantom order | 🟡 sealed: submit_result lifted into run summary (validate_result pattern) → client requires submitted===true for the green banner; amber "Nothing was ordered" + cart PRESERVED otherwise. 5/5 proofs. In tree |
-| 15b | NOTE | UX | ⚪ Tony decision: should trigger REJECT submit upfront for a disarmed store ("Live ordering isn't enabled yet") instead of running a 2-min dry-run RPA? Cleaner UX, touches submit path — not built without sign-off |
+| 15b | NOTE | UX | Tony decision 2026-06-13: don't reject submit upfront (still run the preview RPA — verifies cart/pricing), but tell the user UP FRONT in the pre-submit modal, before the ~2-min run, that this store isn't approved for live orders yet and Submit will run as a preview only. "Be completely transparent... build trust with customers and avoid legality issues." | 🟢 SubmitConfirmationModal shows an informational "Preview only — no order will be placed" notice + button reads "Run preview (no order placed)" when not armed (allow_order_submission plumbed home.routes.js → home.ts → ScannerPage → CartDrawer → modal). Post-result "Nothing was ordered" banner adjusted to reference the earlier notice. In tree |
 | 16 | P1 | Worker | cart_reset_only success path missing `runSucceeded = true` → every successful cart reset / activation probe tore down the healthy warm session → next validate paid the 2-min cold path | 🟡 fixed, in tree |
 | 17 | P0 | Worker | **No boundary comparison before live submit (doctrine #11)** — a partial Stage-3 outcome (e.g. 81 of 84 verified) flowed into Stage 5 and silently submitted a short order. Pre-submit modal shows the LOCAL cart, so no layer caught it | 🟡 sealed: hard gate refuses live submit on ANY requested-vs-verified mismatch (missing, qty, unexpected item), typed MLCC_CART_MISMATCH_BEFORE_SUBMIT, full mismatch list in evidence. 10/10 proofs. In tree |
 | 18 | P1 | Worker | Stage-3 budget flat 240s regardless of cart size — 84 sequential adds ≈ at/over budget = the 2026-06-10 "4-minute validate death" class | 🟡 budget scales (120s + 4s/item, 240s floor, 600s cap; 84 items → 456s). Reaper-safe (per-item heartbeats). In tree |
@@ -58,6 +58,7 @@ for Tony's call first. Known bug CLASSES are swept globally, not spot-fixed.
 | 26 | P1 | Schema | **mlcc_code_map and mlcc_item_codes — read on every add-to-cart/checkout identity-verify (bottle-identity.service.js) — have NO migration anywhere.** They exist in prod only via a hand-created table captured once in the stale March 2026 `supabase/schema.sql` dump (itself missing ~15 current tables — not trustworthy as "the schema"). A prod restore from migrations alone, or any fresh dev/staging DB, would be missing both tables; the mlcc_item_codes code-rotation fallback would then error CODE_MISMATCH("mlcc_resolve_failed") on every add-to-cart that misses a direct mlcc_items.code hit. Also: `nrs_import` (finding #12) has the same gap — no migration, schema only ever inferred ad-hoc by the audit script's column-sniffing | 🟡 migration 20260613020000 adds both tables `IF NOT EXISTS` (no-op on prod) + enables RLS + permissive authenticated-SELECT (matches global-catalog pattern; service-role bypasses RLS regardless). Dropped dead `source_snapshot_id`→`mlcc_pricebook_snapshots` FK (that target table is itself unmigrated prototype cruft, zero current code refs). nrs_import schema NOT guessed — left to #12's resolution (Tony's NRS export reload), where the table should get a real migration once its real columns are known. MIGRATION REQUIRED before deploy (additive to the #21 migration already queued) |
 | 27 | P0 | Server | **`GET /test-db` and `GET /test-bottles` were live, unauthenticated, public debug routes in `app.js`** — `SELECT * FROM stores LIMIT 1` and `SELECT * FROM bottles LIMIT 5` via the service-role client (bypasses RLS), reachable by anyone at `liquor-kings.fly.dev/test-db` with zero auth. `stores.*` includes `mlcc_username`, `mlcc_password_encrypted`, `liquor_license`, full address, store name — i.e. the first store's MLCC portal username + encrypted password + business license, world-readable. A prior audit (`docs/lk/auth-endpoint-audit.md`) flagged both as unauthenticated back when written and they were never removed. | 🟢 both routes deleted from `app.js` (unused `supabase` import removed too). `node --check` clean. **In tree — this closes a live prod credential-exposure hole once deployed; should be in the next deploy batch, not held for convenience** |
 | 28 | P1 | Client (admin) | **Every fetch in `apps/admin/src/api/*.ts` (the Command Deck) was a bare `fetch()` with no timeout — same unbounded-await spinner-deadlock class as #6/#25.** Worst instance: `OperatorSessionContext.loadSession()`'s `getSession()` call on EVERY app boot — a stalled `/operator-review/session` response left `AppShell` showing "Checking session…" forever (the `finally { setBootstrap("ready") }` never ran), locking Tony out of the entire Command Deck (founder console, operator review, NRS review, diagnostics, pilot ops, catalog images) with no error and no recovery short of reload (which hits the same hang again on a genuinely bad connection). Secondary gap found during the sweep: `nrsReview.ts`'s `fetchPendingReviews`/`resolveReview`/`skipReview` had no try/catch around their fetch calls, so a thrown network error would leave `NrsReviewPage`'s `loading`/`acting`/`refillingRef` state stuck (no try/finally on the caller side). Also: `lib/supabaseAuth.ts`'s sign-in POST had no timeout — a stalled Supabase auth call would leave `SignInView`'s "Signing in…" button stuck. | 🟢 new shared `apps/admin/src/api/fetchWithRetry.ts` (AbortController timeout + bounded retry, mirrors scanner's helper). All 12 `operatorReview.ts` fns, both `founderConsole.ts` fns, all 4 `nrsReview.ts` fns, and all 3 `catalogImages.ts` fns converted (GET/idempotent → 2 retries, mutations → 1, 10–15s timeouts). `nrsReview.ts`'s 3 functions now wrap `fetchWithRetry` in try/catch and return `{ok:false, error}` instead of throwing (matches `founderConsole.ts`'s existing never-throw contract) — closes the stuck-loading/acting/refilling gap without touching every page. `PilotOpsPage.loadDetail`/`saveWorkflowState` wrapped in try/catch (now surface "Network error..." instead of an unhandled rejection). `supabaseAuth.ts` sign-in POST now has a 15s AbortController timeout. `cd apps/admin && npx tsc --noEmit` clean; `vite build` succeeds (303 modules). In tree |
+| 29 | P1 | Infra/Sentry | **#13's "code Sentry-ready, no DSNs" framing was incomplete — two more gaps meant DSNs alone wouldn't have fixed it.** (1) `run-rpa-worker.js` (the RPA daemon, `liquor-kings-worker`'s actual CMD) never called `initSentry()` — only `services/api/src/index.js` (the API process) did. The worker is the surface that matters most given the 2026-06-09 wedge incident, and it was invisible to Sentry no matter what `SENTRY_DSN` was set to. (2) `apps/admin`/`apps/scanner`'s `VITE_SENTRY_DSN` is read by Vite at BUILD time (`import.meta.env`), but `fly secrets set VITE_SENTRY_DSN=...` only sets a RUNTIME env var on the deployed machine — it never reaches the Docker build, so the old docs' Step 3 silently did nothing for both SPAs in prod. Tony has 3 Sentry projects ready (`liquor-kings-api`, `-scanner`, `-admin`). | 🟡 `run-rpa-worker.js` now calls `initSentry()` on boot (safe no-op if `SENTRY_DSN` unset). `Dockerfile` web-builder stage takes `ARG VITE_SENTRY_DSN_ADMIN`/`VITE_SENTRY_DSN_SCANNER`, sets `VITE_SENTRY_DSN` per-build before each `vite build` so each SPA reports to its own Sentry project. `fly.toml` gets a `[build.args]` section (empty placeholders — DSNs are public-by-design, safe to commit once Tony pastes them in). `docs/lk/sentry-and-cron-setup.md` rewritten with the corrected 3-project / build-arg flow. `node --check` clean on worker. NEEDS: Tony to grab the 3 DSNs from sentry.io, set `SENTRY_DSN` as a secret on both `liquor-kings` and `liquor-kings-worker`, and fill in the two `[build.args]` values in `fly.toml`, then redeploy both apps. In tree |
 
 ---
 
@@ -80,6 +81,15 @@ see ledger. Fixed in execution-worker.js, 🟡 in tree.
   graceful degradation when delivery dates don't parse (warns, doesn't
   fail). No hardcoded timeout overrides from the orchestrator — uses its
   own scaled 150s default. ✓
+- Stage 3 (add-items-to-cart.js), dedicated pass 2026-06-13: 18 typed error
+  codes, every `page.evaluate()` bounded via `raceStage3Timeout`, overall
+  budget scaled per-item (#18). "Cart-state verification v2" cross-checks
+  reported `itemsAdded` against the real `/milo/cart` DOM (active vs OOS
+  tables) and produces typed errors for clamping/OOS-demotion/missing
+  items rather than trusting MILO's UI response. Pre-flight
+  `clearCartIfPopulated()` is best-effort with a hard failure only if
+  Clear was clicked but didn't empty (`MILO_STAGE3_CART_CLEAR_FAILED`); the
+  v2 verification is an independent backstop if clear silently no-ops. ✓
 - Stage 4 (validate-cart.js): thorough DOM parsing with PARSE_FAILED
   fallback when totals+orders+OOS are all empty; "validate-time demotion"
   cross-check (Stage 3 verified vs Stage 4 seen) feeds `outOfStockItems`
@@ -98,14 +108,19 @@ see ledger. Fixed in execution-worker.js, 🟡 in tree.
   `enforceParamStoreMatches` (URL :storeId must equal req.store_id, 403 +
   diagnostic log on mismatch). No gaps found. ✓
 
-**Residual/NOTE:** Stages 2/4/5 all use the same "withTimeout doesn't cancel
-the in-flight `run()`" pattern as login.js's pre-fix bug — only Stage 5
-(post-click) makes this dangerous (real click vs. discarded result), and
-#24's budget fix removes the realistic trigger. If MILO ever gets
-*structurally* slower (>240s for Stage 5), the same class of issue could
-resurface; #20's duplicate-submit tripwire is the backstop. Not fixing
-preemptively — would mean threading an abandon-token through 3 more stage
-files for a residual case the tripwire already covers safely.
+**Residual/NOTE:** Stages 2/3/4/5 all use the same "withTimeout doesn't cancel
+the in-flight `run()`" pattern as login.js's pre-fix bug — only Stage 3 and
+Stage 5 (real clicks vs. discarded results) make this dangerous, and #24's
+budget fix removes the realistic Stage 5 trigger. Stage 3 has its own
+backstop even without an abandon token: every Stage 3 attempt opens with
+`clearCartIfPopulated()` (pre-flight cart clear), so any items a zombie/
+abandoned prior run() managed to click "Add" on after the orchestrator gave
+up get wiped before the next real attempt adds anything — same shape as
+#20's duplicate-submit tripwire for Stage 5. If MILO ever gets *structurally*
+slower (Stage 3 budget already scales per-item per #18; Stage 5 >240s),
+the same class of issue could resurface. Not fixing preemptively — would
+mean threading an abandon-token through 4 more stage files for a residual
+case the existing tripwires already cover safely.
 
 ## §2 Env/secret inventory (every process.env read vs both Fly apps)
 *Status: ✅ COMPLETE 2026-06-12*

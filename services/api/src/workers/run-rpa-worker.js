@@ -24,8 +24,16 @@
  */
 
 import process from "node:process";
+import { initSentry } from "../lib/sentry.js";
 import { processOneRpaRun } from "./execution-worker.js";
 import { forceCloseAll as forceCloseRpaSessions } from "./rpa-session-manager.js";
+
+// AUDIT #29 (P1, 2026-06-13): the API entrypoint (index.js) calls initSentry(),
+// but this worker daemon is a SEPARATE process (Dockerfile.worker's CMD) and
+// never did — so even with SENTRY_DSN set on liquor-kings-worker, every RPA
+// crash (the surface that actually matters most, per the 2026-06-09 wedge
+// incident) was invisible to Sentry. Safe no-op if SENTRY_DSN is unset.
+initSentry();
 
 // Polling cadence when the queue is empty — snappy enough for orders to feel
 // instant, cheap enough that we're not hammering claim-next.

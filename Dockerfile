@@ -12,6 +12,16 @@
 # ─── Stage 1: build admin + scanner SPAs ──────────────────────────────────
 FROM node:22-bookworm AS web-builder
 
+# AUDIT #29 (P1, 2026-06-13): Sentry DSNs for the two SPAs are baked in by
+# Vite at BUILD time (import.meta.env.VITE_SENTRY_DSN) — `fly secrets set
+# VITE_SENTRY_DSN=...` is a RUNTIME env var on the deployed machine and never
+# reaches this build stage, so the old docs' instructions silently did
+# nothing. Sentry DSNs are public-by-design (meant to ship in client
+# bundles), so they're passed as Docker build args via fly.toml [build.args]
+# rather than secrets. Each SPA has its own Sentry project, hence two ARGs.
+ARG VITE_SENTRY_DSN_ADMIN=""
+ARG VITE_SENTRY_DSN_SCANNER=""
+
 WORKDIR /build
 
 # Manifests + lockfiles first so the install layer caches across source-only
@@ -25,8 +35,8 @@ RUN npm ci
 COPY apps/admin ./apps/admin
 COPY apps/scanner ./apps/scanner
 
-RUN npm run build:admin
-RUN npm run build:scanner
+RUN VITE_SENTRY_DSN="$VITE_SENTRY_DSN_ADMIN" npm run build:admin
+RUN VITE_SENTRY_DSN="$VITE_SENTRY_DSN_SCANNER" npm run build:scanner
 
 
 # ─── Stage 2: slim production runtime (NO Chromium) ───────────────────────

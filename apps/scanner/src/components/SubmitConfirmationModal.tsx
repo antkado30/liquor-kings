@@ -57,6 +57,16 @@ type Props = {
   storeName: string | null;
   /** Liquor license # — paired with store name. */
   storeLicense: string | null;
+  /**
+   * AUDIT #15b (2026-06-13): is this store armed for real MLCC orders right
+   * now (global LK_ALLOW_ORDER_SUBMISSION=yes AND this store's
+   * allow_order_submission=true)? When false, this card tells the user UP
+   * FRONT — before they sit through the ~2-minute RPA run — that Submit
+   * will check the cart and pricing with MILO but will NOT place a real
+   * order. Tony's call (2026-06-13): full transparency for trust +
+   * liability, no surprise dry-runs revealed only after the wait.
+   */
+  allowOrderSubmission: boolean;
   /** User confirmed — fire the actual submit. */
   onConfirm: () => void;
   /** User backed out — keep the cart open for edits. */
@@ -69,6 +79,7 @@ export function SubmitConfirmationModal({
   orderSummary,
   storeName,
   storeLicense,
+  allowOrderSubmission,
   onConfirm,
   onCancel,
 }: Props) {
@@ -118,6 +129,21 @@ export function SubmitConfirmationModal({
             <div style={storeLicenseStyle}>License #{storeLicense}</div>
           ) : null}
         </div>
+
+        {/* ─── AUDIT #15b (2026-06-13): up-front preview notice ───────────
+          * Tony's transparency rule: if this store isn't yet approved for
+          * live MLCC orders, say so HERE — before the ~2-minute RPA run —
+          * not only after. Informational tone (not the red "destructive
+          * action" warning below), since nothing irreversible happens.
+          */}
+        {!allowOrderSubmission ? (
+          <div style={previewNoticeStyle}>
+            <strong>Preview only — no order will be placed.</strong> This
+            store isn&apos;t approved for live MLCC orders yet. Submit will
+            check this cart and pricing with MILO, but won&apos;t send the
+            order.
+          </div>
+        ) : null}
 
         {/* ─── Line items — the actual integrity check ─── */}
         <div style={linesScrollStyle}>
@@ -191,10 +217,12 @@ export function SubmitConfirmationModal({
           </div>
         </div>
 
-        {/* ─── Final warning — this is a destructive action ─── */}
-        <div style={warningStyle}>
-          This goes to MILO immediately and can&apos;t be unsent.
-        </div>
+        {/* ─── Final warning — this is a destructive action (when armed) ─── */}
+        {allowOrderSubmission ? (
+          <div style={warningStyle}>
+            This goes to MILO immediately and can&apos;t be unsent.
+          </div>
+        ) : null}
 
         {/* ─── Actions ─── */}
         <div style={actionsStyle}>
@@ -211,7 +239,9 @@ export function SubmitConfirmationModal({
             onClick={onConfirm}
             style={confirmBtnStyle}
           >
-            Confirm &amp; send to MILO
+            {allowOrderSubmission
+              ? "Confirm & send to MILO"
+              : "Run preview (no order placed)"}
           </button>
         </div>
       </div>
@@ -394,6 +424,15 @@ const totalValueFinalStyle: React.CSSProperties = {
   fontSize: 22,
   fontWeight: 800,
   fontVariantNumeric: "tabular-nums",
+};
+
+const previewNoticeStyle: React.CSSProperties = {
+  padding: "12px 22px",
+  fontSize: 13,
+  lineHeight: 1.4,
+  color: "rgba(255,255,255,0.85)",
+  background: "rgba(58, 130, 247, 0.08)",
+  borderBottom: "1px solid rgba(58, 130, 247, 0.18)",
 };
 
 const warningStyle: React.CSSProperties = {

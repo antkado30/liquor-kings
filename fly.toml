@@ -6,9 +6,13 @@
 # Secrets (set via `flyctl secrets set KEY=value`) — see deployment.runbook.md:
 #   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,
 #   LK_CREDENTIAL_ENCRYPTION_KEY, LK_ALLOW_ORDER_SUBMISSION (no/yes),
-#   LK_ADMIN_TOKEN (optional), SENTRY_DSN (optional).
+#   LK_ADMIN_TOKEN (optional), SENTRY_DSN (optional, API runtime errors —
+#   also set on liquor-kings-worker for RPA-side errors, see fly.worker.toml).
 #
-# Non-secret env values live in [env] below.
+# Non-secret env values live in [env] below. The two SPAs' Sentry DSNs go in
+# [build.args] (below) instead — they're baked in by Vite at BUILD time, so
+# a runtime secret would never reach them. Sentry DSNs are public-by-design
+# (meant to ship in client bundles), so committing them here is fine.
 
 app = "liquor-kings"
 primary_region = "ord"
@@ -23,6 +27,13 @@ kill_timeout = "5m"
 
 [build]
   dockerfile = "Dockerfile"
+
+  # AUDIT #29: Sentry project DSNs (React platform) for each SPA — get these
+  # from sentry.io → liquor-kings-admin / liquor-kings-scanner → Settings →
+  # Client Keys (DSN). Leave empty to keep Sentry disabled for that SPA.
+  [build.args]
+    VITE_SENTRY_DSN_ADMIN = ""
+    VITE_SENTRY_DSN_SCANNER = ""
 
 # Two processes share this image:
 #   - `app`    serves HTTP (the Express API). Bound to [http_service].

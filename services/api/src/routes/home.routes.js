@@ -287,7 +287,9 @@ router.get("/smart-cards", async (req, res) => {
 async function loadStoreVerificationMeta(supabase, storeId) {
   const { data, error } = await supabase
     .from("stores")
-    .select("store_name, liquor_license, mlcc_credentials_last_verified_at")
+    .select(
+      "store_name, liquor_license, mlcc_credentials_last_verified_at, allow_order_submission",
+    )
     .eq("id", storeId)
     .single();
   if (error || !data) {
@@ -295,6 +297,7 @@ async function loadStoreVerificationMeta(supabase, storeId) {
       store_name: null,
       liquor_license: null,
       mlcc_credentials_last_verified_at: null,
+      allow_order_submission: false,
     };
   }
   return {
@@ -311,6 +314,19 @@ async function loadStoreVerificationMeta(supabase, storeId) {
     liquor_license: data.liquor_license ?? null,
     mlcc_credentials_last_verified_at:
       data.mlcc_credentials_last_verified_at ?? null,
+    /*
+     * AUDIT #15b (2026-06-13): "is this store armed for real orders right
+     * now" — the SAME two-part gate execution-worker.js checks before the
+     * final MLCC submit click (global LK_ALLOW_ORDER_SUBMISSION=yes AND this
+     * store's allow_order_submission=true). Surfacing it here lets the
+     * scanner tell the user UP FRONT, before they sit through the ~2-minute
+     * RPA run, that Submit will only run as a cart/pricing preview and won't
+     * place a real order. Tony's call (2026-06-13): be completely transparent
+     * about this for trust + liability reasons — no surprise dry-runs.
+     */
+    allow_order_submission:
+      process.env.LK_ALLOW_ORDER_SUBMISSION === "yes" &&
+      data.allow_order_submission === true,
   };
 }
 
