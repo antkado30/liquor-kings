@@ -32,8 +32,8 @@ kill_timeout = "5m"
   # from sentry.io → liquor-kings-admin / liquor-kings-scanner → Settings →
   # Client Keys (DSN). Leave empty to keep Sentry disabled for that SPA.
   [build.args]
-    VITE_SENTRY_DSN_ADMIN = ""
-    VITE_SENTRY_DSN_SCANNER = ""
+    VITE_SENTRY_DSN_ADMIN = "https://c126db2ee5fea7b01aed3b1844191a97@o4511249010720768.ingest.us.sentry.io/4511249024876544"
+    VITE_SENTRY_DSN_SCANNER = "https://9f065aee7e719a1532479536e6be61a0@o4511249010720768.ingest.us.sentry.io/4511249023565824"
 
 # Two processes share this image:
 #   - `app`    serves HTTP (the Express API). Bound to [http_service].
