@@ -7,8 +7,22 @@
  * Server-side counterparts (documented on API): LK_CONFIDENT_MIN, LK_ADMIN_TOKEN, etc.
  */
 import type { MlccProduct, ProductFamily, UpcCandidateScore, UpcLookupResponse } from "../types";
+import { getAuthBearer } from "../lib/supabase";
 
 const BASE = "/price-book";
+
+/**
+ * Catalog-truth WRITES (confirm / flag / report-no-match) are auth-gated
+ * server-side as of 2026-06-12 (FULL-SYSTEM-AUDIT #14 — they were open to
+ * the internet). The scanner sends the signed-in user's session token;
+ * VITE_UPC_CONFIRM_TOKEN remains as a dev/ops override for confirm.
+ */
+async function authHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const bearer = await getAuthBearer();
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  return headers;
+}
 
 type FetchRetryConfig = {
   maxRetries?: number;
@@ -240,8 +254,7 @@ export async function confirmUpcMapping(
   const u = upc.trim();
   if (!u) return null;
   const token = import.meta.env.VITE_UPC_CONFIRM_TOKEN as string | undefined;
-  /** @type {Record<string, string>} */
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = await authHeaders();
   if (token != null && String(token).trim() !== "") {
     const t = String(token).trim();
     headers.Authorization = t.startsWith("Bearer ") ? t : `Bearer ${t}`;
@@ -283,7 +296,7 @@ export async function flagIncorrectMatch(
   const res = await fetchWithRetry(`${BASE}/upc/${encodeURIComponent(u)}/flag`, {
     method: "POST",
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
+    headers: await authHeaders(),
     body: JSON.stringify({ reason }),
   });
   let raw: Record<string, unknown> = {};
@@ -316,7 +329,7 @@ export async function reportUpcNoMatch(
     const res = await fetchWithRetry(`${BASE}/upc/${encodeURIComponent(u)}/report-no-match`, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: await authHeaders(),
       body: JSON.stringify({ upcProductName, upcBrand }),
     });
     const data = (await res.json()) as { ok?: boolean };

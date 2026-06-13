@@ -49,6 +49,23 @@ themselves in one sentence + one-tap retry, dead-man auto-restart so the
 worker can never silently wedge for days again, submit gate armed on the
 worker (had been silently dry-run since the 06-08 split). Mandate clock:
 3 consecutive real weekly orders in-app — first attempt next week.
+**FULL SYSTEM AUDIT ordered 2026-06-12** ("every single file, every defect,
+set-and-forget V1") — living doc: docs/lk/FULL-SYSTEM-AUDIT.md.
+
+---
+
+## 📱 Native app — App Store (stated 2026-06-12)
+
+> "Our end goal is turning it into an app. Not something on Safari
+> forever — Safari stays available, but this is gonna be an app."
+
+💡 Post-V1 (after the 3-real-orders mandate clears). The architecture is
+already right for it: wrap the existing scanner SPA with **Capacitor**
+(~95% code reuse, same API) + a native barcode module (kills the
+ZXing-JS CPU burn AND the Safari-only bug classes — auth-lock freezes,
+PWA icon re-add dance, camera permission quirks). App Store review needs:
+privacy policy (✅ live), support contact, screenshots. The audit's
+hardening all carries over — nothing built now is throwaway.
 
 ---
 

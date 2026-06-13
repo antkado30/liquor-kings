@@ -5,8 +5,10 @@
  * - LK_PICKER_MIN — scores below this return low_confidence no-match (default 50)
  * - LK_PICKER_MAX — max ambiguous candidates returned (default 5)
  */
+import crypto from "node:crypto";
 import express from "express";
 import supabase from "../config/supabase.js";
+import { verifySupabaseAccessTokenAny } from "../lib/access-token.js";
 import { lookupUpcFromOpenFoodFacts } from "../lib/open-food-facts.js";
 import { extractBottleSizeMl, findMlccCandidatesForUpc, lookupUpcFromUpcitemdb } from "../lib/upcitemdb.js";
 import { Sentry } from "../lib/sentry.js";
@@ -94,6 +96,58 @@ function requireCronSecret(req, res) {
     return false;
   }
   return true;
+}
+
+function timingSafeEqualStrings(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Auth for catalog-truth WRITE endpoints (confirm / flag / report-no-match).
+ *
+ * FULL-SYSTEM-AUDIT finding #14 (P0, 2026-06-12): these endpoints were
+ * completely unauthenticated. UPC mappings are GLOBAL — one row drives
+ * what bottle opens on a scan for EVERY store — and /confirm wrote with
+ * confidenceSource "user_confirmed", the trust level the resolution path
+ * treats as gospel (it's exempt from the combo/edition safety swap).
+ * Anyone who found the URL could remap any barcode to any product for
+ * every customer, or mass-flag good mappings. Catalog truth is the moat;
+ * its write surface must never be anonymous.
+ *
+ * Accepts (returns an actor object, or null after sending 401):
+ *   a. service-role bearer (ops scripts) — timing-safe compare
+ *   b. any signed-in user's Supabase access token (the scanner flow) —
+ *      local JWKS verify with getUser() fallback, mirroring
+ *      resolve-store.middleware.js
+ */
+async function requireUserOrServiceRole(req, res) {
+  const auth = req.headers.authorization?.trim() ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  if (!token) {
+    res.status(401).json({ ok: false, error: "auth_required" });
+    return null;
+  }
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (serviceKey && timingSafeEqualStrings(token, serviceKey)) {
+    return { kind: "service", userId: null };
+  }
+  const verified = await verifySupabaseAccessTokenAny(token);
+  if (verified?.userId) {
+    return { kind: "user", userId: verified.userId };
+  }
+  try {
+    const { data: userData } = await supabase.auth.getUser(token);
+    const uid = userData?.user?.id;
+    if (uid) return { kind: "user", userId: uid };
+  } catch {
+    /* fall through to 401 */
+  }
+  res.status(401).json({ ok: false, error: "auth_required" });
+  return null;
 }
 
 router.get("/status", async (req, res) => {
@@ -1000,6 +1054,8 @@ async function respondWithScoredUpcMatch(res, { upc, upcItem, rawApiResponse, so
 
 export async function priceBookUpcFlagHandler(req, res) {
   try {
+    const actor = await requireUserOrServiceRole(req, res);
+    if (!actor) return;
     const upc = String(req.params.upc ?? "").trim();
     if (!upc) {
       return res.status(400).json({ ok: false, error: "upc_required" });
@@ -1235,6 +1291,8 @@ export async function priceBookUpcHandler(req, res) {
 
 router.post("/upc/:upc/confirm", async (req, res) => {
   try {
+    const actor = await requireUserOrServiceRole(req, res);
+    if (!actor) return;
     const upc = String(req.params.upc ?? "").trim();
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const mlccCode = typeof body.mlccCode === "string" ? body.mlccCode.trim() : "";
@@ -1303,6 +1361,8 @@ router.post("/upc/:upc/confirm", async (req, res) => {
 router.post("/upc/:upc/flag", priceBookUpcFlagHandler);
 router.post("/upc/:upc/report-no-match", async (req, res) => {
   try {
+    const actor = await requireUserOrServiceRole(req, res);
+    if (!actor) return;
     const upc = String(req.params.upc ?? "").trim();
     if (!upc) {
       return res.status(400).json({ ok: false, error: "upc_required" });
