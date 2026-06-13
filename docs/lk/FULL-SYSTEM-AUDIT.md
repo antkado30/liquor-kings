@@ -40,7 +40,7 @@ for Tony's call first. Known bug CLASSES are swept globally, not spot-fixed.
 | 9 | P1 | Data | UPC tier-2 scoring: editions could outrank base (Lions class); unknown-size let nips tie fifths (Maker's class) | 🟢 penalty + retail prior deployed 06-12 |
 | 10 | P1 | Data | Photo verify: sub-brand collisions passed both gates (Parrot Bay class) | 🟢 text Rule 3 + vision rule deployed 06-12 |
 | 11 | P2 | Deps | npm reports 13 advisories total across root/services/api/apps/admin/apps/scanner (incl. a HIGH-severity react-router RCE shipped in the scanner SPA) | 🟢 10/13 fixed via `npm audit fix` (no major bumps) — incl. the HIGH react-router RCE. Remaining 3 (uuid/exceljs — not exploitable via this app's single `uuid.v4()` call; esbuild/vite — dev-server-only, deferred past the feature-freeze). See §5 |
-| 12 | NOTE | Data | nrs_import EMPTY in prod → all 4,179 UPC mappings unverifiable | ⚪ needs Tony's NRS export → load-nrs-import.mjs → audit --apply |
+| 12 | NOTE | Data | nrs_import EMPTY in prod → all 4,179 UPC mappings unverifiable | 🟢 superseded 06-13 — `load-mlcc-pricebook-upcs.mjs` bulk-seeded `upc_mappings` directly from MLCC's official price book (Liquor Code↔UPC, 97% of catalog): 4,180→16,771 rows, 12,591 net-new + 8 corrections, 0 failures. No longer NRS-dependent; nrs_import gap is now low-priority |
 | 13 | P1 | Infra | Zero error reporting (SENTRY_DSN + VITE_SENTRY_DSN unset; code is Sentry-ready both sides) | 🟢 resolved via #29 — 3 Sentry projects created, DSNs wired, deployed 06-13 |
 | 14 | P0 | Server | **UPC catalog-truth WRITES wide open** — /upc/:upc/confirm (writes user_confirmed mappings, exempt from safety swaps), /flag, /report-no-match had NO auth. Anyone could remap any barcode for every store | 🟢 sealed + deployed v149 |
 | 15 | P0 | E2E | **Submit could lie: "Order submitted to MILO" on a dry-run downgrade.** Stage-5 triple gate silently downgrades submit→dry_run; run finalizes "succeeded"; truth lived only in workerNotes/evidence; green banner showed AND cleared the user's cart. Any not-yet-armed store's first submit = phantom order | 🟢 sealed: submit_result lifted into run summary (validate_result pattern) → client requires submitted===true for the green banner; amber "Nothing was ordered" + cart PRESERVED otherwise. 5/5 proofs. Deployed 06-13 |
@@ -73,7 +73,7 @@ require-service-role.middleware.js.
 
 **FINDING #24 (P0) — Stage 5 called with a 60s timeout against a ~185s
 documented worst case.** The single most important finding of this pass —
-see ledger. Fixed in execution-worker.js, 🟡 in tree.
+see ledger. Fixed in execution-worker.js, 🟢 deployed 06-13.
 
 **Cleared as sound:**
 - Stage 2 (navigate-to-products.js): typed errors throughout, host-pinned
@@ -135,10 +135,9 @@ baked client env (.env.production).
 everywhere; the code on both sides is already Sentry-ready and no-ops without
 a DSN. Consequence: when LK breaks in the field, nobody is told — tonight's
 AuthGate hang would have produced a visible stack trace + alert. For
-"set-and-forget," the system MUST phone home. **Needs Tony (~10 min):**
-sentry.io account (free tier fine) → two DSNs (one browser project, one node)
-→ `fly secrets set SENTRY_DSN=… -a liquor-kings` (+ same on worker) and
-`VITE_SENTRY_DSN` into apps/scanner/.env.production → redeploy. Status: ⚪
+"set-and-forget," the system MUST phone home. Status: 🟢 superseded by #29 —
+3 real DSNs wired (build args for both SPAs + runtime SENTRY_DSN secret on
+API + worker), both apps redeployed 06-13.
 
 **Cleared as sound:**
 - `WORKER_ID` — daemon defaults to `rpa-worker-${FLY_MACHINE_ID}`; the two
