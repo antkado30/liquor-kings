@@ -1,7 +1,46 @@
-# Sentry + cron-job.org setup
+# Sentry + daily cron setup
 
-Two 5-minute setup tasks. Both have all the code already wired — you
-just need to paste a couple values.
+Two setup tasks. Both have all the code already wired — you just need
+to paste a couple values.
+
+---
+
+## 0. Daily cron pings via GitHub Actions (replaces #32/#75 below)
+
+**2026-06-14 update:** instead of signing up for cron-job.org (sections
+2 and 3 below), there's now a GitHub Actions workflow that does both
+daily pings for free, using your existing GitHub account:
+`.github/workflows/lk-daily-cron.yml`. It runs:
+
+- `POST /order-templates/run-scheduler` daily at ~5am ET
+- `POST /price-book/check-updates` daily at ~6am ET
+
+Both already require `X-Cron-Token: <LK_CRON_SECRET>` — same secret,
+same value as the Fly secret.
+
+### Setup (2 minutes)
+
+1. Read back the Fly secret value (it's likely already set):
+   ```bash
+   fly ssh console -a liquor-kings -C "printenv LK_CRON_SECRET"
+   ```
+   If that prints nothing, generate + set one first:
+   ```bash
+   fly secrets set LK_CRON_SECRET="$(openssl rand -hex 32)" -a liquor-kings
+   fly ssh console -a liquor-kings -C "printenv LK_CRON_SECRET"
+   ```
+2. On GitHub: repo → **Settings → Secrets and variables → Actions →
+   New repository secret**. Name: `LK_CRON_SECRET`. Value: the string
+   from step 1.
+3. Test it: **Actions tab → "Liquor Kings daily cron" → Run workflow**
+   (workflow_dispatch runs both jobs immediately regardless of
+   schedule). Both jobs should go green with `HTTP 200` in the logs.
+
+If a scheduled run fails, GitHub emails you automatically (default
+notification settings on your own repo) — that's your alerting for
+free, no cron-job.org "notify on failure" needed.
+
+You can skip sections 2 and 3 entirely once this is set up.
 
 ---
 

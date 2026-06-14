@@ -544,7 +544,14 @@ carts. Revisit only if a real order with a big cart actually blows past
   probe via `cart_reset_only` clears it. Survives refresh, device
   switch, account-skip-of-activation. (#88, 2026-06-06)
 - ⏳ **Real Sentry DSN setup** (replace placeholder).
-- ⏳ **cron-job.org setup** for daily price-book freshness ping.
+- ⏳ **Daily cron setup** for price-book freshness + template scheduler.
+  Code-side DONE (2026-06-14): `.github/workflows/lk-daily-cron.yml`
+  added — GitHub Actions hits `/order-templates/run-scheduler` (~5am ET)
+  and `/price-book/check-updates` (~6am ET) daily, no cron-job.org
+  signup needed. Tony's 2-min part: read back `LK_CRON_SECRET` from Fly
+  (`fly ssh console -a liquor-kings -C "printenv LK_CRON_SECRET"`) and
+  add it as a GitHub repo secret of the same name. See
+  [docs/lk/sentry-and-cron-setup.md](sentry-and-cron-setup.md) §0.
 
 - ⏳ **OBSERVABILITY CENTER — "capture every single little detail" (Tony,
   2026-06-10).** Dev-facing control center: every action in the system

@@ -1,0 +1,53 @@
+# Daily cron pings for Liquor Kings prod — replaces the cron-job.org setup
+# documented in docs/lk/sentry-and-cron-setup.md (#32, #75).
+#
+# Two jobs, same LK_CRON_SECRET (must match the Fly secret of the same name):
+#   - order-templates scheduler @ ~5am ET: marks today's scheduled templates
+#     "ready to review" on dad's scanner home.
+#   - price-book check-updates @ ~6am ET: re-ingests MLCC's price book if
+#     it changed since the last run.
+#
+# NOTE on times: GitHub Actions cron is UTC and does not shift with US DST.
+# 9/10 UTC = 5/6am EDT (summer) or 4/5am EST (winter) — a 1hr drift in winter
+# is harmless for both jobs (they're "did this happen today" checks, not
+# time-critical).
+#
+# Setup required (one-time): add repo secret LK_CRON_SECRET with the same
+# value as `fly secrets list -a liquor-kings` shows for LK_CRON_SECRET.
+# Settings -> Secrets and variables -> Actions -> New repository secret.
+
+name: Liquor Kings daily cron
+
+on:
+  schedule:
+    - cron: "0 9 * * *"  # order-templates run-scheduler
+    - cron: "0 10 * * *" # price-book check-updates
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  order-templates-scheduler:
+    name: Order templates run-scheduler
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 9 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: POST /order-templates/run-scheduler
+        run: |
+          curl -sS -X POST "https://liquor-kings.fly.dev/order-templates/run-scheduler" \
+            -H "X-Cron-Token: ${{ secrets.LK_CRON_SECRET }}" \
+            -w "\nHTTP %{http_code}\n" --fail-with-body
+
+  price-book-check-updates:
+    name: Price book check-updates
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 10 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: POST /price-book/check-updates
+        run: |
+          curl -sS -X POST "https://liquor-kings.fly.dev/price-book/check-updates" \
+            -H "X-Cron-Token: ${{ secrets.LK_CRON_SECRET }}" \
+            -w "\nHTTP %{http_code}\n" --fail-with-body
