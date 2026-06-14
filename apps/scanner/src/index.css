@@ -7682,7 +7682,19 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
 
 .scanhm-page {
   padding-top: max(12px, env(safe-area-inset-top));
-  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  /*
+    Bug fix (2026-06-13, Tony on real device): this rule has the same
+    specificity as `.page`'s `padding: 12px 14px 96px` and comes later in
+    the file, so it was SILENTLY OVERRIDING the page's 96px bottom padding
+    down to ~16-34px. That 96px exists specifically to clear the fixed
+    BottomTabBar (~60-75px tall + safe-area-bottom) — every other page kept
+    it, but the scan page lost it. Result: the last ~60-80px of scan-page
+    content (the search/MLCC code bar) rendered UNDER the tab bar, and
+    because total page height barely exceeded the viewport, touch-scroll
+    only rubber-banded and snapped back on release instead of revealing the
+    hidden content. Restore the same clearance as `.page`, plus safe-area.
+  */
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
 }
 
 .scanhm-header {

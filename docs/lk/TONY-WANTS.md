@@ -52,6 +52,19 @@ worker (had been silently dry-run since the 06-08 split). Mandate clock:
 **FULL SYSTEM AUDIT ordered 2026-06-12** ("every single file, every defect,
 set-and-forget V1") — living doc: docs/lk/FULL-SYSTEM-AUDIT.md.
 
+**FIXED 2026-06-13 — Scan page couldn't scroll to search/MLCC bar on real
+device.** Root cause: `.scanhm-page` (added in the 06-10 multi-store commit)
+set `padding-bottom: max(16px, env(safe-area-inset-bottom))`, same specificity
+as `.page`'s `padding-bottom: 96px` but later in the file — silently dropping
+the scan page's bottom clearance from 96px to ~16-34px. The fixed BottomTabBar
+(~60-75px) then overlapped the last ~60-80px of scan-page content (the
+search/MLCC bar), and because total height barely exceeded the viewport,
+touch-scroll just rubber-banded and snapped back on release instead of
+revealing it. Fixed in `apps/scanner/src/index.css` —
+`.scanhm-page` padding-bottom restored to `calc(96px + env(safe-area-inset-bottom))`,
+matching every other page. NOT YET deployed/verified on device — needs a
+real-device check next deploy.
+
 ---
 
 ## 📱 Native app — App Store (stated 2026-06-12)
@@ -205,6 +218,66 @@ failing the whole run, aggressive background pre-validate so the
 foreground tap is usually a cache hit; (4) pairs with the OBSERVABILITY
 CENTER build — same session. Target: warm validate ≤30-45s, NEVER a
 4-minute silent grind, failures explain themselves in one sentence.
+
+### STATUS UPDATE (2026-06-13/14) — warm session confirmed working
+
+Built `services/api/scripts/inspect-execution-runs.mjs` (stage-timing
+inspector). Findings from real prod runs:
+
+- **Cold path** (no held session, e.g. first run for a store since worker
+  restart): ~42s fixed cost before Stage 3 even starts — Stage 1 login
+  ~31s + Stage 2 navigate ~11s, identical regardless of cart size. Stage 3
+  (add items) scales ~1.3s/item + ~11.5s base. A 2-item cart = 60.4s, a
+  35-item cart = 105.1s.
+- **Warm path (`rpa_session_reused`) — CONFIRMED FIRING 2026-06-14.** Two
+  back-to-back runs for the same store (Colony, e594fc3a-...): 2nd run
+  skipped Stages 1+2 entirely, total dropped to **25.1s for a 3-item
+  cart** — under the 30s target. This is task #46 Phase A, already
+  shipped, just hadn't been observed reusing in the wild until now.
+- ⏳ **Remaining gap for big carts — slope confirmed on warm session.**
+  Two warm-session data points: 3 items → Stage 3 = 20.5s; 7 items →
+  Stage 3 = 26.1s. Slope ≈ **1.4s/item**, intercept ≈ 16.3s. For 84 items:
+  16.3 + 1.4×84 ≈ **135s (2.25min) for Stage 3 alone**, +Stage 4 (~6-8s)
+  ≈ **~2.4min total even fully warm** — much better than the 4min/failed
+  Tony saw, but still way over the 30s target for big carts.
+  - Suspect per-item overhead in `add-items-to-cart.js`'s per-item loop:
+    a fixed 300ms wait after the code-input Tab, plus `waitForRowCountIncrease`
+    polling every 200ms until the row renders. At ~500ms artificial wait
+    per item × 84 ≈ 42s of the 135s is just these two waits. Tightening
+    them is a real lever BUT both were added to fix specific flakes
+    (silent drops, false-OOS) — touch carefully, with a real-MILO test,
+    not a blind edit.
+  - Also noted: queue wait spiked to 76.9s on this run (vs 3-5s earlier)
+    — separate issue, possibly worker queue contention from running
+    several validates back-to-back. Worth a look if it recurs.
+
+### History check on the two Stage 3 waits (2026-06-13) — holding off
+
+Read the git history for both waits before touching anything, per Tony's
+"don't re-introduce a fixed bug" instruction:
+
+- **`waitForRowCountIncrease`'s 200ms poll interval + its 18s cap
+  (`DEFAULT_PER_ITEM_TIMEOUT_MS`)**: the cap was bumped 8s → 18s on
+  2026-06-02 (`6d75d89`) specifically to fix a REAL production incident —
+  Tony's Tito's 750ml false-OOS report, where an 8s wait expired right as
+  MILO was slow, and the item got wrongly reported as out-of-stock. The
+  200ms poll granularity itself isn't the cost driver (it only adds up to
+  200ms slop); the cap is load-bearing for that incident.
+- **The fixed 300ms wait after the code-input Tab** (`page.waitForTimeout(300)`):
+  traced to the ORIGINAL Stage 3 implementation (`9c9072c`, 2026-04-24) — no
+  specific incident ties to this exact 300ms value. It exists to let MILO's
+  focus move to the qty input before we check `document.activeElement`,
+  with a `qtyInput.focus()` fallback if it hasn't.
+
+**Decision: hold off on editing Stage 3 timing for now.** Warm-session reuse
+already meets the ≤30s target for realistic cart sizes (3 items = 25.1s,
+7 items = 32.6s — both real production runs). The 84-item worst case
+(~2.4min) is far better than the 4min/FAILED Tony originally saw, and per
+the quality mandate (feature freeze, harden > build) this is optimization,
+not a P0 — touching timing-sensitive RPA code carries real risk of
+reintroducing the false-OOS flake (#61) for marginal gain on rare huge
+carts. Revisit only if a real order with a big cart actually blows past
+30-45s in practice.
 
 ## Tony's 2026-06-07 batch (stated after speed passes)
 
