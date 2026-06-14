@@ -41,11 +41,16 @@ const IDLE_POLL_MS = 10_000;
 // Back off briefly when processOneRpaRun throws unexpectedly, so an upstream
 // outage doesn't turn into a tight error loop that floods logs.
 const ERROR_BACKOFF_MS = 30_000;
-// Longer back-off when the API replies with a transient 5xx — almost always
-// the app machine waking from standby (Fly proxy returns 502/503/504 while it
-// boots). Hammering claim-next during that window just adds noise and gives
-// the proxy nothing useful. 60s lets the machine come up cleanly.
-const TRANSIENT_5XX_BACKOFF_MS = 60_000;
+// Back-off when the API replies with a transient 5xx — historically "the app
+// machine waking from standby" (Fly proxy returns 502/503/504 while it
+// boots). 2026-06-14: the API app has min_machines_running=1 and
+// auto_stop_machines="off", so it should already be warm — a 502/503/504 here
+// is now almost always a brief blip (e.g. mid-rolling-deploy), not a cold
+// boot. The old 60s value meant a real order sitting at "still working" with
+// ZERO visible progress for a full minute (or two, if it hit twice) before
+// the worker even claimed the run — a P0 under the instant-feel mandate. 8s
+// still avoids hammering claim-next but recovers fast.
+const TRANSIENT_5XX_BACKOFF_MS = 8_000;
 
 // claimNextRun (and friends) throw Error("HTTP <code>: ...") on non-2xx.
 // 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout are the
