@@ -483,6 +483,78 @@ function normalizeSearchTerm(str) {
     .trim();
 }
 
+/**
+ * Flavor / line-extension / novelty-format words that mark a product as a
+ * VARIANT of a brand's flagship expression rather than the flagship itself.
+ *
+ * Tony, 2026-06-13: searching "jack daniels" was returning "JACK DANIELS
+ * APPLE" first — purely because A < O alphabetically and every JD SKU has
+ * scan_count 0 pre-launch (orderMlccItemsByScanThenName falls through to
+ * name asc). A real customer typing the bare brand name wants the classic
+ * bottle (Old No. 7 / Black Label), not a flavored line extension.
+ *
+ * This is a HEURISTIC COLD-START TIEBREAKER ONLY — see sortByRelevance:
+ *  1. scan_count desc always wins first (real usage data beats the heuristic
+ *     the moment any SKU in the family gets scanned/picked).
+ *  2. A query that itself names a flavor (e.g. "jack daniels honey") isn't
+ *     penalized for that word — only EXTRA flavor words not in the query
+ *     count against a row.
+ *  3. Worst case for an edge-case brand where the flagship name happens to
+ *     contain one of these words (e.g. a "spiced rum" as a brand's base
+ *     product): it just falls back to the previous alphabetical behavior,
+ *     which self-corrects once scan_count accrues.
+ */
+const VARIANT_KEYWORDS = new Set([
+  // Fruit / flavor words common across vodka, whiskey, rum, tequila, gin
+  "honey", "fire", "apple", "citrus", "peach", "cherry", "watermelon",
+  "cinnamon", "coconut", "lime", "lemon", "lemonade", "raspberry",
+  "blackberry", "strawberry", "berry", "grape", "mango", "pineapple",
+  "orange", "banana", "vanilla", "vanil", "caramel", "butterscotch",
+  "chocolate", "espresso", "coffee", "cream", "punch", "tropical",
+  "ginger", "spiced", "spice", "melon", "passion", "grapefruit", "pear",
+  "plum", "almond", "hazelnut", "mint", "rootbeer", "cola", "pumpkin",
+  "maple", "tupelo", "fizz", "sugarfree",
+  // Limited-edition / novelty-format markers — not the default bottle
+  "chocolates", "accessible", "mclaren", "edition", "anniversary",
+  "downhome", "blackjack", "lynchburg",
+]);
+
+/**
+ * Count VARIANT_KEYWORDS hits in `name` that are NOT already present in
+ * `queryTokenSet` (so searching "jack daniels honey" doesn't penalize the
+ * Honey SKU for matching what the user asked for).
+ */
+function computeVariantPenalty(name, queryTokenSet) {
+  const tokens = normalizeSearchTerm(name).split(/\s+/).filter(Boolean);
+  let penalty = 0;
+  for (const t of tokens) {
+    if (VARIANT_KEYWORDS.has(t) && !queryTokenSet.has(t)) penalty += 1;
+  }
+  return penalty;
+}
+
+/**
+ * Search-result ordering: real usage (scan_count) first, then the
+ * flagship-vs-variant heuristic (computeVariantPenalty), then name, then
+ * code. Shared by the AND-of-tokens path, the fuzzy RPC path, and the
+ * Levenshtein fallback so a brand search like "jack daniels" surfaces the
+ * classic bottle first everywhere, not just in one code path.
+ */
+function sortByRelevance(rows, queryTokenSet) {
+  return [...(rows ?? [])].sort((a, b) => {
+    const sa = Number(a.scan_count) || 0;
+    const sb = Number(b.scan_count) || 0;
+    if (sa !== sb) return sb - sa;
+    const pa = computeVariantPenalty(String(a.name ?? ""), queryTokenSet);
+    const pb = computeVariantPenalty(String(b.name ?? ""), queryTokenSet);
+    if (pa !== pb) return pa - pb;
+    const na = String(a.name ?? "");
+    const nb = String(b.name ?? "");
+    if (na !== nb) return na.localeCompare(nb);
+    return String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true });
+  });
+}
+
 /** Strip % and _ from external strings used inside ilike patterns (defense in depth). */
 function sanitizeIlikeValue(s) {
   return String(s).replace(/%/g, "").replace(/_/g, "");
@@ -1616,14 +1688,9 @@ async function tryLevenshteinNameTokenSearch(supabase, search, adaNumber, isNewI
     if (ok) hits.push(row);
   }
   if (!hits.length) return null;
-  hits.sort((a, b) => {
-    const sa = Number(a.scan_count) || 0;
-    const sb = Number(b.scan_count) || 0;
-    if (sa !== sb) return sb - sa;
-    return String(a.name ?? "").localeCompare(String(b.name ?? ""));
-  });
-  const total = hits.length;
-  const items = hits.slice(from, from + limit);
+  const sortedHits = sortByRelevance(hits, new Set(extractSearchTokens(search)));
+  const total = sortedHits.length;
+  const items = sortedHits.slice(from, from + limit);
   return { ok: true, items, total, page, fuzzy_match: true };
 }
 
@@ -1699,6 +1766,35 @@ router.get("/items", async (req, res) => {
       // previous `>= 3` threshold silently dropped niche but valid hits like
       // "valentine white blossom" (1 exact MLCC row, fell to fuzzy, lost).
       if (orCount != null && orCount >= 1) {
+        const queryTokenSet = new Set(extractSearchTokens(search));
+        /*
+          Brand-family searches (e.g. "jack daniels") commonly match a small
+          set of SKUs (the whole product line). Pre-launch, scan_count is 0
+          for all of them, so the DB-side `orderMlccItemsByScanThenName`
+          falls through to alphabetical — which puts "JACK DANIELS APPLE"
+          ahead of "JACK DANIELS OLD #7" (Tony, 2026-06-13). When the match
+          set is small enough to fetch in one page, re-rank it client-side
+          with sortByRelevance so the flagship bottle surfaces first. Large
+          result sets (single-token searches across the whole catalog) keep
+          the cheap DB-ordered + paginated path.
+        */
+        const RELEVANCE_SORT_CAP = 200;
+        if (orCount <= RELEVANCE_SORT_CAP) {
+          let qOrAll = supabase.from("mlcc_items").select("*");
+          qOrAll = applyItemsOrSearchToQuery(qOrAll, search);
+          qOrAll = applyMlccItemsFilters(qOrAll, adaNumber, isNewItemQ);
+          const { data: allItems, error: allErr } = await qOrAll.range(0, RELEVANCE_SORT_CAP - 1);
+          if (allErr) {
+            return res.status(500).json({ ok: false, error: allErr.message });
+          }
+          const sorted = sortByRelevance(allItems, queryTokenSet);
+          return res.json({
+            ok: true,
+            items: sorted.slice(from, from + limit),
+            total: orCount,
+            page,
+          });
+        }
         let qOr = supabase.from("mlcc_items").select("*", { count: "exact" });
         qOr = applyItemsOrSearchToQuery(qOr, search);
         qOr = applyMlccItemsFilters(qOr, adaNumber, isNewItemQ);
@@ -1725,16 +1821,10 @@ router.get("/items", async (req, res) => {
       if (fuzzyErrNoBrand) {
         return res.status(500).json({ ok: false, error: fuzzyErrNoBrand.message });
       }
-      let filteredNoBrand = filterMlccRowsClientSide(fuzzyRowsNoBrand, adaNumber, isNewItemQ);
-      filteredNoBrand.sort((a, b) => {
-        const sa = Number(a.scan_count) || 0;
-        const sb = Number(b.scan_count) || 0;
-        if (sa !== sb) return sb - sa;
-        const na = String(a.name ?? "");
-        const nb = String(b.name ?? "");
-        if (na !== nb) return na.localeCompare(nb);
-        return String(a.code ?? "").localeCompare(String(b.code ?? ""), undefined, { numeric: true });
-      });
+      let filteredNoBrand = sortByRelevance(
+        filterMlccRowsClientSide(fuzzyRowsNoBrand, adaNumber, isNewItemQ),
+        new Set(extractSearchTokens(search)),
+      );
       let totalNb = filteredNoBrand.length;
       let itemsNb = filteredNoBrand.slice(from, from + limit);
       if (totalNb === 0) {
@@ -1780,5 +1870,9 @@ router.get("/items", async (req, res) => {
     });
   }
 });
+
+// Exported for unit testing the search-ranking heuristic (2026-06-13,
+// "jack daniels" flagship-vs-variant fix) without spinning up Supabase.
+export { sortByRelevance, computeVariantPenalty, extractSearchTokens, VARIANT_KEYWORDS };
 
 export default router;

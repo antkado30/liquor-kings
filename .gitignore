@@ -40,3 +40,8 @@ tmp/data/
 # Locally-trusted dev TLS certs (mkcert) — never commit private keys
 *.pem
 *-key.pem
+
+# Vite/Vitest config loader writes a transient compiled copy of
+# vitest.config.ts next to itself on each run (e.g.
+# vitest.config.ts.timestamp-*.mjs). Never commit these.
+*.timestamp-*.mjs

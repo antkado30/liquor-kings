@@ -192,9 +192,9 @@ Plan for 2-3 days of focused work. Don't ship this gap to anyone paying.
 
 ---
 
-## 9. Tests — 🟡 yellow (API solid, frontend zero)
+## 9. Tests — 🟡 yellow (API solid, frontend now started)
 
-**Code:** 43 test files in `services/api/tests/`, 1 in repo root (`tests/rpa/safe-mode-invariant.test.js`).
+**Code:** 43 test files in `services/api/tests/`, 1 in repo root (`tests/rpa/safe-mode-invariant.test.js`), and (2026-06-13) `apps/scanner/src/hooks/useSubmission.test.ts`.
 
 **What works:**
 - Heavy unit coverage of MLCC scoring, RPA stages, phase policies, blocking hints, mapping backlog, operator review
@@ -203,14 +203,15 @@ Plan for 2-3 days of focused work. Don't ship this gap to anyone paying.
 - Smoke tests against staging Supabase on `main` pushes
 - SAFE-MODE invariants in CI prevent accidental MLCC network calls during tests
 - `npm run test:ci` runs cleanly in CI
+- **(2026-06-13, new)** `apps/scanner` now has vitest + @testing-library/react (`npm run test -w lk-scanner`). First suite: 7 tests on `useSubmission` — the validate→submit state machine that the Thursday real-order mandate test depends on. Covers empty-cart guard, full validate happy path (idle→...→validateDone with validateResult), trigger-failure error state, submit no-op guards (idle, and validateDone-but-failed), full submit happy path to submitDone with `submitResult` (audit #15 truth source), and invalidateValidation. All mocked — no network, no Supabase auth, safe to run anytime.
 
 **Rough edges:**
-- **Zero frontend tests** — 0 tests in `apps/scanner/`, 0 in `apps/admin/`. All frontend verification is manual.
-- No end-to-end tests (no Playwright tests against the running scanner/admin)
+- Frontend coverage is still 1 file / 7 tests — the rest of `apps/scanner` (search/scan/cart UI, fallback picker) and all of `apps/admin` remain untested.
+- No end-to-end tests (no Playwright tests against the running scanner/admin) — real Supabase auth + dev server makes this a bigger lift (~1 day), correctly deferred per #213 below.
 
-**Launch impact:** API regressions are well-protected. Frontend regressions only get caught when you or a pilot store finds them.
+**Launch impact:** API regressions are well-protected. The highest-risk piece of frontend logic (the submission state machine) now has a regression net. Other frontend regressions still only get caught when you or a pilot store finds them.
 
-**What I'd do:** Add Playwright tests for the 3 scanner critical flows: (1) scan → confident match → cart, (2) scan → fallback → search → pick → mapping save, (3) cart submission state machine happy path. ~1 day. Defer until post-pilot if time-constrained.
+**What I'd do:** Add Playwright tests for the 3 scanner critical flows: (1) scan → confident match → cart, (2) scan → fallback → search → pick → mapping save, (3) cart submission state machine happy path. ~1 day, requires mocking real Supabase auth + a running dev server. Defer until post-pilot if time-constrained — the vitest unit coverage above is the lower-risk first step.
 
 ---
 
