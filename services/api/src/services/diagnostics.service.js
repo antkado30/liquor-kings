@@ -11,6 +11,15 @@ export const DIAGNOSTIC_KIND = {
   IDENTITY_BACKFILL_REPORT: "identity_backfill_report",
   /** Internal operator console session lifecycle (payload.event distinguishes details). */
   OPERATOR_SESSION: "operator_session",
+  /**
+   * /auth/signup rolled back a partially-created auth user (because a
+   * later step failed) but the rollback deleteUser() call itself also
+   * failed. Previously swallowed via `.catch(() => {})` — that left an
+   * orphaned Supabase auth user with no store row and no record of it
+   * anywhere, permanently burning that email for future signups with no
+   * trace (scan-everything pass, 2026-06-13).
+   */
+  SIGNUP_ROLLBACK_FAILED: "signup_rollback_failed",
 };
 
 export async function logSystemDiagnostic({

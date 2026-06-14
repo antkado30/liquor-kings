@@ -33,6 +33,24 @@ import { createClient } from "@supabase/supabase-js";
 import supabase from "../config/supabase.js";
 import { encryptCredential } from "../lib/credential-encryption.js";
 import { resolveAuthenticatedStore } from "../middleware/resolve-store.middleware.js";
+import { DIAGNOSTIC_KIND, logSystemDiagnostic } from "../services/diagnostics.service.js";
+
+/**
+ * Best-effort rollback of a partially-created auth user. If the delete
+ * itself fails, log it loudly instead of swallowing — an orphaned auth
+ * user with no store row permanently burns that email for future signups
+ * with zero trace (scan-everything pass, 2026-06-13; was `.catch(() => {})`).
+ */
+async function rollbackAuthUser(supabaseAdmin, userId, reason) {
+  const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
+  if (error) {
+    await logSystemDiagnostic({
+      kind: DIAGNOSTIC_KIND.SIGNUP_ROLLBACK_FAILED,
+      userId,
+      payload: { reason, delete_error: error.message },
+    });
+  }
+}
 
 const router = express.Router();
 
@@ -200,7 +218,7 @@ router.post("/signup", express.json(), async (req, res) => {
     } catch (encErr) {
       // Roll back the auth user if we can't encrypt — never leave a
       // user without a store.
-      await supabaseAdmin.auth.admin.deleteUser(userId).catch(() => {});
+      await rollbackAuthUser(supabaseAdmin, userId, "credential_encryption_failed");
       return res.status(500).json({
         ok: false,
         error: "credential_encryption_failed",
@@ -226,7 +244,7 @@ router.post("/signup", express.json(), async (req, res) => {
       .single();
     if (storeErr) {
       // Roll back the auth user so the email isn't permanently burned.
-      await supabaseAdmin.auth.admin.deleteUser(userId).catch(() => {});
+      await rollbackAuthUser(supabaseAdmin, userId, "store_insert_failed");
       return res.status(500).json({ ok: false, error: storeErr.message });
     }
 
@@ -242,7 +260,7 @@ router.post("/signup", express.json(), async (req, res) => {
     if (linkErr) {
       // Roll back both the store and the auth user.
       await supabaseAdmin.from("stores").delete().eq("id", store.id);
-      await supabaseAdmin.auth.admin.deleteUser(userId).catch(() => {});
+      await rollbackAuthUser(supabaseAdmin, userId, "store_users_link_failed");
       return res.status(500).json({ ok: false, error: linkErr.message });
     }
 
