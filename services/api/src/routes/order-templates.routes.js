@@ -237,8 +237,12 @@ router.put("/:id", express.json(), async (req, res) => {
     .eq("id", id)
     .eq("store_id", storeId)
     .select("*")
-    .single();
+    .maybeSingle();
   if (error) return res.status(500).json({ ok: false, error: error.message });
+  // .single() previously threw PGRST116 ("no rows") for a stale/cross-store
+  // id and that error masqueraded as a 500. .maybeSingle() + explicit 404
+  // (2026-06-13, scan-everything pass) gives the real status.
+  if (!data) return res.status(404).json({ ok: false, error: "not_found" });
   return res.json({ ok: true, template: data });
 });
 
@@ -258,9 +262,13 @@ router.delete("/:id", async (req, res) => {
     .eq("id", id)
     .eq("store_id", storeId)
     .select("id")
-    .single();
+    .maybeSingle();
   if (error) return res.status(500).json({ ok: false, error: error.message });
-  return res.json({ ok: true, archived: data?.id ?? null });
+  // .single() previously threw PGRST116 ("no rows") for a stale/cross-store
+  // id and that error masqueraded as a 500. .maybeSingle() + explicit 404
+  // (2026-06-13, scan-everything pass) gives the real status.
+  if (!data) return res.status(404).json({ ok: false, error: "not_found" });
+  return res.json({ ok: true, archived: data.id });
 });
 
 /* ─── Cron: mark today's scheduled templates ready for review ────── */
@@ -406,7 +414,12 @@ router.post("/:id/load", async (req, res) => {
     .eq("id", id)
     .eq("store_id", storeId)
     .select("id, name, items")
-    .single();
+    // .single() throws PGRST116 on 0 rows, which would hit the `error`
+    // branch above (500) before ever reaching the `!data` 404 check below
+    // -- making that check dead code for a stale/cross-store id
+    // (2026-06-13, scan-everything pass). .maybeSingle() makes the 404
+    // branch actually reachable.
+    .maybeSingle();
   if (error) return res.status(500).json({ ok: false, error: error.message });
   if (!data) return res.status(404).json({ ok: false, error: "not_found" });
 

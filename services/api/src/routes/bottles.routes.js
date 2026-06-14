@@ -18,7 +18,7 @@ router.get("/search", async (req, res) => {
     return res.status(400).json({ error: "Search query is required" });
   }
 
-  const { data, error } = await searchBottles(supabase, q);
+  const { data, error } = await searchBottles(supabase, req.store_id, q);
 
   if (error) {
     return res.status(500).json({ error: error.message });
@@ -39,7 +39,7 @@ router.get("/search/compact", async (req, res) => {
     return res.status(400).json({ error: "Search query is required" });
   }
 
-  const { data, error } = await searchBottlesCompact(supabase, q);
+  const { data, error } = await searchBottlesCompact(supabase, req.store_id, q);
 
   if (error) {
     return res.status(500).json({ error: error.message });
@@ -61,9 +61,12 @@ router.get("/code/:mlccCode", async (req, res) => {
     return res.status(400).json({ error: "MLCC code is required" });
   }
 
-  const { data, error } = await getBottleByMlccCode(supabase, mlccCode);
+  const { data, error } = await getBottleByMlccCode(supabase, req.store_id, mlccCode);
 
   if (error) {
+    return res.status(500).json({ error: error.message });
+  }
+  if (!data) {
     return res.status(404).json({ error: "Bottle not found" });
   }
 
@@ -80,9 +83,12 @@ router.get("/upc/:upc", async (req, res) => {
     return res.status(400).json({ error: "UPC is required" });
   }
 
-  const { data, error } = await getBottleByUpc(supabase, upc);
+  const { data, error } = await getBottleByUpc(supabase, req.store_id, upc);
 
   if (error) {
+    return res.status(500).json({ error: error.message });
+  }
+  if (!data) {
     return res.status(404).json({ error: "Bottle not found" });
   }
 
@@ -95,13 +101,16 @@ router.get("/upc/:upc", async (req, res) => {
 router.get("/related/:id", async (req, res) => {
   const { id } = req.params;
 
-  const { data: bottle, error: bottleError } = await getBottleById(supabase, id);
+  const { data: bottle, error: bottleError } = await getBottleById(supabase, req.store_id, id);
 
   if (bottleError) {
+    return res.status(500).json({ error: bottleError.message });
+  }
+  if (!bottle) {
     return res.status(404).json({ error: "Bottle not found" });
   }
 
-  const { data: related, error } = await getRelatedBottles(supabase, bottle);
+  const { data: related, error } = await getRelatedBottles(supabase, req.store_id, bottle);
 
   if (error) {
     return res.status(500).json({ error: error.message });
@@ -125,9 +134,12 @@ router.get("/related/:id", async (req, res) => {
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
 
-  const { data, error } = await getBottleById(supabase, id);
+  const { data, error } = await getBottleById(supabase, req.store_id, id);
 
   if (error) {
+    return res.status(500).json({ error: error.message });
+  }
+  if (!data) {
     return res.status(404).json({ error: "Bottle not found" });
   }
 
