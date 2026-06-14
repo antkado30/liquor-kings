@@ -115,10 +115,17 @@ router.patch(
       })
       .eq("id", itemId)
       .select("*")
-      .single();
+      // .single() would throw PGRST116 (500) if the item was deleted between
+      // the existence check above and this update (race condition).
+      // .maybeSingle() + explicit 404 makes that the real status
+      // (2026-06-13, scan-everything pass).
+      .maybeSingle();
 
     if (updateError) {
       return res.status(500).json({ error: updateError.message });
+    }
+    if (!updatedItem) {
+      return res.status(404).json({ error: "Cart item not found" });
     }
 
     res.json({

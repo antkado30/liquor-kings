@@ -102,10 +102,17 @@ router.post("/:storeId/submit", async (req, res) => {
       })
       .eq("id", cart.id)
       .select("*")
-      .single();
+      // .single() would throw PGRST116 (500) if the cart was deleted/changed
+      // between the fetch above and this update (race condition).
+      // .maybeSingle() + explicit error makes that the real status
+      // (2026-06-13, scan-everything pass).
+      .maybeSingle();
 
     if (updateError) {
       return res.status(500).json({ error: updateError.message });
+    }
+    if (!updatedCart) {
+      return res.status(409).json({ error: "Cart changed before it could be submitted" });
     }
 
     res.json({
