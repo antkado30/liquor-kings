@@ -58,7 +58,19 @@ import {
  */
 const STABILITY_DEBOUNCE_MS = 5000;
 const POLL_INTERVAL_MS = 2500;
-const MAX_POLL_MS = 3 * 60 * 1000;
+/*
+  P0 (2026-06-14, Sweep 2): 16 minutes is a true upper bound — the
+  execution_runs reaper (STALE_RUN_MINUTES=15) guarantees every run
+  reaches a terminal state by then. The old 3-minute cutoff gave up on
+  this SILENT background validate well before a slow MLCC run actually
+  finished, forcing the foreground Validate tap (useSubmission) to queue
+  a second validate_only run behind this one (busyStores) instead of
+  reusing this run's eventual result. Back off to 10s polls after the
+  first minute.
+*/
+const POLL_BACKOFF_AFTER_MS = 60 * 1000;
+const POLL_BACKOFF_INTERVAL_MS = 10_000;
+const MAX_POLL_MS = 16 * 60 * 1000;
 
 /*
   Kill switch (2026-06-02 evening). Was set to false when a validate
@@ -228,12 +240,16 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
         validateResult: ValidateResult | null;
       } | null = null;
 
+      let interval = POLL_INTERVAL_MS;
       while (generationRef.current === myGeneration) {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        await new Promise((r) => setTimeout(r, interval));
         if (generationRef.current !== myGeneration) return null;
         if (Date.now() - pollStart > MAX_POLL_MS) {
           if (generationRef.current === myGeneration) setStatus("error");
           return null;
+        }
+        if (Date.now() - pollStart > POLL_BACKOFF_AFTER_MS) {
+          interval = POLL_BACKOFF_INTERVAL_MS;
         }
         const summaryRes = await getRunSummary({ runId });
         if (!summaryRes.ok) continue; // transient — keep polling

@@ -23,7 +23,19 @@ const STAGES: Array<{ id: string; label: string }> = [
   { id: "rpa_cart_reset", label: "Confirming connection" },
 ];
 
-const MAX_POLL_MS = 180_000;
+/*
+  P0 (2026-06-14, Sweep 2): 16 minutes is a true upper bound, not a guess
+  — the execution_runs reaper (STALE_RUN_MINUTES=15) guarantees every run
+  reaches a terminal state by then. The old 180s cutoff told users "skip
+  for now" while the run was often still legitimately progressing
+  (cold-session MILO login can take well over 3 minutes), and "Try again"
+  on a still-running probe queues a second cart_reset_only run behind the
+  first. Back off to 10s polls after the first minute to keep request
+  volume sane during the long tail.
+*/
+const POLL_BACKOFF_AFTER_MS = 60_000;
+const POLL_BACKOFF_INTERVAL_MS = 10_000;
+const MAX_POLL_MS = 16 * 60 * 1000;
 const MAX_POLL_FAILURES = 6;
 
 type ActivationState =
@@ -94,10 +106,14 @@ export function OnboardingActivation({
 
     const start = Date.now();
     let pollFailures = 0;
+    let interval = 2000;
 
     while (Date.now() - start < MAX_POLL_MS) {
       if (cancelledRef.current) return;
-      await new Promise((r) => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, interval));
+      if (Date.now() - start > POLL_BACKOFF_AFTER_MS) {
+        interval = POLL_BACKOFF_INTERVAL_MS;
+      }
 
       const summary = await getRunSummary({
         runId: trigger.runId,
