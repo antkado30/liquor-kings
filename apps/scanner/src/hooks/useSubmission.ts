@@ -118,7 +118,23 @@ export type SubmissionState =
   | { kind: "error"; message: string; recoverable: boolean };
 
 const POLL_INTERVAL_MS = 2500;
-const MAX_POLL_MS = 5 * 60 * 1000; // 5 minutes per phase
+// P0 (2026-06-14): pollUntilTerminal used to throw "Polling timed out after
+// 5 minutes" at MAX_POLL_MS, dumping the user into a dead-end `error` state
+// that LOST the runId. CartDrawer's honestSlowMessage promises "MILO is slow
+// today. We keep at it until it answers" — the 5-minute throw made that a
+// lie. The 2026-06-14 incident showed exactly this: a real validate run was
+// delayed by a worker-side bug, the client gave up at 5:00, and when the run
+// actually finished (succeeded, all items checked against MILO) the UI was
+// stuck showing "Validate against MLCC" as if nothing had happened — even
+// though MILO's own cart showed the full validated result.
+//
+// Fix: never give up. After POLL_BACKOFF_AFTER_MS, ease off the poll cadence
+// (no point hammering every 2.5s for a run that's taking minutes) but keep
+// polling until the run reaches a terminal status or the component unmounts
+// (cancelledRef). validate_only is provably safe to wait on indefinitely —
+// Stage 5 (checkout) is never reached.
+const POLL_BACKOFF_AFTER_MS = 60 * 1000;
+const POLL_BACKOFF_INTERVAL_MS = 10_000;
 
 /**
  * Optional hook into a background pre-validate cache (task #47, 2026-06-02).
@@ -205,15 +221,14 @@ export function useSubmission(
       submitResult: SubmitResult | null;
     }> => {
       const pollStart = Date.now();
+      let interval = POLL_INTERVAL_MS;
       while (!cancelledRef.current) {
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        await new Promise((resolve) => setTimeout(resolve, interval));
         if (cancelledRef.current) {
           throw new Error("Polling cancelled");
         }
-        if (Date.now() - pollStart > MAX_POLL_MS) {
-          throw new Error(
-            "Polling timed out after 5 minutes. The run may still complete in the background — check Orders.",
-          );
+        if (Date.now() - pollStart > POLL_BACKOFF_AFTER_MS) {
+          interval = POLL_BACKOFF_INTERVAL_MS;
         }
         const summaryRes = await getRunSummary({ runId });
         if (!summaryRes.ok) {
