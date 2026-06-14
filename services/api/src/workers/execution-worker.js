@@ -30,6 +30,30 @@ function joinApiPath(apiBaseUrl, pathname) {
   return `${base}${pathPart}`;
 }
 
+// P0 (2026-06-14): claimNextRun/heartbeatRun/finalizeRun's fetch() calls had
+// NO timeout. On 2026-06-14 16:03 UTC the worker→API connection went bad and
+// every fetch() hung for 2-15 MINUTES before finally throwing "fetch failed"
+// — for 4.5+ hours straight. During that window a real $4000 validate run sat
+// at zero stage progress for the full 5-minute client poll and timed out,
+// because the worker couldn't even CLAIM it in bounded time. "fetch failed"
+// doesn't match isTransientUpstreamError's HTTP-5xx regex either, so it also
+// got the slow 30s ERROR_BACKOFF_MS instead of the fast transient path.
+// Bounding every API call to API_FETCH_TIMEOUT_MS turns "hang for minutes" —
+// or hours — into "fail in 20s and retry on the fast path" (see
+// run-rpa-worker.js's updated isTransientUpstreamError).
+const API_FETCH_TIMEOUT_MS = 20_000;
+
+async function fetchWithTimeout(url, options) {
+  try {
+    return await fetch(url, { ...options, signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS) });
+  } catch (err) {
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      throw new Error(`Fetch timeout after ${API_FETCH_TIMEOUT_MS / 1000}s: ${url}`);
+    }
+    throw err;
+  }
+}
+
 async function readJsonResponse(res) {
   const text = await res.text();
   let body;
@@ -235,7 +259,7 @@ function serviceRoleHeaders(storeId) {
 
 export async function claimNextRun({ apiBaseUrl, workerId, workerNotes }) {
   const url = joinApiPath(apiBaseUrl, "/execution-runs/claim-next");
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "POST",
     headers: serviceRoleHeaders(),
     body: JSON.stringify({ workerId, workerNotes }),
@@ -260,7 +284,7 @@ export async function heartbeatRun({
   workerNotes,
 }) {
   const url = joinApiPath(apiBaseUrl, `/execution-runs/${runId}/heartbeat`);
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "PATCH",
     headers: serviceRoleHeaders(storeId),
     body: JSON.stringify({
@@ -292,7 +316,7 @@ export async function finalizeRun({
   evidence,
 }) {
   const url = joinApiPath(apiBaseUrl, `/execution-runs/${runId}/status`);
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "PATCH",
     headers: serviceRoleHeaders(storeId),
     body: JSON.stringify({

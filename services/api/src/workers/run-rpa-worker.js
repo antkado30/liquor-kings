@@ -55,10 +55,21 @@ const TRANSIENT_5XX_BACKOFF_MS = 8_000;
 // claimNextRun (and friends) throw Error("HTTP <code>: ...") on non-2xx.
 // 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout are the
 // signatures Fly's proxy emits while waking a stopped/booting machine.
+//
+// 2026-06-14 P0: also treat raw network failures as transient. Node's
+// fetch() throws TypeError("fetch failed") on a dead/refused connection, and
+// execution-worker.js's new fetchWithTimeout() throws "Fetch timeout after
+// 20s: ..." when a connection hangs instead of failing outright (this is
+// what turned a bad worker->API connection into a 4.5-HOUR stall on
+// 2026-06-14 — every fetch hung for minutes before throwing, and the old
+// "fetch failed" message didn't match this regex, so it got the slow 30s
+// ERROR_BACKOFF_MS too). Both now get the fast 8s retry — a flaky connection
+// should self-heal in seconds, not minutes.
 const TRANSIENT_HTTP_RE = /^HTTP (502|503|504)\b/;
+const TRANSIENT_NETWORK_RE = /^(fetch failed|Fetch timeout)/;
 function isTransientUpstreamError(err) {
   const msg = err instanceof Error ? err.message : String(err);
-  return TRANSIENT_HTTP_RE.test(msg);
+  return TRANSIENT_HTTP_RE.test(msg) || TRANSIENT_NETWORK_RE.test(msg);
 }
 
 const apiBaseUrl = process.env.API_BASE_URL ?? "http://127.0.0.1:8080";
