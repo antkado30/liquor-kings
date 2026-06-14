@@ -561,6 +561,21 @@ router.post("/:storeId/items/bulk", async (req, res) => {
     cart = newCart;
   }
 
+  // P0 (2026-06-14, Sweep 4): the comment above promises "no partial /
+  // half-cleared state", but delete-then-insert is NOT atomic — if the
+  // insert below fails (transient DB error, etc.) after the delete
+  // succeeds, the cart is left silently EMPTY even though the request
+  // failed with a 500. The scanner would then show an empty cart with no
+  // indication the user's items were wiped server-side. Snapshot the
+  // existing rows first so we can restore them on insert failure.
+  const { data: previousItems, error: previousError } = await supabase
+    .from("cart_items")
+    .select("bottle_id, mlcc_item_id, store_id, quantity")
+    .eq("cart_id", cart.id);
+  if (previousError) {
+    return res.status(500).json({ success: false, error: previousError.message });
+  }
+
   // All lines resolved — now it's safe to clear + insert.
   const { error: clearError } = await supabase
     .from("cart_items")
@@ -583,6 +598,33 @@ router.post("/:storeId/items/bulk", async (req, res) => {
     .insert(rows)
     .select("*");
   if (insertError) {
+    // Best-effort restore of the cart we just cleared so the user doesn't
+    // silently lose their cart on a transient insert failure. If the
+    // restore ALSO fails, surface that explicitly — that's the one case
+    // where the cart really is now empty and the client must re-sync.
+    if (previousItems && previousItems.length > 0) {
+      const restoreRows = previousItems.map((r) => ({
+        cart_id: cart.id,
+        bottle_id: r.bottle_id,
+        mlcc_item_id: r.mlcc_item_id,
+        store_id: r.store_id,
+        quantity: r.quantity,
+      }));
+      const { error: restoreError } = await supabase
+        .from("cart_items")
+        .insert(restoreRows);
+      if (restoreError) {
+        return res.status(500).json({
+          success: false,
+          error: insertError.message,
+          details: {
+            cartCleared: true,
+            restoreFailed: true,
+            restoreError: restoreError.message,
+          },
+        });
+      }
+    }
     return res.status(500).json({ success: false, error: insertError.message });
   }
 
