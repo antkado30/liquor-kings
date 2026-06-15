@@ -56,7 +56,11 @@ async function buildStalenessCard(supabase) {
     const { data, error } = await supabase
       .from("mlcc_price_book_runs")
       .select("completed_at, source_url")
-      .eq("status", "completed")
+      // 2026-06-14 full-app sweep: ingestor writes status="complete"/
+      // "complete_with_errors" (no "d") — this was "completed", which never
+      // matched, so this card NEVER fired no matter how stale the price book
+      // got. Silent failure of the staleness check itself.
+      .in("status", ["complete", "complete_with_errors"])
       .order("completed_at", { ascending: false })
       .limit(1)
       .maybeSingle();

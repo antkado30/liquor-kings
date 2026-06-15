@@ -217,7 +217,15 @@ const TOOLS = [
         status: {
           type: "string",
           description:
-            "Optional status filter, e.g. 'completed', 'failed', 'queued'",
+            // 2026-06-14 full-app sweep: actual execution_runs.status values
+            // are queued/running/succeeded/failed/canceled — "completed" is
+            // not a real value. The old description told the model to pass
+            // "completed", which matched zero rows and silently produced an
+            // empty (wrong) "you have no orders" answer for the most common
+            // question ("what did I order that completed"). Listed the real
+            // values; toolQueryOrderHistory also normalizes "completed" as
+            // a defensive fallback.
+            "Optional status filter — one of: 'queued', 'running', 'succeeded', 'failed', 'canceled'",
         },
       },
     },
@@ -422,7 +430,21 @@ async function toolQueryOrderHistory(input, { supabase, storeId }) {
     .eq("store_id", storeId)
     .order("created_at", { ascending: false });
   if (input.status) {
-    query = query.eq("status", String(input.status).trim());
+    // 2026-06-14 full-app sweep: normalize common synonyms the model may
+    // still produce ("completed"/"complete"/"done" -> "succeeded",
+    // "error" -> "failed", "cancelled" -> "canceled") so a near-miss term
+    // doesn't silently return zero rows.
+    const STATUS_SYNONYMS = {
+      completed: "succeeded",
+      complete: "succeeded",
+      done: "succeeded",
+      success: "succeeded",
+      error: "failed",
+      errored: "failed",
+      cancelled: "canceled",
+    };
+    const raw = String(input.status).trim().toLowerCase();
+    query = query.eq("status", STATUS_SYNONYMS[raw] ?? raw);
   }
   query = query.limit(clampLimit(input.limit, 10, 25));
   const { data, error } = await query;

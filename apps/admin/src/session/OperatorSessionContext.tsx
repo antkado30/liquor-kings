@@ -72,7 +72,18 @@ export function OperatorSessionProvider({ children }: { children: ReactNode }) {
         res.status === 401 &&
         (code === "operator_session_required" || /session/i.test(String(body.error ?? "")))
       ) {
-        await deleteSession();
+        // 2026-06-14 full-app sweep: deleteSession (fetchWithRetry) can
+        // throw on a network error/timeout. This function is called from
+        // loadRunsWithFilters/loadRunDetail/applyStoreSwitch — some of
+        // those callers don't wrap the call in try/catch (applyStoreSwitch
+        // doesn't), so an uncaught throw here would silently abort the
+        // store-switch with no message. The cookie clear is best-effort —
+        // we're resetting local state regardless.
+        try {
+          await deleteSession();
+        } catch {
+          /* best-effort cookie clear; local state reset below regardless */
+        }
         fullReset();
         setGateMsg({
           type: "warn",
@@ -85,7 +96,11 @@ export function OperatorSessionProvider({ children }: { children: ReactNode }) {
         return true;
       }
       if (res.status === 403 && code === "operator_session_revoked") {
-        await deleteSession();
+        try {
+          await deleteSession();
+        } catch {
+          /* best-effort cookie clear; see above */
+        }
         fullReset();
         const t = String(
           body.error ?? "Store access was revoked. Sign in again if you still have membership.",
@@ -151,10 +166,26 @@ export function OperatorSessionProvider({ children }: { children: ReactNode }) {
         setGateMsg({ type: "error", text: "Access token is required." });
         return false;
       }
-      const res = await postSession({
-        accessToken: accessToken.trim(),
-        storeId: preferredStoreId.trim() || null,
-      });
+      let res: Response;
+      try {
+        res = await postSession({
+          accessToken: accessToken.trim(),
+          storeId: preferredStoreId.trim() || null,
+        });
+      } catch (e) {
+        // 2026-06-14 full-app sweep: postSession (fetchWithRetry) THROWS
+        // after exhausting retries on a network error/timeout — this was
+        // unguarded, so SignInView's onSignIn() (which has no catch around
+        // `await connect(...)`) turned a network blip into an unhandled
+        // promise rejection: the "Signing in..." button reset to idle via
+        // its `finally`, but no error ever reached gateMsg. Same silent-
+        // failure class as AUDIT #28 (loadSession), just one level deeper.
+        setGateMsg({
+          type: "error",
+          text: `Network error while signing in: ${e instanceof Error ? e.message : String(e)}`,
+        });
+        return false;
+      }
       const body = await parseJson(res);
       if (!res.ok) {
         setGateMsg({ type: "error", text: String(body.error ?? "Failed to create session.") });
@@ -168,7 +199,17 @@ export function OperatorSessionProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    await deleteSession();
+    try {
+      await deleteSession();
+    } catch {
+      // 2026-06-14 full-app sweep: deleteSession (fetchWithRetry) throws on
+      // a network error after retries — previously unguarded, which made
+      // "Sign out" silently no-op on a flaky connection (unhandled
+      // rejection, button stuck, no message). Best-effort: clear local
+      // session state regardless so the user is at least locally signed
+      // out; loadSession() below will reconcile with the server once it's
+      // reachable again.
+    }
     fullReset();
     setGateMsg({ type: "success", text: "Signed out. Session cookie cleared." });
     setShellMsg({ type: "", text: "" });
@@ -178,7 +219,19 @@ export function OperatorSessionProvider({ children }: { children: ReactNode }) {
   const applyStoreSwitch = useCallback(async (): Promise<boolean> => {
     if (!storeSelect) return false;
     clearShellMsg();
-    const res = await patchSessionStore(storeSelect);
+    let res: Response;
+    try {
+      res = await patchSessionStore(storeSelect);
+    } catch (e) {
+      // 2026-06-14 full-app sweep: same class as connect() above —
+      // patchSessionStore throws on network error/timeout; previously
+      // unguarded, leaving the store-switch action silently unresolved.
+      setShellMsg({
+        type: "error",
+        text: `Network error while switching stores: ${e instanceof Error ? e.message : String(e)}`,
+      });
+      return false;
+    }
     const body = await parseJson(res);
     if (!res.ok) {
       if (await handleSessionFailure(res, body)) return false;

@@ -60,11 +60,19 @@ export const requestValidation = async (supabase, storeId) => {
       updated_at: new Date().toISOString(),
     })
     .eq("id", cart.id)
-    .select("*")
-    .single();
+    // .single() would throw PGRST116 (500) if the cart was deleted/changed
+    // between the fetch above and this update (race condition). .maybeSingle()
+    // + explicit 409 makes that the real status (2026-06-14, full-app sweep).
+    .maybeSingle();
 
   if (updateError) {
     return { statusCode: 500, body: { error: updateError.message } };
+  }
+  if (!updatedCart) {
+    return {
+      statusCode: 409,
+      body: { error: "Cart changed before validation could be requested" },
+    };
   }
 
   return {
@@ -141,11 +149,18 @@ export const recordValidationResult = async (
         validationStatus === "validated" ? null : (validationError ?? null),
     })
     .eq("id", submittedCart.id)
-    .select("*")
-    .single();
+    // .maybeSingle() + explicit 409: see requestValidation above
+    // (2026-06-14, full-app sweep).
+    .maybeSingle();
 
   if (updateError) {
     return { statusCode: 500, body: { error: updateError.message } };
+  }
+  if (!updatedCart) {
+    return {
+      statusCode: 409,
+      body: { error: "Cart changed before validation result could be recorded" },
+    };
   }
 
   return {
@@ -217,11 +232,18 @@ export const requestExecution = async (supabase, storeId) => {
       updated_at: new Date().toISOString(),
     })
     .eq("id", cart.id)
-    .select("*")
-    .single();
+    // .maybeSingle() + explicit 409: see requestValidation above
+    // (2026-06-14, full-app sweep).
+    .maybeSingle();
 
   if (updateError) {
     return { statusCode: 500, body: { error: updateError.message } };
+  }
+  if (!updatedCart) {
+    return {
+      statusCode: 409,
+      body: { error: "Cart changed before execution could be requested" },
+    };
   }
 
   return {
@@ -312,11 +334,18 @@ export const recordExecutionResult = async (
     .from("carts")
     .update(updatePayload)
     .eq("id", submittedCart.id)
-    .select("*")
-    .single();
+    // .maybeSingle() + explicit 409: see requestValidation above
+    // (2026-06-14, full-app sweep).
+    .maybeSingle();
 
   if (updateError) {
     return { statusCode: 500, body: { error: updateError.message } };
+  }
+  if (!updatedCart) {
+    return {
+      statusCode: 409,
+      body: { error: "Cart changed before execution result could be recorded" },
+    };
   }
 
   return {

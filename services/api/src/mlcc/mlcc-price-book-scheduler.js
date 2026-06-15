@@ -37,6 +37,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * @returns {Promise<{ ok: boolean, url: string | null, error?: string }>}
  */
 async function getLastCompletedIngestUrl(supabase) {
+  // 2026-06-14 full-app sweep: intentionally exact-matches "complete" only
+  // (NOT "complete_with_errors", per mlcc-price-book-ingestor.js). A run
+  // that finished with chunk-upsert errors must NOT count as "last
+  // completed" — otherwise checkAndIngestIfPriceBookChanged() would see
+  // lastUrl === currentUrl and skip re-ingesting a catalog we know is
+  // partially stale. Leaving lastUrl pointing at the prior good run keeps
+  // currentUrl !== lastUrl true, so the next cron tick retries. Do not
+  // widen this to .in(["complete", "complete_with_errors"]).
   const { data, error } = await supabase
     .from("mlcc_price_book_runs")
     .select("source_url, completed_at")

@@ -74,7 +74,11 @@ export async function saveStoreMlccCredentials(
     .select(
       "id, mlcc_username, mlcc_credentials_updated_at, mlcc_credentials_verified_at, mlcc_credentials_last_status",
     )
-    .single();
+    // .single() throws PGRST116 (as a returned `error`, masking the "store
+    // not found" branch below with a cryptic "no rows returned" message) if
+    // storeId doesn't match a row. .maybeSingle() lets the existing !data
+    // check below do its job (2026-06-14, full-app sweep).
+    .maybeSingle();
 
   if (error) {
     return { ok: false, error: error.message };
@@ -249,7 +253,8 @@ export async function clearStoreMlccCredentials(supabase, storeId) {
     })
     .eq("id", storeId)
     .select("id")
-    .single();
+    // .maybeSingle(): see saveStoreMlccCredentials above (2026-06-14, full-app sweep).
+    .maybeSingle();
 
   if (error) return { ok: false, error: error.message };
   if (!data) return { ok: false, error: "store not found" };

@@ -2443,10 +2443,19 @@ export const heartbeatExecutionRun = async (
     .eq("id", runId)
     .eq("store_id", storeId)
     .select("*")
-    .single();
+    // .single() would throw PGRST116 (500) if the run was reaped/changed
+    // between the fetch above and this update (race condition). .maybeSingle()
+    // + explicit 409 makes that the real status (2026-06-14, full-app sweep).
+    .maybeSingle();
 
   if (updateError) {
     return serverError(updateError.message);
+  }
+  if (!updatedRun) {
+    return {
+      statusCode: 409,
+      body: { error: "Execution run changed before heartbeat could be recorded" },
+    };
   }
 
   const syncErr = await updateOpenAttemptFromRunningRow(

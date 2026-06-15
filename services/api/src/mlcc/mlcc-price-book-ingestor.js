@@ -489,12 +489,26 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
       rowsUpserted,
       chunkUpsertErrors,
     });
+    // 2026-06-14 full-app sweep: previously this always wrote status="complete"
+    // even when one or more upsert chunks failed (line ~466-469 `continue`s
+    // past a failed chunk). That silently marked a PARTIAL catalog update as
+    // fully successful — the scheduler's "last completed ingest" dedup
+    // (mlcc-price-book-scheduler.js) would then treat the missing rows as
+    // already ingested and never retry, and the staleness card would think
+    // the catalog was fresh. Record the partial failure so the next daily
+    // cron check retries (currentUrl !== "last complete" url) and so the
+    // failure is visible on the run row.
+    const totalChunks = Math.ceil(upsertRows.length / UPSERT_BATCH_SIZE);
+    const partialFailure = chunkUpsertErrors > 0;
     await updateRun(supabase, runId, {
-      status: "complete",
+      status: partialFailure ? "complete_with_errors" : "complete",
       total_items: totalItems,
       new_items: newCount,
       updated_items: updatedCount,
       completed_at: new Date().toISOString(),
+      error_message: partialFailure
+        ? `${chunkUpsertErrors} of ${totalChunks} upsert chunk(s) failed — some catalog rows may be stale or missing`
+        : null,
     });
 
     return {
