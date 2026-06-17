@@ -54,6 +54,35 @@ const CART_READ_TIMEOUT_MS = 25_000;
 const DEFAULT_BATCH_SIZE = 10;
 const INTER_BATCH_SETTLE_MS = 800;
 
+/*
+  Poll granularities for the two Stage 3 "wait until it appears" loops.
+  SAFETY (why lowering these can't hurt): they control how OFTEN we check
+  for success, NOT how long we're willing to wait. The give-up CAPS are
+  separate and unchanged — DEFAULT_PER_ITEM_TIMEOUT_MS (18s) for the
+  per-item row wait, and the 10s budget for add-all confirmation. A tighter
+  poll only makes a SUCCESSFUL add detected sooner; it can never make us
+  give up earlier, so it cannot reintroduce the Tito's 750ml false-OOS
+  flake (the reason the per-item cap is 18s, see DEFAULT_PER_ITEM_TIMEOUT_MS).
+  Were 200ms / 300ms; lowered 2026-06-16 to shave poll-rounding slop off
+  every item and every batch on big carts.
+*/
+const ROW_POLL_INTERVAL_MS = 100;
+const ADD_ALL_POLL_INTERVAL_MS = 150;
+
+/*
+  Blind settle after Tab moves focus (code input -> qty input), before we
+  read document.activeElement (there is a qtyInput.focus() fallback if it
+  hasn't landed). Traced to the original Stage 3 impl (9c9072c, 2026-04-24);
+  no specific incident ties to this exact value, BUT it sits on the per-item
+  hot path (postTabSettleMs x N items) AND immediately before the qty fill —
+  fill too early, before MILO has settled focus, and the item can fail to
+  register (same observable symptom class as a false-OOS). So it is TUNABLE
+  but its default is deliberately left UNCHANGED: lower it only with a
+  real-MILO A/B run that confirms zero dropped items (override per call via
+  options.postTabSettleMs). Do NOT lower this default on a hunch.
+*/
+const DEFAULT_POST_TAB_SETTLE_MS = 300;
+
 /**
  * Stage 3 typed errors:
  * - MILO_STAGE3_INVALID_SESSION
@@ -347,7 +376,7 @@ async function waitForRowCountIncrease(page, startCount, timeoutMs) {
     if (rows.length > startCount) {
       return { ok: true, rows, waitedMs: Date.now() - started };
     }
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(ROW_POLL_INTERVAL_MS);
   }
   return { ok: false, rows: await collectQuickAddRows(page), waitedMs: Date.now() - started };
 }
@@ -418,7 +447,7 @@ async function waitForAddAllConfirmation(page, codeInput, qtyInput, timeoutMs = 
     if (lastState.formCleared || lastState.cartBadgeUpdated || lastState.toastVisible) {
       return { ok: true, waitedMs: Date.now() - start, state: lastState };
     }
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(ADD_ALL_POLL_INTERVAL_MS);
   }
   return { ok: false, waitedMs: Date.now() - start, state: lastState };
 }
@@ -721,6 +750,12 @@ export async function addItemsToCart(session, items, options = {}) {
         Math.max(DEFAULT_TIMEOUT_MS, 120_000 + normalizedItems.length * 4_000),
       );
   const perItemTimeoutMs = Number.isFinite(options.perItemTimeoutMs) ? Number(options.perItemTimeoutMs) : DEFAULT_PER_ITEM_TIMEOUT_MS;
+  // Tunable hot-path waits — defaults match historical behavior exactly, so
+  // omitting them changes nothing in prod. Exposed so the test runner can
+  // A/B them against real MILO before any default is lowered (see the
+  // DEFAULT_POST_TAB_SETTLE_MS / INTER_BATCH_SETTLE_MS comments).
+  const postTabSettleMs = Number.isFinite(options.postTabSettleMs) ? Number(options.postTabSettleMs) : DEFAULT_POST_TAB_SETTLE_MS;
+  const interBatchSettleMs = Number.isFinite(options.interBatchSettleMs) ? Number(options.interBatchSettleMs) : INTER_BATCH_SETTLE_MS;
   const captureArtifacts = options.captureArtifacts ?? true;
 
   if (!skipPreValidation) {
@@ -901,7 +936,11 @@ export async function addItemsToCart(session, items, options = {}) {
           }
 
           await page.keyboard.press("Tab");
-          await page.waitForTimeout(300);
+          // Let MILO move focus (code -> qty) before we read activeElement.
+          // Tunable via options.postTabSettleMs; default unchanged on purpose
+          // (see DEFAULT_POST_TAB_SETTLE_MS) — lowering it needs a real-MILO
+          // zero-drop A/B run, never a blind edit.
+          await page.waitForTimeout(postTabSettleMs);
           const qtyFocused = await qtyInput.evaluate((el) => document.activeElement === el).catch(() => false);
           if (!qtyFocused) {
             await qtyInput.focus().catch(() => {});
@@ -1044,7 +1083,8 @@ export async function addItemsToCart(session, items, options = {}) {
 
         // Brief settle pause between batches so MILO's quick-add list resets cleanly
         if (batchIdx < itemBatches.length - 1) {
-          await page.waitForTimeout(INTER_BATCH_SETTLE_MS);
+          // Tunable via options.interBatchSettleMs (default INTER_BATCH_SETTLE_MS).
+          await page.waitForTimeout(interBatchSettleMs);
         }
       }
 

@@ -225,12 +225,30 @@ if (stages.has("3")) {
   }
 
   try {
+    // Optional Stage 3 speed knobs for real-MILO A/B tuning. Unset/blank =>
+    // stage defaults (no behavior change). POST_TAB_SETTLE_MS is the big
+    // per-item lever; only lower it if the run still adds EVERY requested
+    // item (zero false-OOS) — that is the safety gate.
+    const numEnv = (name) => {
+      const raw = process.env[name];
+      if (raw == null || raw.trim() === "") return undefined;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const speedKnobs = {};
+    if (numEnv("POST_TAB_SETTLE_MS") !== undefined) speedKnobs.postTabSettleMs = numEnv("POST_TAB_SETTLE_MS");
+    if (numEnv("INTER_BATCH_SETTLE_MS") !== undefined) speedKnobs.interBatchSettleMs = numEnv("INTER_BATCH_SETTLE_MS");
+    if (numEnv("BATCH_SIZE") !== undefined) speedKnobs.batchSize = numEnv("BATCH_SIZE");
+    if (Object.keys(speedKnobs).length > 0) {
+      console.log(`[stage 3] speed knobs: ${JSON.stringify(speedKnobs)}`);
+    }
     // Signature: addItemsToCart(session, items, options). skipPreValidation
     // bypasses the ada_number lookup that would otherwise require mlccLookup.
     stage3Result = await addItemsToCart(stage2Result, items, {
       skipPreValidation: true,
       captureArtifacts: true,
       outputDir: `${outputDir}/stage3`,
+      ...speedKnobs,
     });
     console.log(`[stage 3] OK in ${stage3Result.stage3DurationMs ?? "?"}ms`);
     if (stage3Result.cartClearResult) {
