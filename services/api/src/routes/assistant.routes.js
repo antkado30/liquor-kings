@@ -12,7 +12,7 @@
  */
 
 import express from "express";
-import { askAssistant } from "../lib/assistant.js";
+import { askAssistant, resolveOrderList } from "../lib/assistant.js";
 
 const router = express.Router();
 
@@ -30,6 +30,8 @@ router.post("/ask", async (req, res) => {
   const storeId = body.storeId ? String(body.storeId) : null;
   const imageDataUri =
     typeof body.imageDataUri === "string" ? body.imageDataUri.trim() : "";
+  // Conversation history so follow-ups keep context (fixes "every one of what?").
+  const history = Array.isArray(body.history) ? body.history : [];
 
   if (!question && !imageDataUri) {
     return res.status(400).json({ error: "question or imageDataUri is required" });
@@ -40,6 +42,7 @@ router.post("/ask", async (req, res) => {
       question,
       storeId,
       imageDataUri: imageDataUri || null,
+      history,
     });
     return res.json(result);
   } catch (e) {
@@ -51,6 +54,38 @@ router.post("/ask", async (req, res) => {
       return res.status(503).json({ error: message });
     }
     console.error("[assistant] request failed:", message);
+    return res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /assistant/resolve-order
+ * Body: { text: string }  — a free-text reorder list, however messy.
+ * 200 → { lines: [{ input, name, sizeMl, qty, best, alternates, confidence }], parseModel }
+ * 400 → { error } when text is missing
+ * 503 → { error } when ANTHROPIC_API_KEY not configured
+ * 500 → { error } on unexpected failure
+ *
+ * Resolves each line to an MLCC code (LLM parses the text; deterministic
+ * matching finds codes). Read-only — the client adds confirmed lines to the
+ * cart via the normal authenticated cart API.
+ */
+router.post("/resolve-order", async (req, res) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  if (!text) {
+    return res.status(400).json({ error: "text is required" });
+  }
+  try {
+    const result = await resolveOrderList({ text });
+    return res.json(result);
+  } catch (e) {
+    const message = e?.message || String(e);
+    const isConfigError = /ANTHROPIC_API_KEY/.test(message);
+    if (isConfigError) {
+      console.error("[assistant] resolve-order config error:", message);
+      return res.status(503).json({ error: message });
+    }
+    console.error("[assistant] resolve-order failed:", message);
     return res.status(500).json({ error: message });
   }
 });

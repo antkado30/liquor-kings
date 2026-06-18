@@ -82,6 +82,66 @@ hardening all carries over — nothing built now is throwaway.
 
 ---
 
+## 🔥 Bulk paste-to-cart via the AI (stated 2026-06-16)
+
+> "I want to send all that type of stuff to the AI and it has an option to
+> add to cart — or verify before adding to cart, then add to cart. That shit
+> would be amazing." Tony pasted his full weekly order (~25 lines) into the
+> assistant and it failed badly.
+
+**Two real bugs found 2026-06-16 (root-caused):**
+1. **Assistant is STATELESS** — `POST /assistant/ask` takes only
+   `{question, storeId, image}`; no conversation history. Follow-ups lose all
+   context ("every one of *what*?"). FIX: thread message history from client →
+   endpoint → `askAssistant`. Pure bug — freeze-compatible hardening.
+2. **Can't bulk-resolve** — `MAX_TOOL_ITERATIONS = 8` + `query_catalog` is
+   one-search-per-call, so a 25-line list can't be resolved in the loop. FIX:
+   a `resolve_order_list` tool that takes an array of `{name, size, qty}` and
+   returns the best-match code per line in ONE call.
+
+**The feature (the want):** paste a free-text order list → AI resolves every
+line to a code (best match + alternatives, flags the ambiguous) → shows a
+VERIFY screen (line · matched bottle · size · code · qty) → one tap **"Add all
+to cart."** This is THE killer workflow for every store owner (not just
+Colony) — it's how real weekly orders actually get entered, and it's a huge
+scale/onboarding lever.
+
+**Interim shipped 2026-06-16:** `services/api/scripts/resolve-order-codes.mjs`
+— a CLI that bulk-resolves an order list against prod (runs on Tony's Mac).
+Proves the matching logic; becomes the core of the `resolve_order_list` tool.
+
+Status: ⏳ bugs #1 + #2 are freeze-compatible hardening; the verify + add-to-cart
+UI is a feature — sequencing vs the 3-order mandate is Tony's call.
+
+---
+
+## 🗄️ Permanent price-book archive + history (stated 2026-06-16)
+
+> "Whenever I give you the whole MLCC price book file, create a file on the
+> database with every single price book — keep everything FOREVER. So the AI
+> can answer 'how did this price change in the past two months / quarter' by
+> comparing the old one vs the new one. Good to have everything on deck."
+
+**Plan (build when Tony sends a price-book file):**
+- `mlcc_price_book_snapshots` — one row per price-book version (published_date,
+  source_url/hash, ingested_at, row_count) + the RAW file kept in Supabase
+  Storage, full fidelity, forever.
+- `mlcc_price_history` — per item, per snapshot: code, name, size,
+  licensee_price, shelf_price, state_min, ada, captured_at. Enables "price of
+  code X over time."
+- AI tool `query_price_history(code|name, period)` → assistant answers "how did
+  this change last quarter," trends, biggest movers. Real moat + retention hook.
+- The daily cron already DETECTS when MLCC republishes — wire it to
+  snapshot + diff instead of just overwrite-ingest.
+- Groundwork exists: `mlcc_price_book_runs` (ingest audit) +
+  `mlcc_items.price_changed_at` (latest-change stamp only, no history). This adds
+  the real time-series.
+
+Status: 💡 designed, waiting on Tony's price-book file to build the ingestion +
+migration.
+
+---
+
 > **What this is:** A permanent, living list of everything Tony has asked
 > Liquor Kings to be, do, or become. Updated as things land. Checkmarks
 > mean shipped to prod. Read this AT THE START of every session before

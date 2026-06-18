@@ -40,6 +40,7 @@ export function formatAssistantError(raw: string): string {
 export async function askAssistant(
   question: string,
   imageDataUri?: string,
+  history?: { role: "user" | "assistant"; content: string }[],
 ): Promise<AssistantResult> {
   const trimmed = question.trim();
   const image =
@@ -68,6 +69,7 @@ export async function askAssistant(
           question: trimmed,
           ...(storeId ? { storeId } : {}),
           ...(image ? { imageDataUri: image } : {}),
+          ...(history && history.length ? { history } : {}),
         }),
       },
       { maxRetries: 1, baseDelayMs: 600, timeoutMs: 30_000 },
@@ -95,4 +97,73 @@ export async function askAssistant(
     answer: raw.answer,
     model: typeof raw.model === "string" ? raw.model : "",
   };
+}
+
+// ── Bulk order resolve (paste a list → MLCC codes) ─────────────────────────
+
+export interface ResolvedCandidate {
+  id: string;
+  code: string;
+  name: string;
+  ada_number: string;
+  ada_name: string | null;
+  bottle_size_ml: number | null;
+  bottle_size_label: string | null;
+  case_size: number | null;
+  licensee_price: number | null;
+  proof: number | null;
+  base_price: number | null;
+  min_shelf_price: number | null;
+}
+
+export interface ResolvedLine {
+  input: { name: string; size: string | null; qty: number | null };
+  name: string;
+  sizeMl: number | null;
+  qty: number | null;
+  best: ResolvedCandidate | null;
+  alternates: ResolvedCandidate[];
+  confidence: "high" | "medium" | "review" | "none";
+  exactHit: boolean | null;
+  total: number;
+}
+
+export type ResolveOrderResult =
+  | { ok: true; lines: ResolvedLine[] }
+  | { ok: false; error: string };
+
+/** Resolve a free-text reorder list to MLCC codes for a verify-then-add flow. */
+export async function resolveOrder(text: string): Promise<ResolveOrderResult> {
+  const trimmed = text.trim();
+  if (!trimmed) return { ok: false, error: "Paste your order first." };
+
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      "/assistant/resolve-order",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: trimmed }),
+      },
+      { maxRetries: 1, baseDelayMs: 600, timeoutMs: 30_000 },
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: formatAssistantError(msg) };
+  }
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { ok: false, error: formatAssistantError("network_error") };
+  }
+
+  if (!res.ok || !Array.isArray(raw.lines)) {
+    const err = typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`;
+    return { ok: false, error: formatAssistantError(err) };
+  }
+
+  return { ok: true, lines: raw.lines as ResolvedLine[] };
 }

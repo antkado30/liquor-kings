@@ -337,6 +337,10 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
     if ((!q && !image) || isAsking || imageBusy) return;
 
     const displayText = q || "What's in this photo?";
+    // Send prior turns so the assistant keeps context (fixes "every one of what?").
+    const priorTurns = messages
+      .map((m) => ({ role: m.role, content: m.text }))
+      .filter((m) => m.content.trim());
     setAskError(null);
     setFailedAsk(null);
 
@@ -355,7 +359,7 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
     }
 
     setIsAsking(true);
-    const result = await askAssistant(displayText, image);
+    const result = await askAssistant(displayText, image, priorTurns);
     setIsAsking(false);
 
     if (result.ok) {

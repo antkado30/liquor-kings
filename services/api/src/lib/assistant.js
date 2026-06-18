@@ -35,6 +35,11 @@ import {
   SPLIT_CASE_RULES_BY_SIZE_ML,
 } from "../mlcc/milo-ordering-rules.js";
 import { validateCartByCodes } from "./cart-validation.js";
+import {
+  resolveOrderLine,
+  sizeFromText,
+  preferFromText,
+} from "./resolve-order-lines.js";
 
 // Sonnet — the V1 model choice (strong tool-use, low per-question cost).
 // Override with ANTHROPIC_MODEL if the string changes.
@@ -642,6 +647,118 @@ function buildUserMessageContent({ question, imageDataUri }) {
   ];
 }
 
+// ── Conversation history (fixes the "every one of what?" context loss) ─────
+
+/**
+ * Keep only well-formed prior turns, cap length to bound tokens. Additive:
+ * with no history the assistant behaves exactly as before.
+ */
+function sanitizeHistory(history) {
+  if (!Array.isArray(history)) return [];
+  return history
+    .filter(
+      (m) =>
+        m &&
+        (m.role === "user" || m.role === "assistant") &&
+        typeof m.content === "string" &&
+        m.content.trim(),
+    )
+    .slice(-10)
+    .map((m) => ({ role: m.role, content: m.content }));
+}
+
+// ── Bulk order resolution (paste a messy list → MLCC codes) ────────────────
+
+const ORDER_PARSE_SYSTEM = `You parse a liquor store owner's messy, hand-written reorder list into structured JSON.
+
+Output ONLY a JSON array, nothing else. Each element:
+  { "name": string, "size": string|null, "qty": number|null }
+
+Rules:
+- "name" = brand + variant, WITHOUT size/packaging words. KEEP flavor/variant words (e.g. "Crown Royal Apple", "Dr McGillicuddy's Coffee", "Seagram's 7", "Mohawk 80").
+- "size" = exactly one of "750ml","375ml","200ml","1000ml","1750ml","50ml", or null if unstated. Map slang: fifth=750ml, pint=375ml, half pint=200ml, "1/2 gallon"/"half gallon"/handle=1750ml, liter=1000ml.
+- "qty" = the integer count requested, or null if it says "case" or is unstated.
+- Expand shorthand: "same with pint 6" means the PREVIOUS brand, pint size, qty 6.
+- If the text says plastic or glass, append " plastic" or " glass" to name.
+- One element per distinct product+size. Never invent items not in the text.`;
+
+function extractJsonArray(text) {
+  const s = String(text || "");
+  const start = s.indexOf("[");
+  const end = s.lastIndexOf("]");
+  if (start === -1 || end === -1 || end < start) return null;
+  try {
+    return JSON.parse(s.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a free-text order list into MLCC codes for a verify-then-add-to-cart
+ * flow. The LLM ONLY parses the messy text into {name,size,qty} lines; the
+ * actual code match runs through the deterministic resolveOrderLine() — never
+ * the LLM (one wrong code = a wrong bottle). Returns one entry per line with a
+ * best match + alternates + confidence. This NEVER writes to the cart; the
+ * client adds confirmed lines via the normal authenticated cart API.
+ */
+export async function resolveOrderList({ text, supabase = supabaseDefault }) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) throw new Error("resolveOrderList: text is required");
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error("resolveOrderList: ANTHROPIC_API_KEY env var is not set");
+  }
+
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const resp = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2048,
+    system: ORDER_PARSE_SYSTEM,
+    messages: [{ role: "user", content: trimmed.slice(0, 6000) }],
+  });
+  const raw = resp.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+  const parsed = extractJsonArray(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error("resolveOrderList: could not parse the list into items");
+  }
+
+  const candidates = parsed
+    .slice(0, 100)
+    .map((item) => {
+      const name = String(item?.name || "").trim();
+      if (!name) return null;
+      const sizeMl = sizeFromText(String(item?.size || "")) ?? sizeFromText(name) ?? null;
+      const qty =
+        Number.isFinite(Number(item?.qty)) && Number(item.qty) > 0
+          ? Math.floor(Number(item.qty))
+          : null;
+      return { name, size: item?.size ?? null, sizeMl, qty, prefer: preferFromText(name) };
+    })
+    .filter(Boolean);
+
+  const lines = await Promise.all(
+    candidates.map(async (c) => {
+      const r = await resolveOrderLine(supabase, c);
+      return {
+        input: { name: c.name, size: c.size, qty: c.qty },
+        name: c.name,
+        sizeMl: c.sizeMl,
+        qty: c.qty,
+        best: r.best,
+        alternates: r.alternates,
+        confidence: r.confidence,
+        exactHit: r.exactHit,
+        total: r.total,
+      };
+    }),
+  );
+
+  return { lines, parseModel: MODEL };
+}
+
 // ── Public entry point ────────────────────────────────────────────────────
 
 /**
@@ -658,6 +775,7 @@ export async function askAssistant({
   question,
   storeId = null,
   imageDataUri = null,
+  history = [],
   supabase = supabaseDefault,
 }) {
   const trimmed = String(question ?? "").trim();
@@ -677,6 +795,7 @@ export async function askAssistant({
   const toolCalls = [];
 
   const messages = [
+    ...sanitizeHistory(history),
     {
       role: "user",
       content: buildUserMessageContent({ question: trimmed, imageDataUri }),
