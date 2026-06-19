@@ -4,6 +4,7 @@ import {
   preferFromText,
   tokenizeName,
   scoreCandidate,
+  termAttempts,
 } from "../src/lib/resolve-order-lines.js";
 
 describe("sizeFromText", () => {
@@ -52,6 +53,21 @@ describe("tokenizeName", () => {
       "handmade",
       "vodka",
     ]);
+  });
+});
+
+describe("termAttempts (MLCC abbreviation fallback)", () => {
+  it("tries strict AND, then drops the brand lead, then the longest token", () => {
+    // 'Jack Daniel's' is 'J DANIELS' in MLCC — %jack% AND %daniel% finds
+    // nothing, so we must fall back to just 'daniels'.
+    expect(termAttempts(["jack", "daniels"])).toEqual([
+      ["jack", "daniels"],
+      ["daniels"],
+      ["daniels"],
+    ]);
+  });
+  it("a single term has no fallback", () => {
+    expect(termAttempts(["belvedere"])).toEqual([["belvedere"]]);
   });
 });
 

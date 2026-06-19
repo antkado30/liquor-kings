@@ -12,7 +12,7 @@ import { fetchWithRetry } from "./catalog";
 import { getStoreId } from "./cart";
 
 export type AssistantResult =
-  | { ok: true; answer: string; model: string }
+  | { ok: true; answer: string; model: string; resolvedOrder?: ResolvedOrderLine[] }
   | { ok: false; error: string };
 
 /** Map raw API / network codes to copy suitable for the chat UI. */
@@ -92,10 +92,22 @@ export async function askAssistant(
     return { ok: false, error: formatAssistantError(err) };
   }
 
+  // If the assistant resolved specific bottles, surface them so the chat can
+  // render an inline "Add to cart" card.
+  let resolvedOrder: ResolvedOrderLine[] | undefined;
+  const toolCalls = Array.isArray(raw.toolCalls)
+    ? (raw.toolCalls as Array<{ tool?: string; result?: { results?: ResolvedOrderLine[] } }>)
+    : [];
+  const rb = [...toolCalls].reverse().find((t) => t?.tool === "resolve_bottles");
+  if (rb?.result?.results && Array.isArray(rb.result.results) && rb.result.results.length > 0) {
+    resolvedOrder = rb.result.results;
+  }
+
   return {
     ok: true,
     answer: raw.answer,
     model: typeof raw.model === "string" ? raw.model : "",
+    ...(resolvedOrder ? { resolvedOrder } : {}),
   };
 }
 
@@ -114,6 +126,15 @@ export interface ResolvedCandidate {
   proof: number | null;
   base_price: number | null;
   min_shelf_price: number | null;
+}
+
+/** One line from the chat's resolve_bottles tool (in-chat add-to-cart card). */
+export interface ResolvedOrderLine {
+  requested: { name: string; size: string | null; qty: number | null };
+  confidence: "high" | "medium" | "review" | "none";
+  best: ResolvedCandidate | null;
+  alternates: ResolvedCandidate[];
+  match_count: number;
 }
 
 export interface ResolvedLine {

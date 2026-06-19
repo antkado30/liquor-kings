@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { askAssistant, formatAssistantError } from "../api/assistant";
+import type { ResolvedOrderLine } from "../api/assistant";
+import { ResolvedOrderCard } from "./ResolvedOrderCard";
 import { downscaleImageFile } from "../lib/downscaleImage";
 import type { CartContextValue } from "../hooks/useCart";
 import {
@@ -15,6 +17,8 @@ type Message = {
   role: "user" | "assistant";
   text: string;
   imagePreview?: string;
+  /** Bottles the assistant resolved → renders an inline Add-to-cart card. */
+  resolvedOrder?: ResolvedOrderLine[];
 };
 
 type FailedAsk = {
@@ -365,7 +369,12 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
     if (result.ok) {
       setMessages((prev) => [
         ...prev,
-        { id: nextIdRef.current++, role: "assistant", text: result.answer },
+        {
+          id: nextIdRef.current++,
+          role: "assistant",
+          text: result.answer,
+          ...(result.resolvedOrder ? { resolvedOrder: result.resolvedOrder } : {}),
+        },
       ]);
     } else {
       const message = formatAssistantError(result.error);
@@ -442,6 +451,9 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
                   <p className="assistant-msg__text">{m.text}</p>
                 )}
               </div>
+              {m.role === "assistant" && m.resolvedOrder && cart ? (
+                <ResolvedOrderCard lines={m.resolvedOrder} cart={cart} />
+              ) : null}
             </div>
           ))
         )}

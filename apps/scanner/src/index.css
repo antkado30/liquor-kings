@@ -6052,6 +6052,17 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   background: rgba(192, 57, 43, 0.1);
 }
 
+/* In-chat resolved-order card (reuses the bulkadd row/button styles). */
+.ordercard {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ordercard-done {
+  margin-top: 10px;
+}
+
 .browse-chip-v2__chevron {
   flex-shrink: 0;
   color: var(--text-muted);

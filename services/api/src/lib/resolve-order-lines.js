@@ -95,28 +95,59 @@ const SELECT_COLS =
  * @param {object} line - { name, terms?, sizeMl?, prefer?, qty? }
  * @returns {Promise<{best, alternates, exactHit, total, terms, confidence}>}
  */
+/**
+ * Ordered search attempts for a set of terms. MLCC abbreviates brand leads
+ * ("Jack Daniel's" → "J DANIELS", "Seagram's 7" → "SEAGRAM'S 7"), so a strict
+ * %jack% AND %daniel% match finds nothing. If the strict AND yields no rows we
+ * drop the brand-lead token, then fall back to the single most-distinctive
+ * (longest) token. Each fallback runs only when the prior found nothing, so it
+ * can only turn a zero-result into a result — never override a good strict hit.
+ */
+export function termAttempts(terms) {
+  const t = terms.slice(0, 6);
+  const attempts = [t];
+  if (t.length > 1) attempts.push(t.slice(1));
+  if (t.length > 1) {
+    const longest = [...t].sort((a, b) => b.length - a.length)[0];
+    attempts.push([longest]);
+  }
+  return attempts;
+}
+
+async function queryByTerms(supabase, terms) {
+  let q = supabase.from("mlcc_items").select(SELECT_COLS);
+  for (const t of terms) q = q.ilike("name", `%${t}%`);
+  return q.limit(80);
+}
+
 export async function resolveOrderLine(supabase, line) {
-  const terms =
+  const baseTerms =
     Array.isArray(line.terms) && line.terms.length
       ? line.terms.map((t) => String(t).toLowerCase()).slice(0, 6)
       : tokenizeName(line.name);
-  if (terms.length === 0) {
-    return { best: null, alternates: [], exactHit: false, total: 0, terms, confidence: "none" };
+  if (baseTerms.length === 0) {
+    return { best: null, alternates: [], exactHit: false, total: 0, terms: baseTerms, confidence: "none" };
   }
 
-  let q = supabase.from("mlcc_items").select(SELECT_COLS);
-  for (const t of terms) q = q.ilike("name", `%${t}%`);
-  const { data, error } = await q.limit(80);
-  if (error) {
-    return { best: null, alternates: [], exactHit: false, total: 0, terms, error: error.message, confidence: "none" };
+  let all = [];
+  let usedTerms = baseTerms;
+  for (const attempt of termAttempts(baseTerms)) {
+    const { data, error } = await queryByTerms(supabase, attempt);
+    if (error) {
+      return { best: null, alternates: [], exactHit: false, total: 0, terms: attempt, error: error.message, confidence: "none" };
+    }
+    if (data && data.length > 0) {
+      all = data;
+      usedTerms = attempt;
+      break;
+    }
   }
 
-  const all = data || [];
   const exact = line.sizeMl ? all.filter((c) => c.bottle_size_ml === line.sizeMl) : all;
   const pool = line.sizeMl && exact.length > 0 ? exact : all;
   pool.sort(
     (a, b) =>
-      scoreCandidate(a.name, terms, line.prefer) - scoreCandidate(b.name, terms, line.prefer) ||
+      scoreCandidate(a.name, usedTerms, line.prefer) - scoreCandidate(b.name, usedTerms, line.prefer) ||
       a.name.localeCompare(b.name),
   );
 
@@ -133,7 +164,7 @@ export async function resolveOrderLine(supabase, line) {
     alternates: ranked.slice(1),
     exactHit,
     total: all.length,
-    terms,
+    terms: usedTerms,
     confidence,
   };
 }

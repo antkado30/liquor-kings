@@ -66,13 +66,16 @@ For these, answer directly and practically — like an experienced spirits buyer
 2) STORE ASSISTANT — When the question involves THIS store's MLCC catalog, codes, prices, order history, tracked inventory, MLCC ordering rules, cart validation, or how to use the Liquor Kings app, USE YOUR TOOLS. Never guess at a code, price, rule, quantity legality, past order, stock status, or whether the store carries something.
 
 WHEN TO USE TOOLS (required — do not guess store facts):
-- MLCC codes, catalog search, categories, state-minimum prices → query_catalog
+- The code for specific bottles the user named, a pasted order list, or "what's the code for X?" → resolve_bottles (prefer this over query_catalog for named products — it handles MLCC's abbreviated names and picks the plain bottle over flavors, in one call)
+- Browsing/searching the catalog by keyword or category, or an exact-code lookup → query_catalog
 - MLCC ordering rules stored in the system → query_rules
 - "What will X cost me?" / line totals → price_quote
 - Past orders, what was ordered when → query_order_history
 - What the store tracks on shelf / par / carry list → query_inventory
 - Valid split-case quantities for a size or code → check_order_quantity
 - "Will my cart validate?" / hypothetical cart checks → validate_cart
+
+NEVER falsely say a bottle isn't carried. MLCC stores names abbreviated and oddly — "Jack Daniel's" is "J DANIELS", "Seagram's 7" is "SEAGRAM'S 7 CROWN", plastic bottles end in " PL". A plain keyword search can miss the standard product. ALWAYS use resolve_bottles before telling anyone a product isn't in the catalog. If it returns low confidence or no match, say "I couldn't pin that one down — here are the closest matches" and show the alternates; do not declare it missing.
 
 WHEN TO ANSWER FROM KNOWLEDGE (no tools):
 - Pure education: "What's the difference between mezcal and tequila?"
@@ -91,13 +94,19 @@ When a question has both a general and a store-specific angle, use tools first f
 ABOUT LIQUOR KINGS:
 Liquor Kings automates spirits ordering through the Michigan Liquor Control Commission (MLCC). The operator scans bottles, builds a cart, reviews it, and submits. Liquor Kings then enters the order into MLCC's MILO system, validates it, and submits — returning the MLCC confirmation number. The operator always reviews and approves the cart before anything is submitted; Liquor Kings never places an order the operator did not approve.
 
-HOW THE OWNER USES LIQUOR KINGS (so you can help them use the app):
-- Scan: walk the store with the scanner and scan the barcode on bottles to reorder. Each scan adds that product to a cart.
-- Review: the cart groups items by ADA (distributor), shows running liter totals per ADA, flags any item that breaks an MLCC rule, and shows estimated cost.
-- Submit: one tap submits the order. Liquor Kings enters it into MLCC and returns the confirmation number.
-- Shelf tags: Liquor Kings can print MLCC shelf price tags.
-- This assistant: the owner can ask you anything about liquor in general OR about their catalog, rules, pricing, orders, and inventory.
-When an owner asks "how do I do X in the app," explain the user-facing steps simply.
+HOW THE OWNER USES LIQUOR KINGS (so you can help them use the app — when someone asks "how do I do X" or "where is Y," explain the user-facing steps simply and warmly):
+- Scan tab: scan a bottle's barcode (or take a photo of it) to add that product to the cart.
+- Catalog/Browse tab: browse and search the full MLCC catalog, filter by category, see prices and photos.
+- Cart tab: review the cart (grouped by ADA distributor, with running liter totals, rule flags, and estimated cost), adjust quantities, Validate against MLCC, then Submit.
+- Paste an order (on the Assistant/AI tab): paste a whole reorder list in any format — it finds every code, shows a verify screen, and adds them all to the cart at once. The fastest way to build a big order.
+- Templates: save a recurring order (e.g. the weekly order) and reload it into the cart; one can be scheduled to prep automatically.
+- Inventory: track shelf items, par levels, and low-stock reorder points.
+- Orders: see past orders with their MLCC confirmation numbers; reorder from any of them.
+- Settings (under More): store info, MLCC login + re-verify, legal links.
+- Shelf tags: print MLCC shelf price tags from an order or product.
+- Validate vs Submit: Validate checks the cart against MLCC live and shows what's in stock / out / any rule problems — nothing is ordered. Submit places the real order and returns the confirmation number.
+
+ADDING TO CART: you can FIND codes (resolve_bottles) but you do not write the cart yourself. To actually add items, tell the owner to use "Paste an order" on the Assistant tab (paste → verify → Add all), or to scan/search the code and enter the quantity. So when someone says "add these," resolve the codes for them and then point them to Paste an order to drop them in.
 
 KEY MLCC FACTS:
 - All Michigan spirits ordering goes through MLCC. There is no other wholesaler for spirits.
@@ -164,6 +173,38 @@ const TOOLS = [
           description: "Max rows to return (default 10, max 25)",
         },
       },
+    },
+  },
+  {
+    name: "resolve_bottles",
+    description:
+      "Find the correct MLCC code for one or many specific bottles the user named. Pass the items you parsed from their message. Returns the best-match code per item + alternates + a confidence flag, in ONE call. ALWAYS prefer this over query_catalog when the user names specific bottles, pastes an order list, or asks for codes — it handles MLCC's abbreviated names (e.g. 'Jack Daniel's' is stored as 'J DANIELS', 'Seagram's 7' as 'SEAGRAM'S 7') and picks the plain bottle over flavored variants, so it won't falsely miss a standard the way a raw name search does. If a result's confidence is 'review' or 'none', tell the user and show the alternates rather than guessing.",
+    input_schema: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          description: "Bottles to resolve, parsed from the user's message.",
+          items: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+                description:
+                  "Brand + variant, e.g. \"Jack Daniel's\" or \"Crown Royal Apple\". Keep flavor/variant words; drop size words.",
+              },
+              size: {
+                type: "string",
+                description:
+                  "Size if stated: one of '750ml','375ml','200ml','1000ml','1750ml','50ml'. Map slang: fifth=750ml, pint=375ml, half pint=200ml, half gallon/handle=1750ml.",
+              },
+              qty: { type: "number", description: "Quantity requested, if stated." },
+            },
+            required: ["name"],
+          },
+        },
+      },
+      required: ["items"],
     },
   },
   {
@@ -591,8 +632,58 @@ async function toolValidateCart(input, { supabase }) {
   };
 }
 
+/**
+ * resolve_bottles — THE bottle/code finder. Takes the items the model parsed
+ * from the user's message and returns the best MLCC code per item via the
+ * deterministic resolver (size-aware, flavor-penalized, and resilient to MLCC's
+ * abbreviated names like "J DANIELS"). One call handles a whole list — no
+ * per-item tool-loop, no missed standards. Prefer this over query_catalog
+ * whenever the user names specific bottles or asks for codes.
+ */
+async function toolResolveBottles(input, { supabase }) {
+  const items = Array.isArray(input.items) ? input.items.slice(0, 60) : [];
+  if (items.length === 0) return { error: "resolve_bottles requires items: [{name, size?, qty?}]" };
+  // Full enough for the client to build a valid cart line (id/ada/size/case),
+  // plus the human-readable size string the model uses when it talks.
+  const fmt = (c) =>
+    c
+      ? {
+          id: c.id,
+          code: c.code,
+          name: c.name,
+          size: c.bottle_size_label || (c.bottle_size_ml ? `${c.bottle_size_ml}ml` : null),
+          ada_number: c.ada_number,
+          ada_name: c.ada_name,
+          bottle_size_ml: c.bottle_size_ml,
+          bottle_size_label: c.bottle_size_label,
+          case_size: c.case_size,
+          licensee_price: c.licensee_price,
+          base_price: c.base_price,
+          min_shelf_price: c.min_shelf_price,
+          proof: c.proof,
+        }
+      : null;
+  const results = await Promise.all(
+    items.map(async (it) => {
+      const name = String(it?.name || "").trim();
+      if (!name) return { requested: it, error: "missing name" };
+      const sizeMl = sizeFromText(String(it?.size || "")) ?? sizeFromText(name) ?? null;
+      const r = await resolveOrderLine(supabase, { name, sizeMl, prefer: preferFromText(name) });
+      return {
+        requested: { name, size: it?.size ?? null, qty: it?.qty ?? null },
+        confidence: r.confidence,
+        best: fmt(r.best),
+        alternates: (r.alternates || []).slice(0, 4).map(fmt),
+        match_count: r.total,
+      };
+    }),
+  );
+  return { count: results.length, results };
+}
+
 const TOOL_IMPL = {
   query_catalog: toolQueryCatalog,
+  resolve_bottles: toolResolveBottles,
   query_rules: toolQueryRules,
   price_quote: toolPriceQuote,
   query_order_history: toolQueryOrderHistory,
