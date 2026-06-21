@@ -58,13 +58,20 @@ export function preferFromText(text) {
   return null;
 }
 
-/** Brand/identity tokens from a product name (drops sizes, fillers, numbers-only). */
+// Pure-number tokens that are BOTTLE SIZES (ml) — dropped from search terms
+// (the size lives in its own column, not the name). Other numbers are kept
+// because they're brand/age identity: 1792, 1800, 99, 360, 44, "10"/"12" yr.
+const SIZE_NUMBERS = new Set([
+  "50", "100", "200", "250", "375", "500", "700", "750", "1000", "1500", "1750",
+]);
+
+/** Brand/identity tokens from a product name (drops sizes, fillers; KEEPS brand numbers). */
 export function tokenizeName(name) {
   return String(name || "")
     .toLowerCase()
     .replace(/[^a-z0-9 ]/g, " ")
     .split(/\s+/)
-    .filter((w) => w && w.length > 1 && !STOPWORDS.has(w) && !/^\d+$/.test(w))
+    .filter((w) => w && w.length > 1 && !STOPWORDS.has(w) && !SIZE_NUMBERS.has(w))
     .slice(0, 6);
 }
 
@@ -80,26 +87,33 @@ const GENERIC_WORDS = new Set([
 // standard bottle. Demoted so the plain product wins.
 const VARIANT_RE = /\b(\d+\s*(yr|year)s?|variety)\b/;
 
-/** The longest distinctive (non-generic, ≥3-char) user term — the brand core. */
-function anchorTerm(lterms) {
-  const distinctive = lterms.filter((t) => t.length >= 3 && !GENERIC_WORDS.has(t));
-  if (distinctive.length === 0) return null;
-  return [...distinctive].sort((a, b) => b.length - a.length)[0];
-}
+// Penalty per DISTINCTIVE user term the candidate is MISSING. The brand words
+// matter most; a candidate missing one is probably a different product. Set
+// BELOW the flavor penalty (100) so an abbreviated standard ("J DANIELS",
+// missing the typed "jack") still beats a fully-spelled flavor
+// ("JACK DANIEL'S BLACKBERRY"), but high enough to kill cross-brand junk
+// ("ATWATER" for "tito") and descriptor collisions ("1792 FULL PROOF" for "fris").
+const MISSING_TERM_PENALTY = 60;
+
+// Mutually-exclusive spirit categories. If the user names one and a candidate
+// is a DIFFERENT one, it's the wrong product (McCormick Vodka vs McCormick Gin).
+const CONFLICT_CATS = ["vodka", "gin", "rum", "tequila", "brandy"];
 
 /**
- * Lower is better. The dominant signal: a candidate MUST contain the brand
- * anchor (e.g. "tito", "daniels") — missing it almost always means a different
- * product (the "ATWATER VODKA for Tito's" bug), so it's penalized hard. Then
+ * Lower is better. Dominant signal: the candidate should contain the user's
+ * DISTINCTIVE (non-generic) words — each one it's missing is penalized. Then
  * plain beats flavored/aged/variety, packaging preference, then brevity.
  */
 export function scoreCandidate(name, terms, prefer) {
   const lname = String(name || "").toLowerCase();
   const lterms = (terms || []).map((t) => String(t).toLowerCase());
 
-  const anchor = anchorTerm(lterms);
   let score = 0;
-  if (anchor && !lname.includes(anchor)) score += 1000;
+  for (const t of lterms) {
+    if (t.length >= 3 && !GENERIC_WORDS.has(t) && !lname.includes(t)) {
+      score += MISSING_TERM_PENALTY;
+    }
+  }
 
   let flavorPenalty = 0;
   for (const f of FLAVOR_WORDS) {
@@ -114,6 +128,20 @@ export function scoreCandidate(name, terms, prefer) {
   const isPL = / pl\b/.test(lname) || lname.endsWith(" pl");
   if (prefer === "plastic" && !isPL) score += 30;
   if (prefer === "glass" && isPL) score += 30;
+
+  // Category conflict: user named a distinct spirit category and the candidate
+  // is a different one (McCormick Vodka vs McCormick Gin). Word-boundary so
+  // "gin" doesn't match VIRGINIA/ORIGINAL; categories absent from the name
+  // (e.g. "CROWN ROYAL") never conflict.
+  const typedCat = CONFLICT_CATS.find((c) => lterms.includes(c));
+  if (typedCat) {
+    for (const c of CONFLICT_CATS) {
+      if (c !== typedCat && new RegExp(`\\b${c}\\b`).test(lname)) {
+        score += 50;
+        break;
+      }
+    }
+  }
 
   score += lname.length;
   return score;

@@ -37,16 +37,18 @@ describe("preferFromText", () => {
 });
 
 describe("tokenizeName", () => {
-  it("keeps brand identity, drops sizes/packaging/numbers", () => {
+  it("keeps brand identity + brand/proof numbers, drops sizes & packaging", () => {
     expect(tokenizeName("CROWN ROYAL REGAL APPLE")).toEqual([
       "crown",
       "royal",
       "regal",
       "apple",
     ]);
-    // 'PL' (plastic) and bare numbers are dropped.
-    expect(tokenizeName("SMIRNOFF 80 PL")).toEqual(["smirnoff"]);
+    // 'PL' (plastic) dropped; proof/brand numbers KEPT; bottle sizes dropped.
+    expect(tokenizeName("SMIRNOFF 80 PL")).toEqual(["smirnoff", "80"]);
     expect(tokenizeName("JIM BEAM PL")).toEqual(["jim", "beam"]);
+    expect(tokenizeName("1792 SINGLE BARREL")).toEqual(["1792", "single", "barrel"]);
+    expect(tokenizeName("1800 REPOSADO 750 ML")).toEqual(["1800", "reposado"]);
   });
   it("handles apostrophes (the Tito's bug)", () => {
     expect(tokenizeName("TITO'S HANDMADE VODKA")).toEqual([
@@ -96,6 +98,13 @@ describe("scoreCandidate (lower = better)", () => {
       scoreCandidate("ATWATER VODKA", terms, null),
     );
   });
+  it("requires distinctive brand words — descriptor collisions lose", () => {
+    // "fris proof" must beat "1792 FULL PROOF" (missing the brand 'fris').
+    const terms = ["fris", "proof"];
+    expect(scoreCandidate("FRIS VODKA 100 PROOF", terms, null)).toBeLessThan(
+      scoreCandidate("1792 FULL PROOF", terms, null),
+    );
+  });
   it("ranks the standard bottle above aged / variety expressions", () => {
     const terms = ["jack", "daniels"];
     const standard = scoreCandidate("J DANIELS OLD 7 BLACK", terms, null);
@@ -122,6 +131,18 @@ describe("scoreCandidate (lower = better)", () => {
     const plain = scoreCandidate("CROWN ROYAL", terms, null);
     const reserve = scoreCandidate("CROWN ROYAL RESERVE-12 YR", terms, null);
     expect(plain).toBeLessThan(reserve);
+  });
+  it("prefers the named category within a brand (McCormick Vodka vs Gin)", () => {
+    const terms = ["mccormick", "vodka"];
+    expect(scoreCandidate("MCCORMICK VODKA PL", terms, null)).toBeLessThan(
+      scoreCandidate("MCCORMICK GIN", terms, null),
+    );
+  });
+  it("does not false-trigger category conflict on substrings (gin in VIRGINIA)", () => {
+    // 'gin' inside 'VIRGINIA' must NOT count as a gin category for a vodka query.
+    const terms = ["virginia", "black"];
+    const noConflict = scoreCandidate("VIRGINIA BLACK", terms, null);
+    expect(noConflict).toBeLessThan(500); // no +50 conflict, no +1000 anything
   });
   it("respects glass vs plastic preference", () => {
     const terms = ["jim", "beam"];
