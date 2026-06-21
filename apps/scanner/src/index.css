@@ -1427,7 +1427,10 @@ select {
 
 .assistant-msg {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
   max-width: min(92%, 34rem);
+  min-width: 0;
 }
 
 .assistant-msg--user {
@@ -5985,6 +5988,10 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: -0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .bulkadd-conf {
   font-size: 0.6875rem;
@@ -5992,6 +5999,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .bulkadd-row-controls {
   display: flex;
@@ -6058,6 +6066,9 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 .ordercard-done {
   margin-top: 10px;

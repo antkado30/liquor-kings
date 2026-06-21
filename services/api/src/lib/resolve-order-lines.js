@@ -96,22 +96,32 @@ const SELECT_COLS =
  * @returns {Promise<{best, alternates, exactHit, total, terms, confidence}>}
  */
 /**
- * Ordered search attempts for a set of terms. MLCC abbreviates brand leads
- * ("Jack Daniel's" → "J DANIELS", "Seagram's 7" → "SEAGRAM'S 7"), so a strict
- * %jack% AND %daniel% match finds nothing. If the strict AND yields no rows we
- * drop the brand-lead token, then fall back to the single most-distinctive
- * (longest) token. Each fallback runs only when the prior found nothing, so it
- * can only turn a zero-result into a result — never override a good strict hit.
+ * PRECISE search sets — run together and MERGED. MLCC stores the SAME brand two
+ * ways: the standard bottle abbreviated ("J DANIELS OLD 7 BLACK") and flavored
+ * variants fully spelled ("JACK DANIEL'S BLACKBERRY"). A strict %jack% %daniels%
+ * finds only the flavored full-spelled ones and misses the standard. So we ALSO
+ * search the brand lead as its initial ("jack" → "j"), which matches BOTH
+ * spellings (and still requires the distinctive rest, so it won't pull a
+ * different brand like "GORDON DANIELS" that lacks a "j"). Merging both sets
+ * puts the real standard in the pool next to the flavors, and the flavor
+ * penalty in scoreCandidate then picks the plain bottle.
  */
-export function termAttempts(terms) {
+export function preciseTermSets(terms) {
   const t = terms.slice(0, 6);
-  const attempts = [t];
-  if (t.length > 1) attempts.push(t.slice(1));
-  if (t.length > 1) {
-    const longest = [...t].sort((a, b) => b.length - a.length)[0];
-    attempts.push([longest]);
+  const sets = [t];
+  if (t.length > 1 && t[0].length > 1) {
+    sets.push([t[0][0], ...t.slice(1)]);
   }
-  return attempts;
+  return sets;
+}
+
+/** Last-resort sets, used ONLY if precise found nothing (avoids cross-brand noise). */
+export function fallbackTermSets(terms) {
+  const t = terms.slice(0, 6);
+  const sets = [];
+  if (t.length > 1) sets.push(t.slice(1)); // drop the brand lead entirely
+  if (t.length > 1) sets.push([[...t].sort((a, b) => b.length - a.length)[0]]); // longest token
+  return sets;
 }
 
 async function queryByTerms(supabase, terms) {
@@ -129,31 +139,46 @@ export async function resolveOrderLine(supabase, line) {
     return { best: null, alternates: [], exactHit: false, total: 0, terms: baseTerms, confidence: "none" };
   }
 
-  let all = [];
-  let usedTerms = baseTerms;
-  for (const attempt of termAttempts(baseTerms)) {
-    const { data, error } = await queryByTerms(supabase, attempt);
+  // 1) PRECISE: run all precise sets and MERGE (dedupe by code).
+  const byCode = new Map();
+  for (const set of preciseTermSets(baseTerms)) {
+    const { data, error } = await queryByTerms(supabase, set);
     if (error) {
-      return { best: null, alternates: [], exactHit: false, total: 0, terms: attempt, error: error.message, confidence: "none" };
+      return { best: null, alternates: [], exactHit: false, total: 0, terms: set, error: error.message, confidence: "none" };
     }
-    if (data && data.length > 0) {
-      all = data;
-      usedTerms = attempt;
-      break;
+    for (const row of data || []) {
+      if (!byCode.has(row.code)) byCode.set(row.code, row);
+    }
+  }
+  let all = [...byCode.values()];
+
+  // 2) FALLBACK: only if precise found nothing.
+  if (all.length === 0) {
+    for (const set of fallbackTermSets(baseTerms)) {
+      const { data, error } = await queryByTerms(supabase, set);
+      if (error) {
+        return { best: null, alternates: [], exactHit: false, total: 0, terms: set, error: error.message, confidence: "none" };
+      }
+      if (data && data.length > 0) {
+        all = data;
+        break;
+      }
     }
   }
 
+  // Score against the user's ORIGINAL terms so the flavor penalty reflects intent.
   const exact = line.sizeMl ? all.filter((c) => c.bottle_size_ml === line.sizeMl) : all;
   const pool = line.sizeMl && exact.length > 0 ? exact : all;
   pool.sort(
     (a, b) =>
-      scoreCandidate(a.name, usedTerms, line.prefer) - scoreCandidate(b.name, usedTerms, line.prefer) ||
+      scoreCandidate(a.name, baseTerms, line.prefer) - scoreCandidate(b.name, baseTerms, line.prefer) ||
       a.name.localeCompare(b.name),
   );
 
   const ranked = pool.slice(0, 6);
   const exactHit = line.sizeMl ? exact.length > 0 : null;
-  // Confidence: one exact-size hit = high; multiple or no-exact-size = review.
+  // Confidence: exactly one exact-size hit = high; multiple (ambiguous) or
+  // no exact-size = review/medium so the UI flags it for the user's eye.
   let confidence = "review";
   if (ranked.length === 0) confidence = "none";
   else if (exactHit && exact.length === 1) confidence = "high";
@@ -164,7 +189,7 @@ export async function resolveOrderLine(supabase, line) {
     alternates: ranked.slice(1),
     exactHit,
     total: all.length,
-    terms: usedTerms,
+    terms: baseTerms,
     confidence,
   };
 }

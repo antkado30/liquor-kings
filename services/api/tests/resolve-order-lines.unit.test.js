@@ -4,7 +4,8 @@ import {
   preferFromText,
   tokenizeName,
   scoreCandidate,
-  termAttempts,
+  preciseTermSets,
+  fallbackTermSets,
 } from "../src/lib/resolve-order-lines.js";
 
 describe("sizeFromText", () => {
@@ -56,18 +57,30 @@ describe("tokenizeName", () => {
   });
 });
 
-describe("termAttempts (MLCC abbreviation fallback)", () => {
-  it("tries strict AND, then drops the brand lead, then the longest token", () => {
-    // 'Jack Daniel's' is 'J DANIELS' in MLCC — %jack% AND %daniel% finds
-    // nothing, so we must fall back to just 'daniels'.
-    expect(termAttempts(["jack", "daniels"])).toEqual([
+describe("preciseTermSets (merged precise search)", () => {
+  it("includes the strict terms AND the brand-lead-as-initial (jack -> j)", () => {
+    // 'Jack Daniel's' standard is 'J DANIELS'; flavors are 'JACK DANIEL'S ...'.
+    // Searching both ['jack','daniels'] and ['j','daniels'] then merging puts
+    // the standard in the pool next to the flavors.
+    expect(preciseTermSets(["jack", "daniels"])).toEqual([
       ["jack", "daniels"],
+      ["j", "daniels"],
+    ]);
+  });
+  it("a single term has just itself (no initial variant)", () => {
+    expect(preciseTermSets(["belvedere"])).toEqual([["belvedere"]]);
+  });
+});
+
+describe("fallbackTermSets (only used if precise finds nothing)", () => {
+  it("drops the brand lead, then the longest token", () => {
+    expect(fallbackTermSets(["jack", "daniels"])).toEqual([
       ["daniels"],
       ["daniels"],
     ]);
   });
   it("a single term has no fallback", () => {
-    expect(termAttempts(["belvedere"])).toEqual([["belvedere"]]);
+    expect(fallbackTermSets(["belvedere"])).toEqual([]);
   });
 });
 
