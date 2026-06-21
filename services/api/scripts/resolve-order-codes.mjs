@@ -21,6 +21,11 @@
  */
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
+import {
+  resolveOrderLine,
+  sizeFromText,
+  preferFromText,
+} from "../src/lib/resolve-order-lines.js";
 
 const SUPABASE_URL = process.env.LK_PROD_SUPABASE_URL || process.env.SUPABASE_URL;
 const KEY =
@@ -67,58 +72,43 @@ const ORDER = [
 
 const money = (cents) => (cents == null ? "" : `$${Number(cents).toFixed(2)}`);
 
-// Flavor/variant words. A candidate whose name contains one of these that the
-// search terms did NOT ask for gets penalized, so the PLAIN base product
-// surfaces above flavored line-extensions (plain Svedka over Svedka Banana).
-const FLAVOR_WORDS = [
-  "apple", "banana", "cherry", "honey", "fire", "peach", "vanilla", "cinnamon",
-  "coffee", "espresso", "mango", "pineapple", "raspberry", "citron", "lime",
-  "lemon", "orange", "grape", "watermelon", "coconut", "blueberry", "blackberry",
-  "caramel", "ginger", "mint", "peppermint", "clementine", "zombie", "hurricane",
-  "limon", "cream", "root beer", "apricot", "salted", "toasted", "spiced", "cake",
-  "punch", "melon", "strawberry", "grapefruit", "vanilla",
-];
+// Ad-hoc mode: pass bottle queries as args to test ANY item against prod, e.g.
+//   node scripts/resolve-order-codes.mjs "jack daniels 1.75" "titos 750"
+// No args → resolves the default ORDER above.
+const argItems = process.argv.slice(2).filter((a) => a && !a.startsWith("--"));
+const items =
+  argItems.length > 0
+    ? argItems.map((a) => ({
+        line: a,
+        name: a,
+        sizeMl: sizeFromText(a),
+        prefer: preferFromText(a) || undefined,
+      }))
+    : ORDER;
 
-function score(c, item) {
-  const name = c.name.toLowerCase();
-  const terms = item.terms.map((t) => t.toLowerCase());
-  let flavorPenalty = 0;
-  for (const f of FLAVOR_WORDS) {
-    if (name.includes(f) && !terms.some((t) => f.includes(t) || t.includes(f))) flavorPenalty++;
-  }
-  // Glass vs plastic (MLCC marks plastic with " PL"); nudges, never hides.
-  const isPL = / pl\b/.test(name) || name.endsWith(" pl");
-  let preferPenalty = 0;
-  if (item.prefer === "plastic" && !isPL) preferPenalty = 1;
-  if (item.prefer === "glass" && isPL) preferPenalty = 1;
-  return flavorPenalty * 100 + preferPenalty * 30 + name.length;
-}
-
+// Resolve via the SHARED engine (services/api/src/lib/resolve-order-lines.js) —
+// the EXACT matcher the app deploys, so this is a true prod test. Run it before
+// shipping a matcher change to confirm it's right against the real catalog.
 async function resolve(item) {
-  let q = supabase
-    .from("mlcc_items")
-    .select("code, name, bottle_size_ml, bottle_size_label, ada_number, licensee_price");
-  for (const t of item.terms) q = q.ilike("name", `%${t}%`);
-  const { data, error } = await q.limit(80);
-  if (error) return { item, error: error.message, picks: [], total: 0, exactHit: null };
-
-  const all = data || [];
-  const exact = item.sizeMl ? all.filter((c) => c.bottle_size_ml === item.sizeMl) : all;
-  const pool = item.sizeMl && exact.length > 0 ? exact : all;
-  // Plain-product-first: flavor penalty, then glass/plastic pref, then name length.
-  pool.sort((a, b) => score(a, item) - score(b, item) || a.name.localeCompare(b.name));
-  return {
-    item,
-    picks: pool.slice(0, 6),
-    total: all.length,
-    exactHit: item.sizeMl ? exact.length > 0 : null,
-  };
+  try {
+    const r = await resolveOrderLine(supabase, {
+      name: item.name,
+      terms: item.terms,
+      sizeMl: item.sizeMl,
+      prefer: item.prefer,
+    });
+    if (r.error) return { item, error: r.error, picks: [], total: 0, exactHit: null };
+    const picks = [r.best, ...(r.alternates || [])].filter(Boolean);
+    return { item, picks, total: r.total, exactHit: r.exactHit, confidence: r.confidence };
+  } catch (e) {
+    return { item, error: e.message, picks: [], total: 0, exactHit: null };
+  }
 }
 
-console.log(`\nResolving ${ORDER.length} order lines against prod mlcc_items...\n`);
+console.log(`\nResolving ${items.length} line(s) against prod mlcc_items...\n`);
 let resolved = 0;
 let needsEyes = 0;
-for (const item of ORDER) {
+for (const item of items) {
   const r = await resolve(item);
   const qtyTag = item.qty == null ? "[CASE/?]" : `[${item.qty}x]`;
   console.log(`${qtyTag} ${item.line}`);
@@ -129,7 +119,7 @@ for (const item of ORDER) {
     continue;
   }
   if (r.picks.length === 0) {
-    console.log(`   ⚠ NO MATCH — terms [${item.terms.join(", ")}] found nothing. Likely: not carried by MLCC, different spelling, or wrong terms.\n`);
+    console.log(`   ⚠ NO MATCH — [${(item.terms || []).join(", ") || item.name}] found nothing. Likely: not carried by MLCC, different spelling, or wrong terms.\n`);
     needsEyes++;
     continue;
   }
@@ -150,7 +140,7 @@ for (const item of ORDER) {
 }
 
 console.log("──────────────────────────────────────────");
-console.log(`Clean single-size matches: ${resolved} / ${ORDER.length}`);
+console.log(`Clean single-size matches: ${resolved} / ${items.length}`);
 console.log(`Need your eyes (ambiguous / no-exact-size / no-match): ${needsEyes}`);
 console.log(`\nALWAYS verify each code in-app before submitting — names are messy and codes rotate.\n`);
 process.exit(0);

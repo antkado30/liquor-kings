@@ -67,6 +67,11 @@ describe("preciseTermSets (merged precise search)", () => {
       ["j", "daniels"],
     ]);
   });
+  it("does NOT expand when the rest is only generic (tito vodka)", () => {
+    // ['tito','vodka'] must NOT become [['tito','vodka'],['t','vodka']] — that
+    // would flood the pool with every vodka (the ATWATER bug).
+    expect(preciseTermSets(["tito", "vodka"])).toEqual([["tito", "vodka"]]);
+  });
   it("a single term has just itself (no initial variant)", () => {
     expect(preciseTermSets(["belvedere"])).toEqual([["belvedere"]]);
   });
@@ -85,6 +90,18 @@ describe("fallbackTermSets (only used if precise finds nothing)", () => {
 });
 
 describe("scoreCandidate (lower = better)", () => {
+  it("rejects a cross-brand match missing the brand anchor (ATWATER for Tito's)", () => {
+    const terms = ["tito", "vodka"];
+    expect(scoreCandidate("TITO'S HANDMADE VODKA", terms, null)).toBeLessThan(
+      scoreCandidate("ATWATER VODKA", terms, null),
+    );
+  });
+  it("ranks the standard bottle above aged / variety expressions", () => {
+    const terms = ["jack", "daniels"];
+    const standard = scoreCandidate("J DANIELS OLD 7 BLACK", terms, null);
+    expect(standard).toBeLessThan(scoreCandidate("JACK DANIELS-10 YR", terms, null));
+    expect(standard).toBeLessThan(scoreCandidate("J DANIELS VARIETY PL", terms, null));
+  });
   it("ranks the plain product above flavored line-extensions", () => {
     const terms = ["svedka"];
     const plain = scoreCandidate("SVEDKA 80", terms, null);

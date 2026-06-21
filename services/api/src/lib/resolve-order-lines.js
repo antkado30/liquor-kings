@@ -68,21 +68,55 @@ export function tokenizeName(name) {
     .slice(0, 6);
 }
 
-/** Lower is better. Plain product first, size/packaging preference, then brevity. */
+// Generic category words — NOT distinctive (every vodka says "vodka"). Excluded
+// when picking the brand-anchor term so "tito vodka"'s anchor is "tito".
+const GENERIC_WORDS = new Set([
+  "vodka", "rum", "gin", "whiskey", "whisky", "tequila", "bourbon", "brandy",
+  "liqueur", "wine", "cognac", "scotch", "schnapps", "spirit", "spirits",
+  "cordial", "blended", "straight",
+]);
+
+// Age statements ("10 yr") + variety packs — premium/variant, never the
+// standard bottle. Demoted so the plain product wins.
+const VARIANT_RE = /\b(\d+\s*(yr|year)s?|variety)\b/;
+
+/** The longest distinctive (non-generic, ≥3-char) user term — the brand core. */
+function anchorTerm(lterms) {
+  const distinctive = lterms.filter((t) => t.length >= 3 && !GENERIC_WORDS.has(t));
+  if (distinctive.length === 0) return null;
+  return [...distinctive].sort((a, b) => b.length - a.length)[0];
+}
+
+/**
+ * Lower is better. The dominant signal: a candidate MUST contain the brand
+ * anchor (e.g. "tito", "daniels") — missing it almost always means a different
+ * product (the "ATWATER VODKA for Tito's" bug), so it's penalized hard. Then
+ * plain beats flavored/aged/variety, packaging preference, then brevity.
+ */
 export function scoreCandidate(name, terms, prefer) {
   const lname = String(name || "").toLowerCase();
   const lterms = (terms || []).map((t) => String(t).toLowerCase());
+
+  const anchor = anchorTerm(lterms);
+  let score = 0;
+  if (anchor && !lname.includes(anchor)) score += 1000;
+
   let flavorPenalty = 0;
   for (const f of FLAVOR_WORDS) {
     if (lname.includes(f) && !lterms.some((t) => f.includes(t) || t.includes(f))) {
       flavorPenalty += 1;
     }
   }
+  score += flavorPenalty * 100;
+
+  if (VARIANT_RE.test(lname)) score += 120;
+
   const isPL = / pl\b/.test(lname) || lname.endsWith(" pl");
-  let preferPenalty = 0;
-  if (prefer === "plastic" && !isPL) preferPenalty = 1;
-  if (prefer === "glass" && isPL) preferPenalty = 1;
-  return flavorPenalty * 100 + preferPenalty * 30 + lname.length;
+  if (prefer === "plastic" && !isPL) score += 30;
+  if (prefer === "glass" && isPL) score += 30;
+
+  score += lname.length;
+  return score;
 }
 
 // Enough columns to build a valid cart line client-side (id/code/name/ada_number
@@ -109,7 +143,11 @@ const SELECT_COLS =
 export function preciseTermSets(terms) {
   const t = terms.slice(0, 6);
   const sets = [t];
-  if (t.length > 1 && t[0].length > 1) {
+  // Only expand the brand lead to its initial (jack -> j) when the REST has a
+  // distinctive word to anchor on (e.g. "daniels"). Otherwise "tito vodka"
+  // would expand to [t, vodka] and flood the pool with every vodka.
+  const restDistinctive = t.slice(1).some((w) => w.length >= 4 && !GENERIC_WORDS.has(w));
+  if (t.length > 1 && t[0].length > 1 && restDistinctive) {
     sets.push([t[0][0], ...t.slice(1)]);
   }
   return sets;
@@ -126,7 +164,15 @@ export function fallbackTermSets(terms) {
 
 async function queryByTerms(supabase, terms) {
   let q = supabase.from("mlcc_items").select(SELECT_COLS);
-  for (const t of terms) q = q.ilike("name", `%${t}%`);
+  for (const t of terms) {
+    // Match the raw name OR the punct/space-free `name_searchable` column, so a
+    // typed "titos" finds "TITO'S HANDMADE VODKA" and "rumchata" finds
+    // "RUM CHATA" — apostrophes/spaces no longer break the match.
+    const stripped = String(t).replace(/[^a-z0-9]/gi, "");
+    q = stripped
+      ? q.or(`name.ilike.%${t}%,name_searchable.ilike.%${stripped}%`)
+      : q.ilike("name", `%${t}%`);
+  }
   return q.limit(80);
 }
 
