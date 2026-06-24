@@ -94,6 +94,9 @@ const VARIANT_RE = /\b(\d+\s*(yr|year)s?|variety)\b/;
 // ("JACK DANIEL'S BLACKBERRY"), but high enough to kill cross-brand junk
 // ("ATWATER" for "tito") and descriptor collisions ("1792 FULL PROOF" for "fris").
 const MISSING_TERM_PENALTY = 60;
+// Age/variety demotion — kept BELOW MISSING_TERM_PENALTY so a correct-brand
+// aged bottle ("KIRKLAND CANADIAN 6 YR") still beats a different brand.
+const VARIANT_PENALTY = 40;
 
 // Mutually-exclusive spirit categories. If the user names one and a candidate
 // is a DIFFERENT one, it's the wrong product (McCormick Vodka vs McCormick Gin).
@@ -109,9 +112,15 @@ export function scoreCandidate(name, terms, prefer) {
   const lterms = (terms || []).map((t) => String(t).toLowerCase());
 
   let score = 0;
+  // Missing distinctive-term penalty. A term counts as PRESENT if the name
+  // includes it OR includes its initial as a standalone letter — MLCC
+  // abbreviates first-name brand leads ("Jack" → "J DANIELS"), so "jack"
+  // shouldn't read as missing from "J DANIELS". A genuinely different brand
+  // ("CANADIAN LAKE" for a "kirkland" query) has neither → still penalized.
   for (const t of lterms) {
-    if (t.length >= 3 && !GENERIC_WORDS.has(t) && !lname.includes(t)) {
-      score += MISSING_TERM_PENALTY;
+    if (t.length >= 3 && !GENERIC_WORDS.has(t)) {
+      const present = lname.includes(t) || new RegExp(`\\b${t[0]}\\b`).test(lname);
+      if (!present) score += MISSING_TERM_PENALTY;
     }
   }
 
@@ -123,7 +132,14 @@ export function scoreCandidate(name, terms, prefer) {
   }
   score += flavorPenalty * 100;
 
-  if (VARIANT_RE.test(lname)) score += 120;
+  // Age statement ("10 yr") / variety pack — a step-up, demoted (below the
+  // missing-brand penalty so a correct-brand aged bottle still beats a wrong
+  // brand). Waived when the user actually typed that age number ("rebel 10").
+  const variantMatch = lname.match(VARIANT_RE);
+  if (variantMatch) {
+    const ageNum = (variantMatch[0].match(/\d+/) || [])[0];
+    if (!(ageNum && lterms.includes(ageNum))) score += VARIANT_PENALTY;
+  }
 
   const isPL = / pl\b/.test(lname) || lname.endsWith(" pl");
   if (prefer === "plastic" && !isPL) score += 30;

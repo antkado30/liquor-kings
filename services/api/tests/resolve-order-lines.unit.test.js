@@ -111,6 +111,18 @@ describe("scoreCandidate (lower = better)", () => {
     expect(standard).toBeLessThan(scoreCandidate("JACK DANIELS-10 YR", terms, null));
     expect(standard).toBeLessThan(scoreCandidate("J DANIELS VARIETY PL", terms, null));
   });
+  it("a correct brand that's aged beats a DIFFERENT brand (kirkland)", () => {
+    const terms = ["kirkland", "canadian"];
+    expect(scoreCandidate("KIRKLAND CANADIAN WHISKEY-6 YR", terms, null)).toBeLessThan(
+      scoreCandidate("CANADIAN LAKE WHISKY", terms, null),
+    );
+  });
+  it("respects an explicitly-typed age (rebel 10 → the 10yr, not the 100)", () => {
+    const terms = ["rebel", "10"];
+    expect(scoreCandidate("REBEL-10 YR", terms, null)).toBeLessThan(
+      scoreCandidate("REBEL STRAIGHT RYE 100", terms, null),
+    );
+  });
   it("ranks the plain product above flavored line-extensions", () => {
     const terms = ["svedka"];
     const plain = scoreCandidate("SVEDKA 80", terms, null);
