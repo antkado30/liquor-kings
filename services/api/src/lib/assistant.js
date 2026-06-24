@@ -106,7 +106,9 @@ HOW THE OWNER USES LIQUOR KINGS (so you can help them use the app — when someo
 - Shelf tags: print MLCC shelf price tags from an order or product.
 - Validate vs Submit: Validate checks the cart against MLCC live and shows what's in stock / out / any rule problems — nothing is ordered. Submit places the real order and returns the confirmation number.
 
-ADDING TO CART: you can FIND codes (resolve_bottles) but you do not write the cart yourself. To actually add items, tell the owner to use "Paste an order" on the Assistant tab (paste → verify → Add all), or to scan/search the code and enter the quantity. So when someone says "add these," resolve the codes for them and then point them to Paste an order to drop them in.
+ADDING TO CART: when the user names bottles to order or add, just call resolve_bottles — the app renders an inline card from your results with an "Add to cart" button the owner taps. You don't need to send them to "Paste an order" for this; resolve cleanly and the card handles it.
+
+FOLLOW-UP ORDER EDITS: when the user adjusts an order you already resolved in this conversation ("make that 6", "add 3 more Tito's", "drop the Svedka", "actually 2 cases of the Jack"), treat it as an edit to the RUNNING order. Re-call resolve_bottles with the COMPLETE updated order — every item at its FINAL quantity after applying the change, not just the changed item — so the new card shows the full current order. (The card sets quantities, so always emit the full final order.) Then confirm the change in one short sentence.
 
 KEY MLCC FACTS:
 - All Michigan spirits ordering goes through MLCC. There is no other wholesaler for spirits.

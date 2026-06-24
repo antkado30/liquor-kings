@@ -91,7 +91,13 @@ export function ResolvedOrderCard({
       if (r.chosenIdx < 0) continue;
       const c = r.candidates[r.chosenIdx];
       if (!c) continue;
-      cart.addItem(toProduct(c), r.qty);
+      // SET semantics, not merge-add: if this code is already in the cart (e.g.
+      // from an earlier card in this same conversation), set it to the card's
+      // quantity so a follow-up edit ("make that 6") corrects it instead of
+      // stacking (3 + 6 = 9). New items are added normally.
+      const inCart = cart.items.some((it) => it.product.code === c.code);
+      if (inCart) cart.updateQuantity(c.code, r.qty);
+      else cart.addItem(toProduct(c), r.qty);
       n += 1;
     }
     setAddedCount(n);
