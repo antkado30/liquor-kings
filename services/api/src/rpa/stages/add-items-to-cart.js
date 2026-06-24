@@ -485,6 +485,32 @@ export async function clearMiloCart(page, outputDir = "/tmp", artifacts = []) {
   return clearCartIfPopulated(page, outputDir, artifacts);
 }
 
+/**
+ * Count ONLY real cart item rows: a row with a numeric product code in
+ * td > span.text-muted. MILO's cart page renders the Order Summary as ANOTHER
+ * table.table-bordered (Gross/Tax/Discount/Net), so a naive
+ * "table.table-bordered tbody tr" count includes those summary rows and can
+ * never reach 0 on the cart page.
+ *
+ * 2026-06-24: the emptied-wait below used the naive count, so after the items
+ * actually cleared it still saw the ~4 summary rows, decided "not empty," and
+ * falsely threw MILO_STAGE3_CART_CLEAR_FAILED. Real failure run 905e6b09
+ * ("Clear Cart was clicked on a cart with 4 item(s) but the cart did not empty
+ * within 15s") — and because the clear could NEVER succeed on a populated
+ * cart, one dirty cart silently bricked every subsequent run. Both the
+ * before-count and the emptied-wait now use THIS one predicate so they can
+ * never disagree again.
+ */
+async function countCartItemRows(page) {
+  return page.evaluate(() => {
+    const rows = [...document.querySelectorAll("table.table-bordered tbody tr")];
+    return rows.filter((row) => {
+      const codeEl = row.querySelector("td span.text-muted");
+      return /^\d+$/.test((codeEl?.textContent || "").trim());
+    }).length;
+  });
+}
+
 async function clearCartIfPopulated(page, outputDir, stage3Artifacts) {
   // Step 1: locate cart link from current page (typically /milo/products)
   const cartNav = await (async () => {
@@ -548,21 +574,9 @@ async function clearCartIfPopulated(page, outputDir, stage3Artifacts) {
     await page.waitForTimeout(500);
   });
 
-  // Step 2: count existing rows (active + OOS)
-  // Count ONLY rows that contain a product code (td > span.text-muted with
-  // digits). Excludes the Order Summary panel which also uses
-  // table.table-bordered but has Gross/Tax/Discount/Net rows that should
-  // NOT be counted as cart items.
-  const itemCountBefore = await page.evaluate(() => {
-    const rows = [
-      ...document.querySelectorAll("table.table-bordered tbody tr"),
-    ];
-    return rows.filter((row) => {
-      const codeEl = row.querySelector("td span.text-muted");
-      const text = (codeEl?.textContent || "").trim();
-      return /^\d+$/.test(text);
-    }).length;
-  });
+  // Step 2: count existing item rows (active + OOS), excluding the Order
+  // Summary panel. See countCartItemRows for why the predicate matters.
+  const itemCountBefore = await countCartItemRows(page);
 
   if (itemCountBefore === 0) {
     // Already empty — return to products page so the rest of Stage 3 picks up.
@@ -609,15 +623,13 @@ async function clearCartIfPopulated(page, outputDir, stage3Artifacts) {
     }).catch(() => {});
   }
 
-  // Step 5: wait for cart to actually empty (15s budget)
+  // Step 5: wait for the cart to actually empty (15s budget). Count item rows
+  // the SAME way as itemCountBefore — counting ALL bordered-table rows here was
+  // the 2026-06-24 false-failure bug (the Order Summary rows never hit 0).
   const clearWaitStart = Date.now();
   let emptied = false;
   while (Date.now() - clearWaitStart < 15_000) {
-    const remaining = await page.evaluate(() => {
-      return document.querySelectorAll(
-        "table.table-bordered tbody tr",
-      ).length;
-    });
+    const remaining = await countCartItemRows(page);
     if (remaining === 0) {
       emptied = true;
       break;
