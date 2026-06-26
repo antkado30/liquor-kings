@@ -10,12 +10,16 @@ import { KNOWN_ADAS } from "../../mlcc/milo-ordering-rules.js";
 // sessions still finish in ~11s. A slow MILO day should run slow, not fail.
 const DEFAULT_TIMEOUT_MS = 150_000;
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
-const PRODUCTS_LOAD_TIMEOUT_MS = 20_000;
-const HOME_TO_LOCATION_TIMEOUT_MS = 10_000;
-// How long to POLL for the "select a license" link to render on /milo/home.
+const PRODUCTS_LOAD_TIMEOUT_MS = 30_000;
+const HOME_TO_LOCATION_TIMEOUT_MS = 25_000;
+// How long to POLL for the "select a license" link to render on /milo/home,
+// AND for the store's license card to render on /milo/location.
 // 2026-06-25: a single immediate scan failed on a slow MILO (Angular hadn't
 // painted the link yet) — MILO_STAGE2_SELECT_LICENSE_LINK_NOT_VISIBLE. Like a
-// human, wait for it to show before giving up.
+// human, wait for it to show before giving up. 2026-06-26: the same
+// one-shot failure mode hit findLicenseCard (cards not painted yet →
+// MILO_STAGE2_LICENSE_NOT_FOUND), so the card lookup now polls on the same
+// budget.
 const SELECT_LICENSE_WAIT_MS = 20_000;
 const INACTIVE_RE = /inactive|suspended|expired|pending activation|provisioning/i;
 
@@ -373,7 +377,22 @@ export async function navigateToProducts(session, options = {}) {
       await captureArtifact(page, outputDir, stage2Artifacts, "01-license-page");
 
       logStep("finding license card");
-      const cardMeta = await findLicenseCard(page, licenseNumber);
+      // POLL for the card to render — mirror of the select-license-link poll
+      // above. On a slow MILO the location cards haven't painted on the first
+      // scan, so a one-shot findLicenseCard dies with LICENSE_NOT_FOUND even
+      // though the card appears a second later. Let Angular settle, then
+      // re-scan every 750ms up to SELECT_LICENSE_WAIT_MS. A found-but-inactive
+      // card still throws LICENSE_NOT_ACTIVE below — we do NOT keep polling
+      // past a found card (the loop breaks on found: true).
+      await waitForAngularStable(page, 10_000).catch(() => {});
+      const cardScanDeadline = Date.now() + SELECT_LICENSE_WAIT_MS;
+      let cardMeta;
+      for (;;) {
+        cardMeta = await findLicenseCard(page, licenseNumber);
+        if (cardMeta.found) break;
+        if (Date.now() >= cardScanDeadline) break;
+        await page.waitForTimeout(750);
+      }
       if (!cardMeta.found) {
         const screenshotPath = await captureFailure(page, outputDir, stage2Artifacts, "error-license-not-found");
         throw createStage2Error(
