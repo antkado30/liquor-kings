@@ -36,6 +36,13 @@ const DEFAULT_TIMEOUT_MS = 240_000;
   240s so we can spend 18s × ~12 items and still leave headroom.
 */
 const DEFAULT_PER_ITEM_TIMEOUT_MS = 18_000;
+// Per-item add attempts (1 initial + retries). 2026-06-25: on a slow MILO the
+// quick-add ROW sometimes doesn't render within the timeout even though the
+// item is perfectly addable (proven: items that "didn't finish" one validate
+// add fine the next). Without a retry, a different few items lose that race
+// every run — the "shuffle." Re-typing re-triggers the add so ONE pass
+// converges. Also fixes silent under-ordering on real order runs.
+const PER_ITEM_ADD_ATTEMPTS = 3;
 const CART_NAV_TIMEOUT_MS = 15_000;
 const ADD_BY_CODE_NAV_TIMEOUT_MS = 20_000;
 // Bound for the post-add /milo/cart content read. page.evaluate has NO
@@ -961,7 +968,42 @@ export async function addItemsToCart(session, items, options = {}) {
           await qtyInput.fill(String(item.quantity));
           await page.keyboard.press("Tab");
 
-          const rowWait = await waitForRowCountIncrease(page, rowCountBefore, perItemTimeoutMs);
+          let rowWait = await waitForRowCountIncrease(page, rowCountBefore, perItemTimeoutMs);
+          // Retry a row that didn't render in time (the "didn't finish" shuffle).
+          // DOUBLE-ADD GUARD: if the code is ALREADY present (a late render
+          // landed), accept it and NEVER re-type — re-typing a present code
+          // would over-order it on a real order.
+          for (
+            let addAttempt = 2;
+            !rowWait.ok && addAttempt <= PER_ITEM_ADD_ATTEMPTS;
+            addAttempt += 1
+          ) {
+            const rowsRetry = await collectQuickAddRows(page);
+            if (rowsRetry.some((r) => r.code === item.code)) {
+              rowWait = { ok: true, rows: rowsRetry, waitedMs: 0 };
+              break;
+            }
+            console.warn(
+              `[stage3] ${item.code}: row not seen, re-typing (attempt ${addAttempt}/${PER_ITEM_ADD_ATTEMPTS})`,
+            );
+            await codeInput.focus();
+            await codeInput.fill(item.code);
+            if ((await codeInput.inputValue().catch(() => "")).trim() !== item.code) {
+              continue;
+            }
+            await page.keyboard.press("Tab");
+            await page.waitForTimeout(postTabSettleMs);
+            if (
+              !(await qtyInput
+                .evaluate((el) => document.activeElement === el)
+                .catch(() => false))
+            ) {
+              await qtyInput.focus().catch(() => {});
+            }
+            await qtyInput.fill(String(item.quantity));
+            await page.keyboard.press("Tab");
+            rowWait = await waitForRowCountIncrease(page, rowsRetry.length, perItemTimeoutMs);
+          }
           if (!rowWait.ok) {
             const reasonHint = await inlineItemErrorHint(page);
             const rejected = {

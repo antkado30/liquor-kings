@@ -4,6 +4,7 @@ import {
   applyExecutionRunOperatorAction,
   claimNextQueuedExecutionRun,
   reapStaleExecutionRuns,
+  recoverStuckStoreRuns,
   getExecutionRunOperatorReviewBundleById,
   getExecutionRunOperatorActionsById,
   createExecutionRunFromCart,
@@ -29,6 +30,25 @@ import { requireServiceRole } from "../middleware/require-service-role.middlewar
 const router = express.Router();
 
 router.param("storeId", enforceParamStoreMatches);
+
+/**
+ * POST /execution-runs/recover/:storeId — user "Start over" escape hatch.
+ *
+ * Frees the store from a CONFIRMED-DEAD run (no worker heartbeat for >90s) so
+ * the user isn't trapped behind a wedged validate for the full 15-min reaper
+ * window. Safe by construction (see recoverStuckStoreRuns): it never touches a
+ * fresh-heartbeat (alive) run — two live runs would collide on the one MILO
+ * cart — and never a run at/after checkout (submit-side, double-order risk).
+ * Auth: enforceParamStoreMatches guarantees the caller owns :storeId.
+ */
+router.post("/recover/:storeId", async (req, res) => {
+  const { storeId } = req.params;
+  const result = await recoverStuckStoreRuns(supabase, storeId);
+  if (!result.ok) {
+    return res.status(500).json({ ok: false, error: result.error });
+  }
+  return res.json(result);
+});
 
 router.post("/claim-next", requireServiceRole, async (req, res) => {
   const { workerId, workerNotes } = req.body ?? {};

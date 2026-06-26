@@ -12,6 +12,11 @@ const DEFAULT_TIMEOUT_MS = 150_000;
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
 const PRODUCTS_LOAD_TIMEOUT_MS = 20_000;
 const HOME_TO_LOCATION_TIMEOUT_MS = 10_000;
+// How long to POLL for the "select a license" link to render on /milo/home.
+// 2026-06-25: a single immediate scan failed on a slow MILO (Angular hadn't
+// painted the link yet) — MILO_STAGE2_SELECT_LICENSE_LINK_NOT_VISIBLE. Like a
+// human, wait for it to show before giving up.
+const SELECT_LICENSE_WAIT_MS = 20_000;
 const INACTIVE_RE = /inactive|suspended|expired|pending activation|provisioning/i;
 
 /**
@@ -271,22 +276,39 @@ export async function navigateToProducts(session, options = {}) {
           ".navbar__help-text a[href*='/milo/location']",
           "a[href*='/milo/location']:not(.dropdown-item)",
         ];
+        // One scan across all selectors for a visible (non-dropdown) link.
+        const scanForLicenseLink = async () => {
+          for (const selector of selectors) {
+            const candidates = page.locator(selector);
+            const count = await candidates.count();
+            for (let i = 0; i < count; i += 1) {
+              const candidate = candidates.nth(i);
+              const visible = await candidate.isVisible().catch(() => false);
+              if (!visible) continue;
+              const className = (await candidate.getAttribute("class").catch(() => "")) || "";
+              if (/\bdropdown-item\b/.test(className)) continue;
+              return { link: candidate, selector };
+            }
+          }
+          return { link: null, selector: null };
+        };
+
+        // POLL for the link instead of scanning once. Let Angular paint first,
+        // then re-scan every 750ms up to SELECT_LICENSE_WAIT_MS — a slow MILO
+        // render no longer fails the run on the first glance.
+        await waitForAngularStable(page, 10_000).catch(() => {});
         let licenseLink = null;
         let selectedSelector = null;
-        for (const selector of selectors) {
-          const candidates = page.locator(selector);
-          const count = await candidates.count();
-          for (let i = 0; i < count; i += 1) {
-            const candidate = candidates.nth(i);
-            const visible = await candidate.isVisible().catch(() => false);
-            if (!visible) continue;
-            const className = (await candidate.getAttribute("class").catch(() => "")) || "";
-            if (/\bdropdown-item\b/.test(className)) continue;
-            licenseLink = candidate;
-            selectedSelector = selector;
+        const licenseScanDeadline = Date.now() + SELECT_LICENSE_WAIT_MS;
+        for (;;) {
+          const found = await scanForLicenseLink();
+          if (found.link) {
+            licenseLink = found.link;
+            selectedSelector = found.selector;
             break;
           }
-          if (licenseLink) break;
+          if (Date.now() >= licenseScanDeadline) break;
+          await page.waitForTimeout(750);
         }
 
         if (!licenseLink) {

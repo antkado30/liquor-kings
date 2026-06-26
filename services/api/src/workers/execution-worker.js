@@ -1166,6 +1166,22 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         }),
       );
 
+      // Keepalive: login can run up to ~7.5 min (150s x 3 attempts) and is
+      // otherwise SILENT — no heartbeat. Beat every 20s so heartbeat_at stays
+      // fresh during a healthy-but-slow login. This is what makes "stale
+      // heartbeat" reliably mean DEAD (so the reaper + the user Start-over
+      // recovery can act fast without ever killing a live login). Cleared in
+      // the finally below. Fire-and-forget — a missed beat never affects the run.
+      const loginKeepalive = setInterval(() => {
+        void heartbeatRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          workerId,
+          progressStage: "rpa_login",
+          progressMessage: "Logging into MLCC",
+        }).catch(() => {});
+      }, 20_000);
       try {
         session = await loginToMilo(
           {
@@ -1213,6 +1229,8 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         stage: "stage1_login",
         error: loginError?.code ?? FAILURE_TYPE.UNKNOWN,
       };
+    } finally {
+      clearInterval(loginKeepalive);
     }
 
     stepEvidence.push(
@@ -1237,6 +1255,17 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       ),
     );
 
+    // Keepalive: navigate can also stall on a slow MILO. Same pattern as login.
+    const navKeepalive = setInterval(() => {
+      void heartbeatRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        workerId,
+        progressStage: "rpa_navigate",
+        progressMessage: "Loading MLCC products",
+      }).catch(() => {});
+    }, 20_000);
     try {
       session = await navigateToProducts(session, {
         licenseNumber: normalizedLicenseNumber,
@@ -1276,6 +1305,8 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         stage: "stage2_navigate",
         error: stage2Error?.code ?? FAILURE_TYPE.UNKNOWN,
       };
+    } finally {
+      clearInterval(navKeepalive);
     }
 
       stepEvidence.push(

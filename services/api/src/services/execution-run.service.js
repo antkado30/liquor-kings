@@ -2593,32 +2593,59 @@ export const claimNextQueuedExecutionRun = async (
 // (partially) submitted the MLCC order, and blindly re-running it risks a
 // double order. A human re-creates the order if it truly did not go through.
 //
-// 15 min is well beyond any healthy heartbeat gap — the worker heartbeats
-// between stages and the longest single stage budget is ~4 min — so a slow
-// but alive run is never reaped.
-const STALE_RUN_MINUTES = 15;
+// Submit-side runs keep the long, conservative window (a slow checkout must
+// NEVER be reaped — it may have placed the order). Everything PRE-submit now
+// auto-recovers fast: login + navigate emit keepalive heartbeats (<=20s) and
+// Stage 3 beats per-batch, so a real run never goes quiet for 3 min — only a
+// dead/wedged one does. Lets a wedged store self-heal in ~3 min instead of 15
+// (the 2026-06-25 wedge that blocked re-validates for the full reaper window).
+const STALE_RUN_MINUTES = 15; // submit-side (double-order safety)
+const STALE_PRESUBMIT_MINUTES = 3; // pre-submit (fast auto-recovery)
+
+/**
+ * Minutes a run may go heartbeat-silent before the reaper kills it, by stage.
+ * Submit-side keeps the long window; everything else recovers fast. Exported
+ * for unit tests. (Uses SUBMIT_STAGE_RE, declared below — initialised at module
+ * load, so it's defined by the time this runs.)
+ */
+export function reapThresholdMinutes(
+  progressStage,
+  { submitMinutes = STALE_RUN_MINUTES, presubmitMinutes = STALE_PRESUBMIT_MINUTES } = {},
+) {
+  const stage = String(progressStage ?? "").toLowerCase();
+  return SUBMIT_STAGE_RE.test(stage) ? submitMinutes : presubmitMinutes;
+}
 
 export const reapStaleExecutionRuns = async (
   supabase,
-  { staleMinutes = STALE_RUN_MINUTES } = {},
+  { staleMinutes = STALE_RUN_MINUTES, presubmitMinutes = STALE_PRESUBMIT_MINUTES } = {},
 ) => {
-  const cutoffIso = new Date(Date.now() - staleMinutes * 60_000).toISOString();
-
-  const { data: stale, error: listError } = await supabase
+  const nowMs = Date.now();
+  // Threshold is per-stage (submit gets the long window); PostgREST can't
+  // express that per-row, so fetch all running and decide in JS.
+  const { data: running, error: listError } = await supabase
     .from("execution_runs")
-    .select("id, store_id, heartbeat_at")
-    .eq("status", "running")
-    .lt("heartbeat_at", cutoffIso);
+    .select("id, store_id, progress_stage, heartbeat_at")
+    .eq("status", "running");
 
   if (listError) {
     return { ok: false, error: listError.message, reapedCount: 0, reapedRunIds: [] };
   }
-  if (!stale || stale.length === 0) {
+  if (!running || running.length === 0) {
     return { ok: true, reapedCount: 0, reapedRunIds: [] };
   }
 
   const reapedRunIds = [];
-  for (const run of stale) {
+  for (const run of running) {
+    const stage = String(run.progress_stage ?? "").toLowerCase();
+    const thresholdMin = reapThresholdMinutes(run.progress_stage, {
+      submitMinutes: staleMinutes,
+      presubmitMinutes,
+    });
+    const cutoffMs = nowMs - thresholdMin * 60_000;
+    const hbMs = run.heartbeat_at ? new Date(run.heartbeat_at).getTime() : 0;
+    if (hbMs > cutoffMs) continue; // still fresh for its stage — alive, leave it
+    const cutoffIso = new Date(cutoffMs).toISOString();
     const nowIso = new Date().toISOString();
     // Re-assert status + stale heartbeat in the WHERE clause: a run that
     // finished or got a fresh heartbeat between the SELECT and this UPDATE
@@ -2641,14 +2668,15 @@ export const reapStaleExecutionRuns = async (
         progress_message: "Run reaped — worker heartbeat went stale",
         failure_type: "LK_RUN_REAPED",
         error_message:
-          `Orphaned run: no worker heartbeat for over ${staleMinutes} minutes — ` +
+          `Orphaned run: no worker heartbeat for over ${thresholdMin} minute(s) — ` +
           `the worker process likely crashed. Marked failed and NOT auto-retried ` +
           `(a crashed worker may have partially submitted the order). Re-create ` +
           `the order manually if it did not go through.`,
         failure_details: {
           reaped: true,
           reason: "worker_heartbeat_stale",
-          stale_minutes: staleMinutes,
+          stale_minutes: thresholdMin,
+          stage,
           last_heartbeat_at: run.heartbeat_at ?? null,
           reaped_at: nowIso,
         },
@@ -2666,5 +2694,94 @@ export const reapStaleExecutionRuns = async (
   }
 
   return { ok: true, reapedCount: reapedRunIds.length, reapedRunIds };
+};
+
+// ── On-demand "Start over" recovery (2026-06-25) ───────────────────────────
+// The 15-min reaper is far too slow when a user is staring at a wedged
+// validate. This lets the client free its OWN store immediately — but ONLY for
+// runs that are confirmed-dead (no worker heartbeat for > RECOVER_STALE_SECONDS).
+// A run with a FRESH heartbeat is genuinely alive (the worker now beats every
+// <=20s even through login), so we must never kill it: two live runs on one
+// store collide over the single MILO cart. And a run at/after checkout may have
+// already SUBMITTED, so it is NEVER force-recovered here — that stays with the
+// human + the conservative 15-min reaper (no double-order risk).
+const RECOVER_STALE_SECONDS = 90;
+const SUBMIT_STAGE_RE = /checkout|submit|finaliz/;
+
+/**
+ * Pure decision: may we force-recover this running run on user request?
+ * Exported for unit tests — the safety rules (submit-guard + heartbeat
+ * freshness) are exactly what must never regress.
+ */
+export function shouldRecoverStuckRun(
+  run,
+  nowMs = Date.now(),
+  staleSeconds = RECOVER_STALE_SECONDS,
+) {
+  const stage = String(run?.progress_stage ?? "").toLowerCase();
+  if (SUBMIT_STAGE_RE.test(stage)) {
+    return { recover: false, reason: "submit_stage" };
+  }
+  const hb = run?.heartbeat_at ? new Date(run.heartbeat_at).getTime() : NaN;
+  const ageMs = Number.isFinite(hb) ? nowMs - hb : Infinity;
+  if (ageMs <= staleSeconds * 1000) {
+    return { recover: false, reason: "recent_heartbeat", ageMs };
+  }
+  return { recover: true, reason: "stale_heartbeat", ageMs };
+}
+
+export const recoverStuckStoreRuns = async (
+  supabase,
+  storeId,
+  { staleSeconds = RECOVER_STALE_SECONDS } = {},
+) => {
+  if (!storeId) return { ok: false, error: "storeId required" };
+  const { data: running, error } = await supabase
+    .from("execution_runs")
+    .select("id, progress_stage, heartbeat_at, started_at, created_at")
+    .eq("store_id", storeId)
+    .eq("status", "running");
+  if (error) return { ok: false, error: error.message };
+
+  const nowMs = Date.now();
+  const cutoffIso = new Date(nowMs - staleSeconds * 1000).toISOString();
+  const recovered = [];
+  const stillLive = [];
+
+  for (const run of running ?? []) {
+    const decision = shouldRecoverStuckRun(run, nowMs, staleSeconds);
+    if (!decision.recover) {
+      stillLive.push({ id: run.id, reason: decision.reason });
+      continue;
+    }
+    const nowIso = new Date().toISOString();
+    // Re-assert status + stale heartbeat in the WHERE so a run that beat or
+    // finished between the SELECT and this UPDATE is never clobbered.
+    const { data: updated, error: updErr } = await supabase
+      .from("execution_runs")
+      .update({
+        status: "canceled",
+        updated_at: nowIso,
+        finished_at: nowIso,
+        progress_message:
+          "Recovered by user (Start over) — worker heartbeat was stale",
+        failure_type: "LK_RUN_RECOVERED_BY_USER",
+        failure_details: {
+          recovered_by_user: true,
+          last_heartbeat_at: run.heartbeat_at ?? null,
+          heartbeat_age_ms: Number.isFinite(decision.ageMs) ? decision.ageMs : null,
+          recovered_at: nowIso,
+        },
+      })
+      .eq("id", run.id)
+      .eq("status", "running")
+      .lt("heartbeat_at", cutoffIso)
+      .select("id")
+      .maybeSingle();
+    if (updErr) return { ok: false, error: updErr.message, recovered, stillLive };
+    if (updated) recovered.push(updated.id);
+    else stillLive.push({ id: run.id, reason: "beat_during_recover" });
+  }
+  return { ok: true, recovered, stillLive };
 };
 

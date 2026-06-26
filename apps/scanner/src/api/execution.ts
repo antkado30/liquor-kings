@@ -314,6 +314,58 @@ export async function triggerMlccCartReset(
   };
 }
 
+export interface RecoverStoreResult {
+  ok: boolean;
+  recovered?: string[];
+  stillLive?: Array<{ id: string; reason: string }>;
+  error?: string;
+}
+
+/**
+ * "Start over" escape hatch (2026-06-25). Asks the server to free THIS store
+ * from a confirmed-dead (stale-heartbeat) run so the user isn't trapped behind
+ * a wedged validate. Safe server-side: never kills a live or submitting run, so
+ * it's safe to call even if the run turns out to be fine (it just no-ops).
+ */
+export async function recoverStore(): Promise<RecoverStoreResult> {
+  const storeId = getStoreId();
+  const url = `${EXECUTION_API_BASE}/recover/${encodeURIComponent(storeId)}`;
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+        body: "{}",
+      },
+      { maxRetries: 2, baseDelayMs: 500, timeoutMs: 15_000 },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
+  }
+  let raw: Record<string, unknown>;
+  try {
+    raw = (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
+  if (!res.ok || raw.ok !== true) {
+    const err = typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`;
+    return { ok: false, error: err };
+  }
+  return {
+    ok: true,
+    recovered: Array.isArray(raw.recovered) ? (raw.recovered as string[]) : [],
+    stillLive: Array.isArray(raw.stillLive)
+      ? (raw.stillLive as Array<{ id: string; reason: string }>)
+      : [],
+  };
+}
+
 export function isTerminalStatus(status: RunStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled";
 }
