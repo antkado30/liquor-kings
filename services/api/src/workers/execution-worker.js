@@ -1556,6 +1556,24 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       }),
     );
 
+    // Keepalive: validate can run up to ~45s and is otherwise SILENT after
+    // the start heartbeat above — the client poll sees a frozen bar and can't
+    // tell "working" from "stuck." Beat every 15s with progressStage
+    // rpa_validate so heartbeat_at stays fresh ("still confirming with MLCC").
+    // Same pattern as loginKeepalive/navKeepalive above; cleared in the finally
+    // below whether validate succeeds or throws. 15s (vs 20s for login/nav)
+    // so the ≤45s window gets ~2–3 beats. Fire-and-forget — a missed beat
+    // never affects the run.
+    const validateKeepalive = setInterval(() => {
+      void heartbeatRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        workerId,
+        progressStage: "rpa_validate",
+        progressMessage: "Confirming your cart with MLCC",
+      }).catch(() => {});
+    }, 15_000);
     try {
       session = await validateCartOnMilo(session, {
         captureArtifacts: true,
@@ -1594,6 +1612,8 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         stage: "stage4_validate",
         error: stage4Error?.code ?? FAILURE_TYPE.UNKNOWN,
       };
+    } finally {
+      clearInterval(validateKeepalive);
     }
 
     stepEvidence.push(
