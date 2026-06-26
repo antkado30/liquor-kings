@@ -44,6 +44,7 @@ import {
 } from "../api/orderTemplates";
 import { cartLineId, type CartContextValue } from "../hooks/useCart";
 import { useSubmission } from "../hooks/useSubmission";
+import { useActiveOrder } from "../hooks/useActiveOrder";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
 import { useHideTabBar } from "../hooks/useHideTabBar";
@@ -259,7 +260,11 @@ export function CartDrawer({
   // Wire pre-validate cache into useSubmission so startValidate can
   // short-circuit on a fresh cached result (task #47, 2026-06-02).
   const submission = useSubmission(preValidate);
-  const { state, startValidate, startSubmit, invalidateValidation, reset, cancelActiveRun } = submission;
+  const { state, startValidate, startSubmit, invalidateValidation, reset, cancelActiveRun, fireOrder } = submission;
+  // App-level active-order tracker (P1a). The new "Place Order" flow hands the
+  // fired runId here so the persistent OrderStatusPill shows progress after the
+  // drawer closes. activeOrder also gates double-fire (one order in flight).
+  const { activeOrder, trackOrder } = useActiveOrder();
 
   // Compound "is the flow doing something async right now" flag. Used to
   // disable UI controls during sync / poll. Covers both validate and
@@ -328,6 +333,12 @@ export function CartDrawer({
    * triple-gated server-side, this is the UX-level "are you sure?"
    */
   const [confirmSubmit, setConfirmSubmit] = useState(false);
+
+  // Non-blocking "Place Order" fire path (P1b). isFiring covers the brief
+  // sync+trigger window before we hand off to the tracker; fireError surfaces
+  // a trigger failure inline (the run never started, so no pill to show).
+  const [isFiring, setIsFiring] = useState(false);
+  const [fireError, setFireError] = useState<string | null>(null);
 
   /*
    * "Start over" escape hatch (2026-06-26). When a validate poll blows past
@@ -540,6 +551,13 @@ export function CartDrawer({
   // on success too). Kept here for reference / future use.
   void clearCart; // mark referenced
   void reset; // mark referenced
+  // P1b (2026-06-26): the primary flow is now the non-blocking "Place Order"
+  // fire path. The two-step validate→submit state machine (startValidate /
+  // startSubmit + their disabled gates) is intentionally left in place but
+  // UNREACHED from the new flow — cleanup is a later portion. Mark startSubmit
+  // referenced so noUnusedLocals stays happy until then. (validateDisabled /
+  // submitDisabled are void-marked at their definition site below.)
+  void startSubmit;
 
   /*
    * "Reset MLCC cart" handler (task #57, 2026-06-04). Fires the
@@ -761,6 +779,27 @@ export function CartDrawer({
   // Submit is allowed only AFTER a successful MLCC validate, AND the
   // rule-engine is still clean (user hasn't edited the cart since).
   const submitDisabled = isBusy || !mlccValidatePassed || hasDefinitiveValidationFailure;
+  // P1b: validateDisabled / submitDisabled gated the now-unreached two-step
+  // buttons. Kept (not deleted) but marked referenced here.
+  void validateDisabled;
+  void submitDisabled;
+
+  // ─── Non-blocking "Place Order" flow (P1b, 2026-06-26) ────────────────
+  // The primary CTA is now ONE button that fires the full background pipeline
+  // after the confirmation modal and hands the runId to the app-level tracker.
+  // Pre-gate is the INSTANT LOCAL rules check (rulesValid), NOT a MILO
+  // round-trip. An order already in flight (tracker has a non-terminal
+  // activeOrder) disables the button to prevent double-fire.
+  // Narrowed through validationResult?.ok === true (CartValidationResult is a
+  // discriminated union; .valid only exists on the ok:true branch).
+  const rulesValid = validationResult?.ok === true && validationResult.valid === true;
+  const orderInFlight = activeOrder !== null && activeOrder.result === null;
+  const canPlaceOrder =
+    !isFiring &&
+    !orderInFlight &&
+    items.length > 0 &&
+    !isCheckingValidation &&
+    rulesValid;
 
   // Cart-wide blockers shown above the validate button. Per-line errors
   // render inline on their cart line below.
@@ -1345,41 +1384,46 @@ export function CartDrawer({
           *     validateDone — same as the old stacked-button block
           */}
         {items.length > 0 && state.kind !== "submitDone" ? (
-          <div className="drawer-footer">
-            <div className="drawer-footer__total">
-              <span className="drawer-footer__total-label">Total</span>
-              <strong className="drawer-footer__total-value">{money(totalCost)}</strong>
-            </div>
-            {state.kind === "idle" || state.kind === "validateDone" ? (
-              <>
-                <button
-                  type="button"
-                  className="btn secondary btn-block"
-                  disabled={validateDisabled}
-                  onClick={() => void startValidate(items)}
-                >
-                  {isCheckingValidation
-                    ? "Checking…"
-                    : state.kind === "validateDone"
-                    ? "Re-validate against MLCC"
-                    : "Validate against MLCC"}
-                </button>
+          <>
+            {/*
+              Fire-error surface (P1b). The run never started (sync/trigger
+              failed before a runId came back), so there's no pill to show —
+              surface it inline near the footer so the user can retry.
+            */}
+            {fireError ? <div className="banner banner-err">{fireError}</div> : null}
+            <div className="drawer-footer">
+              <div className="drawer-footer__total">
+                <span className="drawer-footer__total-label">Total</span>
+                <strong className="drawer-footer__total-value">{money(totalCost)}</strong>
+              </div>
+              {/*
+                ONE "Place Order" button (P1b). Fires the full background
+                pipeline after the confirmation modal and hands the runId to
+                the app-level tracker; the drawer then closes and the
+                persistent OrderStatusPill shows progress. Pre-gate is the
+                INSTANT local rules check, not a MILO round-trip. Disabled
+                while an order is already in flight (no double-fire).
+              */}
+              {state.kind === "idle" || state.kind === "validateDone" ? (
                 <button
                   type="button"
                   className="btn primary btn-block"
-                  disabled={submitDisabled}
-                  onClick={() => setConfirmSubmit(true)}
+                  disabled={!canPlaceOrder}
+                  onClick={() => {
+                    setFireError(null);
+                    setConfirmSubmit(true);
+                  }}
                   title={
-                    !mlccValidatePassed
-                      ? "Validate against MLCC first"
+                    !rulesValid
+                      ? "Fix the issues above before placing the order"
                       : undefined
                   }
                 >
-                  {mlccValidatePassed ? "Submit Order" : "Submit Order (validate first)"}
+                  {isFiring ? "Sending…" : orderInFlight ? "Order in progress…" : "Place Order"}
                 </button>
-              </>
-            ) : null}
-          </div>
+              ) : null}
+            </div>
+          </>
         ) : null}
 
         {/* ─── Submit terminal states ─────────────────────────────────────── */}
@@ -1720,7 +1764,22 @@ export function CartDrawer({
           onCancel={() => setConfirmSubmit(false)}
           onConfirm={() => {
             setConfirmSubmit(false);
-            void startSubmit();
+            // P1b: fire the full background pipeline (non-blocking), hand the
+            // runId to the app-level tracker, and close the drawer so the
+            // persistent OrderStatusPill takes over. Do NOT clearCart — the
+            // run is dry-run-gated and may not actually place; the cart must
+            // survive until a confirmed placement (a later portion clears it).
+            setIsFiring(true);
+            void (async () => {
+              const r = await fireOrder(items);
+              setIsFiring(false);
+              if (r.ok) {
+                trackOrder(r.runId, "rpa_run");
+                onClose();
+              } else {
+                setFireError(r.error);
+              }
+            })();
           }}
         />
       ) : null}

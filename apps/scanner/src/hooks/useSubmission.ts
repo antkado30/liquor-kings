@@ -183,6 +183,14 @@ export function useSubmission(
    * stuck run was cleared.
    */
   cancelActiveRun: () => void;
+  /**
+   * Non-blocking fire path (P1b): sync + trigger a full rpa_run, return the
+   * runId without polling. The caller hands the runId to the app-level
+   * active-order tracker. See implementation below.
+   */
+  fireOrder: (
+    items: CartItem[],
+  ) => Promise<{ ok: true; runId: string } | { ok: false; error: string }>;
 } {
   const [state, setState] = useState<SubmissionState>({ kind: "idle" });
   const cancelledRef = useRef(false);
@@ -592,5 +600,33 @@ export function useSubmission(
     }
   }, [state, triggerRun, pollUntilTerminal]);
 
-  return { state, startValidate, startSubmit, invalidateValidation, reset, cancelActiveRun };
+  /**
+   * Non-blocking "fire and notify" order path (async pivot P1b, 2026-06-26).
+   * Syncs the cart + triggers a full rpa_run, returns the runId immediately,
+   * and DOES NOT poll — the app-level ActiveOrderProvider picks up tracking
+   * via trackOrder(runId, "rpa_run"). The drawer closes right after, the
+   * persistent OrderStatusPill shows progress, and the user is free.
+   *
+   * Reuses the existing syncCart + triggerRun primitives. Additive only —
+   * startValidate/startSubmit/pollUntilTerminal and the state machine are
+   * untouched (they're now unreached from the primary flow; cleanup is a
+   * later portion). Submission stays triple-gated server-side.
+   */
+  const fireOrder = useCallback(
+    async (
+      items: CartItem[],
+    ): Promise<{ ok: true; runId: string } | { ok: false; error: string }> => {
+      try {
+        if (items.length === 0) return { ok: false, error: "Cart is empty." };
+        const cartId = await syncCart(items, () => {});
+        const runId = await triggerRun(cartId, "rpa_run");
+        return { ok: true, runId };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    [syncCart, triggerRun],
+  );
+
+  return { state, startValidate, startSubmit, invalidateValidation, reset, cancelActiveRun, fireOrder };
 }
