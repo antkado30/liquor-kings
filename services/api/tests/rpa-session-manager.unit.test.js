@@ -26,9 +26,19 @@ import {
  *   - session.browser.close()  → on teardown
  *   - session.page.url()       → on liveness probe
  *   - session.page.isClosed()  → on liveness probe (optional)
+ *   - session.page.evaluate()  → on deep probe (2026-06-12 CDP liveness check)
  * Everything else (currentUrl, selectedLicense, …) is irrelevant here.
+ *
+ * The deep probe (acquireSession → page.evaluate("1"), raced vs a 2s cap)
+ * proves the session can actually execute before reuse. A real Playwright
+ * page has .evaluate; the mock must too, or every happy-path reuse test
+ * falsely fails with cdp_probe_failed. evaluate resolves fast (1) so a
+ * healthy fake session passes the probe. The intentional dead-session
+ * mocks below (urlImpl throws, isClosedImpl true, idle, busy) all fail at
+ * an EARLIER gate, so they never reach evaluate — this default doesn't
+ * rescue them.
  */
-function fakeSession({ closeImpl, urlImpl, isClosedImpl } = {}) {
+function fakeSession({ closeImpl, urlImpl, isClosedImpl, evaluateImpl } = {}) {
   const close = vi.fn(async () => {
     if (closeImpl) await closeImpl();
   });
@@ -40,9 +50,14 @@ function fakeSession({ closeImpl, urlImpl, isClosedImpl } = {}) {
     if (isClosedImpl) return isClosedImpl();
     return false;
   });
+  const evaluate = vi.fn(async () => {
+    if (evaluateImpl) return evaluateImpl();
+    // page.evaluate("1") on a live page resolves to 1. Fast + healthy.
+    return 1;
+  });
   return {
     browser: { close },
-    page: { url, isClosed },
+    page: { url, isClosed, evaluate },
   };
 }
 
