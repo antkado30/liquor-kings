@@ -64,6 +64,7 @@ import {
   getOrderingRuleDisplay,
 } from "../lib/mlcc-ordering-rules";
 import { humanizeRunFailure } from "../lib/run-failure-human";
+import { REAL_SUBMISSION_WIRED } from "../config/submission";
 
 function money(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
@@ -801,6 +802,14 @@ export function CartDrawer({
     !isCheckingValidation &&
     rulesValid;
 
+  // Single source of truth for "is a REAL submission wired+armed" (P1c). The
+  // store flag is only one of three gates; the app can't actually submit
+  // until REAL_SUBMISSION_WIRED flips true (P2). Until then every "order" is
+  // a dry-run practice check, and the button/modal copy must say so — never
+  // imply a real order. Fed to SubmitConfirmationModal in place of the raw
+  // store flag (whose not-armed copy is already correct).
+  const submissionArmed = allowOrderSubmission && REAL_SUBMISSION_WIRED;
+
   // Cart-wide blockers shown above the validate button. Per-line errors
   // render inline on their cart line below.
   const validationBlockers = useMemo(() => {
@@ -1419,7 +1428,17 @@ export function CartDrawer({
                       : undefined
                   }
                 >
-                  {isFiring ? "Sending…" : orderInFlight ? "Order in progress…" : "Place Order"}
+                  {isFiring
+                    ? submissionArmed
+                      ? "Sending…"
+                      : "Checking…"
+                    : orderInFlight
+                      ? submissionArmed
+                        ? "Order in progress…"
+                        : "Check in progress…"
+                      : submissionArmed
+                        ? "Place Order"
+                        : "Check Order"}
                 </button>
               ) : null}
             </div>
@@ -1760,7 +1779,7 @@ export function CartDrawer({
           }
           storeName={storeName ?? null}
           storeLicense={storeLicense ?? null}
-          allowOrderSubmission={allowOrderSubmission}
+          allowOrderSubmission={submissionArmed}
           onCancel={() => setConfirmSubmit(false)}
           onConfirm={() => {
             setConfirmSubmit(false);
