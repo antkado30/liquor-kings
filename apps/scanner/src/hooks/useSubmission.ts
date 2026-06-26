@@ -176,14 +176,36 @@ export function useSubmission(
    */
   invalidateValidation: () => void;
   reset: () => void;
+  /**
+   * Cancel any in-flight validate/submit poll and return to idle. Safe to
+   * call mid-poll (unlike reset, which assumes nothing is running). Used by
+   * the CartDrawer "Start over" escape hatch after recoverStore() confirms a
+   * stuck run was cleared.
+   */
+  cancelActiveRun: () => void;
 } {
   const [state, setState] = useState<SubmissionState>({ kind: "idle" });
   const cancelledRef = useRef(false);
+  /**
+   * Monotonic "run generation" (2026-06-26). Bumped on every cancel and at
+   * the start of every new validate/submit run; each poll loop captures the
+   * gen it started with and bails the moment runGenRef diverges.
+   *
+   * A lone boolean cancelledRef can't tell "cancelled because the user
+   * started over" apart from "still running" — so once a fresh run reset the
+   * flag back to false, an OLD poll loop (still suspended in its sleep) would
+   * wake back up and clobber state with the stale runId's progress / result.
+   * The generation closes that hole: cancelActiveRun() bumps it, the old loop
+   * sees the mismatch and exits silently, and a brand-new validate gets a
+   * brand-new gen that no surviving loop shares.
+   */
+  const runGenRef = useRef(0);
 
   // Cleanup on unmount — abort any in-flight polling.
   useEffect(() => {
     return () => {
       cancelledRef.current = true;
+      runGenRef.current += 1;
     };
   }, []);
 
@@ -194,6 +216,21 @@ export function useSubmission(
 
   const invalidateValidation = useCallback(() => {
     cancelledRef.current = false;
+    setState({ kind: "idle" });
+  }, []);
+
+  /**
+   * Cancel any in-flight validate/submit poll AND reset to idle in one step.
+   * Used by the CartDrawer "Start over" escape hatch after recoverStore()
+   * confirms a stuck run was cleared. Unlike reset()/invalidateValidation()
+   * (which assume no poll is running), this is safe to call mid-poll: it
+   * bumps runGenRef so the suspended poll loop exits on its next tick
+   * WITHOUT its catch branch clobbering our idle state with a stale
+   * "Polling cancelled" error, and without reviving once a new run starts.
+   */
+  const cancelActiveRun = useCallback(() => {
+    runGenRef.current += 1;
+    cancelledRef.current = true;
     setState({ kind: "idle" });
   }, []);
 
@@ -212,6 +249,12 @@ export function useSubmission(
         progressStage: string | null;
         progressMessage: string | null;
       }) => void,
+      /**
+       * Generation this poll belongs to. The loop exits the instant
+       * runGenRef diverges (cancel / supersede / unmount) so a stale poll
+       * can never revive and overwrite state belonging to a newer run.
+       */
+      gen: number,
     ): Promise<{
       status: RunStatus;
       failureType: string | null;
@@ -222,9 +265,9 @@ export function useSubmission(
     }> => {
       const pollStart = Date.now();
       let interval = POLL_INTERVAL_MS;
-      while (!cancelledRef.current) {
+      while (!cancelledRef.current && runGenRef.current === gen) {
         await new Promise((resolve) => setTimeout(resolve, interval));
-        if (cancelledRef.current) {
+        if (cancelledRef.current || runGenRef.current !== gen) {
           throw new Error("Polling cancelled");
         }
         if (Date.now() - pollStart > POLL_BACKOFF_AFTER_MS) {
@@ -323,6 +366,9 @@ export function useSubmission(
         return;
       }
       cancelledRef.current = false;
+      // Claim a fresh generation for this run. Any poll still lingering
+      // from a previous (cancelled) run now has a stale gen and will bail.
+      const gen = ++runGenRef.current;
 
       /*
         Pre-validate cache check (task #47, 2026-06-02). If a
@@ -374,7 +420,7 @@ export function useSubmission(
           } catch {
             latched = null;
           }
-          if (cancelledRef.current) return;
+          if (cancelledRef.current || runGenRef.current !== gen) return;
           if (latched) {
             setState({
               kind: "validateDone",
@@ -448,7 +494,11 @@ export function useSubmission(
             lastPolledAt: Date.now(),
             startedAtMs: validatePollStart,
           }),
-        );
+        gen);
+        // Superseded (cancelActiveRun started a new run, or unmounted):
+        // the canceler already set the desired state — don't overwrite it
+        // with this run's terminal result, and don't surface a stale error.
+        if (runGenRef.current !== gen) return;
         setState({
           kind: "validateDone",
           runId,
@@ -459,6 +509,7 @@ export function useSubmission(
           failureMessage: terminal.failureMessage,
         });
       } catch (e) {
+        if (runGenRef.current !== gen) return;
         setState({
           kind: "error",
           message: e instanceof Error ? e.message : String(e),
@@ -476,6 +527,7 @@ export function useSubmission(
     if (state.finalStatus !== "succeeded") return;
     const cartId = state.cartId;
     cancelledRef.current = false;
+    const gen = ++runGenRef.current;
 
     // Phase 2.a: trigger rpa_run
     setState({ kind: "submitStarting", cartId });
@@ -515,7 +567,9 @@ export function useSubmission(
           lastPolledAt: Date.now(),
           startedAtMs: submitPollStart,
         }),
-      );
+      gen);
+      // Superseded by a cancel — leave state as the canceler set it.
+      if (runGenRef.current !== gen) return;
       setState({
         kind: "submitDone",
         runId,
@@ -529,6 +583,7 @@ export function useSubmission(
         submitResult: terminal.submitResult,
       });
     } catch (e) {
+      if (runGenRef.current !== gen) return;
       setState({
         kind: "error",
         message: e instanceof Error ? e.message : String(e),
@@ -537,5 +592,5 @@ export function useSubmission(
     }
   }, [state, triggerRun, pollUntilTerminal]);
 
-  return { state, startValidate, startSubmit, invalidateValidation, reset };
+  return { state, startValidate, startSubmit, invalidateValidation, reset, cancelActiveRun };
 }

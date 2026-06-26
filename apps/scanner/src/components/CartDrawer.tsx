@@ -32,7 +32,9 @@ import { validateCart, type CartValidationResult } from "../api/cart";
 import {
   getRunSummary,
   isTerminalStatus,
+  recoverStore,
   triggerMlccCartReset,
+  type RecoverStoreResult,
 } from "../api/execution";
 import {
   createOrderTemplate,
@@ -257,7 +259,7 @@ export function CartDrawer({
   // Wire pre-validate cache into useSubmission so startValidate can
   // short-circuit on a fresh cached result (task #47, 2026-06-02).
   const submission = useSubmission(preValidate);
-  const { state, startValidate, startSubmit, invalidateValidation, reset } = submission;
+  const { state, startValidate, startSubmit, invalidateValidation, reset, cancelActiveRun } = submission;
 
   // Compound "is the flow doing something async right now" flag. Used to
   // disable UI controls during sync / poll. Covers both validate and
@@ -326,6 +328,156 @@ export function CartDrawer({
    * triple-gated server-side, this is the UX-level "are you sure?"
    */
   const [confirmSubmit, setConfirmSubmit] = useState(false);
+
+  /*
+   * "Start over" escape hatch (2026-06-26). When a validate poll blows past
+   * STUCK_RETRY_THRESHOLD_SEC with no result, we surface a "Taking too long?
+   * Start over" control. Tapping it calls the existing recoverStore() (a
+   * stale-only, submit-guarded recovery endpoint — never the raw fetch) and
+   * branches honestly on the real response. It must NEVER claim a clear it
+   * didn't get, and must NEVER invite a re-submit when a run may have reached
+   * checkout (the submit_stage case).
+   *
+   * We need the poll's elapsed time here in the parent (the live clock lives
+   * in the PollingElapsedStatus child), so a 1s ticker runs only while we're
+   * in validatePolling and drives both the button-visibility gate and the
+   * existing slow-MILO message indirectly via the child's own clock.
+   */
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (state.kind !== "validatePolling") return;
+    setNowTick(Date.now());
+    const id = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [state.kind]);
+
+  const validateElapsedSec =
+    state.kind === "validatePolling"
+      ? Math.max(0, Math.floor((nowTick - state.startedAtMs) / 1000))
+      : 0;
+
+  const showStartOver =
+    state.kind === "validatePolling" &&
+    validateElapsedSec >= STUCK_RETRY_THRESHOLD_SEC;
+
+  const [recoverState, setRecoverState] = useState<
+    | { kind: "idle" }
+    | { kind: "working" }
+    | { kind: "notice"; tone: "ok" | "warn" | "err"; text: string }
+  >({ kind: "idle" });
+
+  // Synchronous in-flight guard for the Start over button. The disabled prop
+  // (driven by recoverState) only takes effect after a re-render, so without
+  // this ref a rapid double-tap would fire recoverStore() twice before the
+  // button disabled. The ref makes the second tap a true no-op.
+  const recoverInFlightRef = useRef(false);
+
+  // Live mirror of the submission state so the async recover handler can tell
+  // whether the poll is still in flight when recoverStore() resolves (it may
+  // have finished naturally while we waited, or the user may have backgrounded
+  // the app and returned). We only force a reset-to-idle when a poll is
+  // actually still running — never clobber a real validateDone that landed in
+  // the meantime.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  // Once we've definitively moved on to a new validate (syncing/starting/done/
+  // error), drop any leftover recover notice. The warn notices for the
+  // submit_stage / still-alive branches stay visible during validatePolling,
+  // and the "tap Validate to try again" ok notices stay visible in idle.
+  useEffect(() => {
+    if (state.kind !== "idle" && state.kind !== "validatePolling") {
+      setRecoverState({ kind: "idle" });
+    }
+  }, [state.kind]);
+
+  const handleStartOver = async () => {
+    if (recoverInFlightRef.current) return; // rapid double-tap → no-op
+    recoverInFlightRef.current = true;
+    setRecoverState({ kind: "working" });
+
+    let res: RecoverStoreResult;
+    try {
+      // recoverStore() already normalizes network/timeout failures into
+      // { ok: false, error }, but defend against an unexpected throw so the
+      // button can never get stuck disabled.
+      res = await recoverStore();
+    } catch (e) {
+      res = { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      recoverInFlightRef.current = false;
+    }
+
+    const recovered = res.recovered ?? [];
+    const stillLive = res.stillLive ?? [];
+    // Only tear down the poll if one is genuinely still running. If the run
+    // reached a terminal state while we were recovering, leave that result
+    // intact — don't clobber a real validateDone with an idle reset.
+    const stillPolling = stateRef.current.kind === "validatePolling";
+
+    if (!res.ok) {
+      setRecoverState({
+        kind: "notice",
+        tone: "err",
+        text: res.error
+          ? `Couldn't reach recovery: ${res.error}. Tap to try again.`
+          : "Couldn't reach recovery. Tap to try again.",
+      });
+      return;
+    }
+
+    // Cleared a confirmed-dead run → safe to cancel the poll and let the
+    // user re-validate.
+    if (recovered.length > 0) {
+      if (stillPolling) cancelActiveRun();
+      setRecoverState({
+        kind: "notice",
+        tone: "ok",
+        text: "Cleared a stuck run — tap Validate to try again.",
+      });
+      return;
+    }
+
+    // recovered.length === 0. Branch on WHY the server held onto the run.
+    const hasSubmitStage = stillLive.some((r) => r.reason === "submit_stage");
+    if (hasSubmitStage) {
+      // The run reached at/after checkout — an order may genuinely be
+      // finishing on MLCC right now. DO NOT reset into a state that invites a
+      // new submit; keep the poll as-is and tell the user to check Orders.
+      setRecoverState({
+        kind: "notice",
+        tone: "warn",
+        text: "Your order may still be finishing on MLCC. Don't re-submit — check Orders first.",
+      });
+      return;
+    }
+
+    const hasRecentHeartbeat = stillLive.some(
+      (r) => r.reason === "recent_heartbeat",
+    );
+    if (hasRecentHeartbeat) {
+      // The run is still actively heartbeating — it's not stuck, just slow.
+      // Don't force a reset; we don't want two live runs on one store.
+      setRecoverState({
+        kind: "notice",
+        tone: "warn",
+        text: "It's still working — give it a moment.",
+      });
+      return;
+    }
+
+    // ok && nothing recovered && nothing still live → the store was already
+    // free (e.g. the run died and was reaped between our poll stalling and
+    // the recover call). Cancel the wedged client-side poll and let them retry.
+    if (stillPolling) cancelActiveRun();
+    setRecoverState({
+      kind: "notice",
+      tone: "ok",
+      text: "Nothing stuck — tap Validate to try again.",
+    });
+  };
 
   // ─── Instant rule-engine validation (unchanged from prior CartDrawer) ──
   //
@@ -779,7 +931,9 @@ export function CartDrawer({
                                 ) : (
                                   <div className="drawer-line-title">{line.product.name}</div>
                                 )}
-                                <div className="muted small">{size}</div>
+                                <div className="muted small">
+                                  {size} · #{line.product.code}
+                                </div>
                                 <div className="drawer-line-controls">
                                   {/*
                                     Cart-line quantity controls (2026-05-31
@@ -968,6 +1122,61 @@ export function CartDrawer({
                 : undefined
             }
           />
+        ) : null}
+
+        {/*
+          "Start over" escape hatch (2026-06-26). Rendered only while a
+          validate poll is stuck past STUCK_RETRY_THRESHOLD_SEC, OR while a
+          recover notice from a just-completed recover is still relevant
+          (idle after a successful clear, or validatePolling for the warn
+          branches). The button calls the existing recoverStore() — never the
+          raw endpoint — and handleStartOver branches honestly on the
+          response. See the five-branch contract in handleStartOver. Styles
+          are inline (no new CSS classes) since this file is the only
+          stylesheet-adjacent surface we may touch.
+        */}
+        {showStartOver ||
+        (recoverState.kind !== "idle" &&
+          (state.kind === "idle" || state.kind === "validatePolling")) ? (
+          <div style={{ marginTop: 8, marginBottom: 4 }}>
+            {showStartOver ? (
+              <button
+                type="button"
+                className="btn btn-block"
+                disabled={recoverState.kind === "working"}
+                onClick={() => void handleStartOver()}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--lk-border, #d1d5db)",
+                  color: "var(--lk-text-muted, #6b7280)",
+                  fontSize: 13,
+                }}
+              >
+                {recoverState.kind === "working"
+                  ? "Starting over…"
+                  : "Taking too long? Start over"}
+              </button>
+            ) : null}
+            {recoverState.kind === "notice" ? (
+              <p
+                className={`drawer-note${
+                  recoverState.tone === "ok"
+                    ? " drawer-note--ok"
+                    : recoverState.tone === "err"
+                      ? " drawer-note--err"
+                      : ""
+                }`}
+                style={{ marginTop: showStartOver ? 8 : 0 }}
+              >
+                {recoverState.tone === "ok" ? (
+                  <IconCheck size={14} strokeWidth={2.25} />
+                ) : recoverState.tone === "err" ? (
+                  <IconAlert size={14} />
+                ) : null}
+                <span>{recoverState.text}</span>
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         {/* ─── Validate result panel (after successful MLCC validate) ────── */}
@@ -1861,8 +2070,20 @@ function formatElapsedMs(startedAtMs: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+/**
+ * How long a validate poll may run with no result before we surface the
+ * "Start over" escape hatch. Deliberately aligned with honestSlowMessage()'s
+ * top tier so the escape button appears at exactly the moment the honest
+ * slow-MILO copy turns to its most patient tone — not earlier (a normal
+ * validate genuinely takes 60-90s; offering recovery sooner would invite
+ * unnecessary store-recovery calls) and not later (past this, MILO is either
+ * wedged or glacial, and the user should be able to free their store in one
+ * tap rather than staring at a spinner).
+ */
+const STUCK_RETRY_THRESHOLD_SEC = 75;
+
 function honestSlowMessage(elapsedSec: number): string | null {
-  if (elapsedSec > 75) {
+  if (elapsedSec >= STUCK_RETRY_THRESHOLD_SEC) {
     return "MILO is slow today. We keep at it until it answers — you can keep scanning, this continues in the background.";
   }
   if (elapsedSec >= 30) {
