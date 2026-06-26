@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { BLOCKLIST_RE, clickSafely, waitForAngularStable, waitForSpaNavigation } from "../milo-discovery.js";
 import { validateCart, SPLIT_CASE_RULES_BY_SIZE_ML } from "../../mlcc/milo-ordering-rules.js";
+import { cartExactlyMatchesRequest } from "../../lib/cart-match.js";
 
 /**
  * A size is "full-case-only" when its split-case rule is an empty array
@@ -748,6 +749,147 @@ async function navigateBackToProducts(page) {
   );
 }
 
+/**
+ * Light-validate (task #60): best-effort nav to /milo/cart so we can READ the
+ * live cart and decide whether it already exactly matches the request (in which
+ * case the clear + re-add is skipped). Reuses the SAME tiered cart-link
+ * resolver as clearCartIfPopulated — keep the selector tiers in sync.
+ *
+ * NEVER throws: any failure (no link, nav timeout, angular stall) returns
+ * false so the caller falls through to the proven full flow. Nothing here
+ * clicks Validate/Checkout/Submit/Place Order — pure navigation for a read.
+ */
+async function navigateToCartForLightRead(page) {
+  try {
+    // Tiered cart-link resolution — mirrors clearCartIfPopulated exactly.
+    const direct = await findVisibleFirst(page, ["a[href='/milo/cart']"]);
+    let link = direct.locator;
+    let selectorNote = direct.selector || "cart link";
+    if (!link) {
+      const classed = await findVisibleFirst(page, [
+        "a[href*='cart'][class*='cart']",
+        "a[href*='/milo/cart']",
+      ]);
+      link = classed.locator;
+      selectorNote = classed.selector || "cart link";
+    }
+    if (!link) {
+      const iconish = await findVisibleFirst(page, [
+        "[class*='cart'] a",
+        "a[class*='cart']",
+        "[aria-label*='cart' i]",
+      ]);
+      link = iconish.locator;
+      selectorNote = iconish.selector || "cart link";
+    }
+    if (!link) {
+      const byRole = page.getByRole("link", { name: /cart/i }).first();
+      if ((await byRole.count()) > 0 && (await byRole.isVisible().catch(() => false))) {
+        link = byRole;
+        selectorNote = "role=link[name=cart]";
+      }
+    }
+    if (!link) return false;
+
+    await clickSafely(page, link, {
+      step: "3L-nav-to-cart-for-light-read",
+      selectorNote,
+    });
+    await waitForSpaNavigation(
+      page,
+      "/milo/cart",
+      [
+        "button:has-text('Validate')",
+        "button:has-text('Clear Cart')",
+        "text=/Cart is empty/i",
+        "text=/Your cart/i",
+      ],
+      15_000,
+      "stage3-light-cart-read-nav",
+    );
+    await waitForAngularStable(page, 5_000).catch(async () => {
+      await page.waitForTimeout(500);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Light-validate (task #60): standalone active-cart reader, page-context pure
+ * (runs via page.evaluate, takes no args). MIRRORS readCartContents' selectors
+ * and OOS-detection logic intentionally — the proven post-add verifier stays
+ * untouched; this is a localized duplicate so a later cleanup may DRY them.
+ *
+ * OOS section = an element whose OWN text is exactly /^out of stock items$/i
+ * with no children; tables AFTER it (DOCUMENT_POSITION_FOLLOWING) are OOS.
+ *
+ * Returns { active: [{code, quantity}], oosCount: <# of OOS item rows> }.
+ * A null quantity (unreadable qty input) is left as-is — the matcher then
+ * returns malformed_qty → no skip → full flow. Conservative by construction.
+ */
+function readActiveCartForLight() {
+  const parseQtyFromRow = (row) => {
+    const qtyCell = row.querySelectorAll("td")[1];
+    if (!qtyCell) return null;
+    const qtyInput = qtyCell.querySelector("input");
+    if (qtyInput && qtyInput.value) {
+      const n = parseInt(qtyInput.value, 10);
+      return Number.isFinite(n) ? n : null;
+    }
+    const m = (qtyCell.textContent || "").match(/(\d+)/);
+    return m ? parseInt(m[1], 10) : null;
+  };
+
+  const oosAnchor = [...document.querySelectorAll("*")].find((el) => {
+    const txt = (el.textContent || "").trim();
+    return /^out of stock items$/i.test(txt) && el.children.length === 0;
+  });
+
+  const active = [];
+  let oosCount = 0;
+  const tables = [...document.querySelectorAll("table.table-bordered")];
+  for (const table of tables) {
+    const isAfterOosAnchor =
+      oosAnchor &&
+      (oosAnchor.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    const rows = [...table.querySelectorAll("tbody > tr")];
+    for (const row of rows) {
+      const codeEl = row.querySelector("td span.text-muted");
+      if (!codeEl) continue;
+      const codeText = (codeEl.textContent || "").trim();
+      if (!/^\d+$/.test(codeText)) continue;
+      const qty = parseQtyFromRow(row);
+      if (isAfterOosAnchor) {
+        oosCount += 1;
+      } else {
+        active.push({ code: codeText, quantity: qty });
+      }
+    }
+  }
+  return { active, oosCount };
+}
+
+/**
+ * Light-validate (task #60): build the itemsAdded array for the skip path,
+ * mirroring the normal verified-item shape exactly (plus a `light-match`
+ * batch tag) so downstream stages see a familiar, verified-looking result.
+ */
+function buildLightItemsAdded(normalizedItems) {
+  return normalizedItems.map((item, i) => ({
+    code: item.code,
+    quantity: item.quantity,
+    verified: true,
+    actualNameOnPage: "",
+    rowIndex: i,
+    expectedNameMatched: null,
+    durationMs: 0,
+    batch: "light-match",
+    verifiedQuantity: item.quantity,
+  }));
+}
+
 export async function addItemsToCart(session, items, options = {}) {
   validateStage3Session(session);
   const skipPreValidation = options.skipPreValidation === true;
@@ -802,11 +944,87 @@ export async function addItemsToCart(session, items, options = {}) {
       : null;
 
   const skipCartClear = options.skipCartClear === true;
+  // Light-validate fast path (task #60). OPT-IN: default OFF = today's exact
+  // behavior. Explicit option wins (tests); else env LK_RPA_LIGHT_VALIDATE.
+  const lightValidate =
+    typeof options.lightValidate === "boolean"
+      ? options.lightValidate
+      : process.env.LK_RPA_LIGHT_VALIDATE === "1" ||
+        process.env.LK_RPA_LIGHT_VALIDATE === "yes";
   const run = async () => {
     const page = session.page;
     if (outputDir) await mkdir(outputDir, { recursive: true });
 
     let cartClearResult = null;
+
+    // ─── Light-validate fast path (task #60) ───────────────────────────────
+    // OPT-IN (default OFF = today's exact behavior). Before the proven
+    // clear + re-add flow, READ the live cart and — only if it already
+    // EXACTLY matches the request (cartExactlyMatchesRequest match:true AND
+    // no OOS items) — skip the clear + re-add and return success. Every
+    // other outcome (no match, nav fail, read stall, thrown error) falls
+    // through to the unchanged full flow from /milo/products. The whole
+    // pre-check is wrapped so it can NEVER throw out of Stage 3.
+    if (lightValidate) {
+      try {
+        const navOk = await navigateToCartForLightRead(page);
+        if (navOk) {
+          const cart = await raceStage3Timeout(
+            page.evaluate(readActiveCartForLight),
+            CART_READ_TIMEOUT_MS,
+            "MILO_STAGE3_CART_VERIFICATION_TIMEOUT",
+            "Light-validate cart read stalled",
+          );
+          const requested = normalizedItems.map((it) => ({ code: it.code, quantity: it.quantity }));
+          const m = cartExactlyMatchesRequest(requested, cart.active);
+          if (m.match && cart.oosCount === 0) {
+            await captureArtifact(page, outputDir, stage3Artifacts, "03-cart-light-match");
+            const itemsAdded = buildLightItemsAdded(normalizedItems);
+            const stage3CompletedAtDate = new Date();
+            console.log(
+              `[stage3] LIGHT VALIDATE: live cart already matches request exactly ` +
+                `(${normalizedItems.length} items) — skipped clear + re-add.`,
+            );
+            return {
+              ...session,
+              currentPage: "cart",
+              currentUrl: page.url(),
+              itemsAdded,
+              itemsRejected: [],
+              cartVerification: {
+                reportedAddedCount: normalizedItems.length,
+                confirmedInCartCount: normalizedItems.length,
+                demotedCount: 0,
+                activeCart: cart.active,
+                oosSection: [],
+                oosHeadingFound: false,
+                clampedItems: [],
+                oosItems: [],
+                missingItems: [],
+                skippedReAdd: true,
+              },
+              cartClearResult: { skipped: true, reason: "cart-already-matches" },
+              stage3StartedAt,
+              stage3CompletedAt: stage3CompletedAtDate.toISOString(),
+              stage3DurationMs: stage3CompletedAtDate.getTime() - stage3StartedAtDate.getTime(),
+              stage3Artifacts,
+            };
+          }
+          console.log(
+            `[stage3] LIGHT VALIDATE: no skip (reason=${m.reason}, active=${cart.active.length}, oos=${cart.oosCount}) — full clear + re-add.`,
+          );
+        } else {
+          console.log("[stage3] LIGHT VALIDATE: cart nav for read failed — full clear + re-add.");
+        }
+      } catch (e) {
+        console.warn(`[stage3] LIGHT VALIDATE: pre-check error (${String(e?.message || e)}) — full clear + re-add.`);
+      }
+      // Bail path: restore the normal precondition (/milo/products) before
+      // the existing flow so it starts from the same URL it does today.
+      if (!page.url().includes("/milo/products")) {
+        await navigateBackToProducts(page).catch(() => {});
+      }
+    }
 
     try {
       // Pre-flight: clear any existing cart state before adding new items.
