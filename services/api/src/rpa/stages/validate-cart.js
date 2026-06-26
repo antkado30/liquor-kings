@@ -744,6 +744,53 @@ export async function validateCartOnMilo(session, options = {}) {
       const c = String(oos?.code ?? "").trim();
       if (c) stage4SeenCodes.add(c);
     }
+    /*
+     * Re-verify suspected demotions before flagging them (2026-06-26).
+     *
+     * The check above is based on a SINGLE parseCartState read. On a slow
+     * MILO the cart table can paint a moment after that first read, so an
+     * in-stock item is briefly absent from stage4SeenCodes and would be
+     * falsely flagged validate_demoted. So: if the first read suspects ANY
+     * demotion, settle once and re-read the cart (parseCartState is
+     * read-only — no clicks, no cart mutation), then UNION the second read's
+     * seen codes into stage4SeenCodes. Only codes missing from BOTH reads
+     * survive as validate_demoted. The happy path (nothing suspected) does
+     * zero extra work and adds no wait.
+     *
+     * NOTE: this only touches the inferred validate_demoted path. Items
+     * MILO itself placed in its OOS section (reason "oos_section", built
+     * above) are real OOS and are never re-verified.
+     */
+    const suspectedDemotedCodes = [];
+    for (const code of stage3VerifiedCodes) {
+      if (!stage4SeenCodes.has(code)) suspectedDemotedCodes.push(code);
+    }
+    if (suspectedDemotedCodes.length > 0) {
+      await waitForAngularStable(page, 5_000).catch(() => {});
+      await page.waitForTimeout(1_500);
+      try {
+        const secondParsed = await parseCartState(page);
+        if (
+          secondParsed &&
+          Array.isArray(secondParsed.adaOrders) &&
+          Array.isArray(secondParsed.outOfStockItems)
+        ) {
+          for (const ada of secondParsed.adaOrders) {
+            for (const it of ada.items || []) {
+              const c = String(it?.code ?? "").trim();
+              if (c) stage4SeenCodes.add(c);
+            }
+          }
+          for (const oos of secondParsed.outOfStockItems) {
+            const c = String(oos?.code ?? "").trim();
+            if (c) stage4SeenCodes.add(c);
+          }
+        }
+      } catch {
+        // Second read failed — fall back to the first read's stage4SeenCodes
+        // (behave exactly as today). Never crash the stage over the re-verify.
+      }
+    }
     // Quick lookup of Stage 3's recorded quantity/name per code for nice
     // rendering on the scanner side.
     const stage3ItemByCode = new Map(
