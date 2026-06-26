@@ -2,7 +2,9 @@ import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthGate } from "./components/AuthGate";
 import { BottomTabBar } from "./components/BottomTabBar";
+import { OrderStatusPill } from "./components/OrderStatusPill";
 import { CartProvider } from "./hooks/useCart";
+import { ActiveOrderProvider } from "./hooks/useActiveOrder";
 // ScannerPage is the home/landing screen — keep it EAGER so first paint is
 // instant. Every other route is lazy-loaded (code-split) so the initial JS
 // bundle stays small, then prefetched on idle so tab taps still feel instant.
@@ -79,29 +81,44 @@ export default function App() {
     <AuthGate>
       <CartProvider>
         <BrowserRouter basename="/scanner">
-          <Suspense fallback={null}>
-            <Routes>
-              <Route path="/" element={<ScannerPage />} />
-              <Route path="/cart" element={<CartPage />} />
-              <Route path="/orders" element={<OrdersPage />} />
-              <Route path="/orders/:id" element={<OrderDetailPage />} />
-              <Route path="/browse" element={<BrowsePage />} />
-              <Route path="/templates" element={<TemplatesPage />} />
-              <Route path="/more" element={<MorePage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/assistant" element={<AssistantPage />} />
-              <Route path="/inventory" element={<InventoryPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Suspense>
-          <RoutePrefetcher />
           {/*
-            Bottom tab bar — fixed-position primary nav (task #90).
-            Renders alongside every route under the BrowserRouter. The
-            tab bar handles its own active-route detection via
-            useLocation, so it doesn't need per-page wiring.
+            ActiveOrderProvider lifts a single in-flight run to the app root
+            (2026-06-26) so its status survives the cart drawer closing and
+            page navigation. Infrastructure only — nothing calls trackOrder
+            yet, so with no order tracked the pill renders null and behavior
+            is identical to before. Wraps Routes + shell so OrderStatusPill
+            (rendered below, outside <Routes>) persists across navigation.
           */}
-          <BottomTabBar />
+          <ActiveOrderProvider>
+            <Suspense fallback={null}>
+              <Routes>
+                <Route path="/" element={<ScannerPage />} />
+                <Route path="/cart" element={<CartPage />} />
+                <Route path="/orders" element={<OrdersPage />} />
+                <Route path="/orders/:id" element={<OrderDetailPage />} />
+                <Route path="/browse" element={<BrowsePage />} />
+                <Route path="/templates" element={<TemplatesPage />} />
+                <Route path="/more" element={<MorePage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/assistant" element={<AssistantPage />} />
+                <Route path="/inventory" element={<InventoryPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+            <RoutePrefetcher />
+            {/*
+              Bottom tab bar — fixed-position primary nav (task #90).
+              Renders alongside every route under the BrowserRouter. The
+              tab bar handles its own active-route detection via
+              useLocation, so it doesn't need per-page wiring.
+            */}
+            <BottomTabBar />
+            {/*
+              Persistent order-status pill. Rendered OUTSIDE <Routes> so it
+              survives navigation. Returns null when no order is tracked.
+            */}
+            <OrderStatusPill />
+          </ActiveOrderProvider>
         </BrowserRouter>
       </CartProvider>
     </AuthGate>
