@@ -18,6 +18,7 @@ import {
   enrichFailureDetailsWithMlccSignal,
 } from "./mlcc-operator-context.service.js";
 import { isUuid } from "../utils/validation.js";
+import { resolveFromCartRunMode } from "../lib/resolve-run-mode.js";
 
 const ACTIVE_STATUSES = ["queued", "running"];
 
@@ -720,7 +721,46 @@ export const createExecutionRunFromCart = async (
   //   "submit"            → eligible for real submission IF the other two
   //                          gates also align downstream.
   let metadata;
-  if (mode === "rpa_run") {
+  if (mode === "submit") {
+    // DORMANT submit path (2026-06-26). The scanner still sends "rpa_run";
+    // nothing calls this yet. Real submission is triple-gated: this creation
+    // layer stamps mode="submit" ONLY when env + store are BOTH armed, else
+    // it downgrades to dry_run. The worker re-reads both gates at runtime and
+    // checkout.js gates a third time — defense in depth. env is OFF in prod,
+    // so every run dry-runs until P2 wires a client "submit" request.
+    const envArmed = process.env.LK_ALLOW_ORDER_SUBMISSION === "yes";
+    let storeArmed = false;
+    try {
+      const { data: storeRow, error: storeErr } = await supabase
+        .from("stores")
+        .select("allow_order_submission")
+        .eq("id", storeId)
+        .maybeSingle();
+      if (storeErr) {
+        console.warn(
+          `[run] could not read stores.allow_order_submission for store ${storeId}: ${storeErr.message} — defaulting to disarmed (dry_run)`,
+        );
+      } else if (storeRow?.allow_order_submission === true) {
+        storeArmed = true;
+      }
+    } catch (e) {
+      console.warn(
+        `[run] unexpected error reading stores.allow_order_submission: ${e?.message || e} — defaulting to disarmed (dry_run)`,
+      );
+    }
+    const { mode: stampedMode, downgradedFromSubmit } = resolveFromCartRunMode({
+      requestedMode: "submit",
+      envArmed,
+      storeArmed,
+    });
+    metadata = {
+      run_type: "rpa_run",
+      mode: stampedMode,
+      requested_at: new Date().toISOString(),
+      requested_by_user_id: userId ?? null,
+      ...(downgradedFromSubmit ? { downgraded_from_submit: true } : {}),
+    };
+  } else if (mode === "rpa_run") {
     metadata = {
       run_type: "rpa_run",
       mode: "dry_run",

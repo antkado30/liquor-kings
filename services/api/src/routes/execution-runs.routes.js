@@ -96,7 +96,11 @@ router.post("/claim-next", requireServiceRole, async (req, res) => {
  *                       submit. ZERO chance of accidental submission — the
  *                       worker never enters Stage 5 for this mode.
  */
-const VALID_FROM_CART_MODES = new Set(["rpa_run", "validate_only"]);
+// "submit" is accepted (2026-06-26) but DORMANT — nothing calls it yet. The
+// service downgrades it to dry_run unless env + store are both armed, and the
+// worker re-checks both gates at runtime. Listed here only so the route
+// doesn't 400 a future "submit" request before it reaches that logic.
+const VALID_FROM_CART_MODES = new Set(["rpa_run", "validate_only", "submit"]);
 
 router.post("/from-cart/:storeId/:cartId", async (req, res) => {
   const { storeId, cartId } = req.params;
