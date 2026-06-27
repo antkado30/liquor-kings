@@ -29,6 +29,7 @@ import {
   isTerminalStatus,
   type RunMode,
   type RunStatus,
+  type ValidateResult,
 } from "../api/execution";
 import { getCurrentStoreId } from "../lib/currentStore";
 
@@ -46,6 +47,13 @@ export type ActiveOrderResult = {
   submitted: boolean | null;
   failureType: string | null;
   failureMessage: string | null;
+  /**
+   * The run's validate_result (MILO's live cart view: in-stock / OOS /
+   * totals / messages). Populated on terminal from getRunSummary; null
+   * while polling and on runs that never produced one. Surfaced by
+   * RunResultSheet so the user sees what MILO actually found.
+   */
+  validateResult: ValidateResult | null;
 };
 
 export type ActiveOrder = {
@@ -169,6 +177,7 @@ export function ActiveOrderProvider({ children }: { children: ReactNode }) {
           submitted: s.submit_result?.submitted ?? null,
           failureType: s.failure_type ?? null,
           failureMessage: s.failure_message ?? null,
+          validateResult: s.validate_result ?? null,
         };
         setActiveOrder((cur) =>
           cur && cur.runId === order.runId ? { ...cur, status, result } : cur,

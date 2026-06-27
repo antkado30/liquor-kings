@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useActiveOrder } from "../hooks/useActiveOrder";
 import { IconAlert, IconCheck, IconLoader, IconX } from "./Icons";
+import { RunResultSheet } from "./RunResultSheet";
 
 const STAGE_LABELS: Record<string, string> = {
   rpa_login: "Signing in to MLCC",
@@ -28,6 +29,11 @@ function formatElapsed(startedAtMs: number): string {
   const mins = Math.floor(sec / 60);
   const secs = sec % 60;
   return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function money(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return "";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(n));
 }
 
 /**
@@ -47,6 +53,7 @@ function useNowTicker(active: boolean) {
 export function OrderStatusPill() {
   const { activeOrder, dismiss } = useActiveOrder();
   const navigate = useNavigate();
+  const [showResult, setShowResult] = useState(false);
 
   const isRunning = activeOrder !== null && activeOrder.result === null;
   useNowTicker(isRunning);
@@ -55,11 +62,14 @@ export function OrderStatusPill() {
 
   const terminal = activeOrder.result !== null;
 
-  // Resolve copy + icon + (optional) tap target per state.
+  // Resolve copy + icon + tap action per state.
   let icon: React.ReactNode;
   let title: string;
   let sub: string | null = null;
   let navigateTo: string | null = null;
+  // On a succeeded run, tapping the pill opens the result sheet (in-stock /
+  // OOS / totals) rather than navigating.
+  let tapOpensResult = false;
   let tone: "running" | "ok" | "warn" | "err" = "running";
 
   if (!terminal) {
@@ -75,10 +85,11 @@ export function OrderStatusPill() {
     tone = "running";
   } else if (activeOrder.status === "succeeded") {
     const submitted = activeOrder.result?.submitted === true;
+    const vr = activeOrder.result?.validateResult ?? null;
+    const oosCount = Array.isArray(vr?.out_of_stock_items) ? vr!.out_of_stock_items.length : 0;
     if (submitted) {
       icon = <IconCheck size={14} strokeWidth={2.25} />;
       title = "Order placed";
-      navigateTo = "/orders";
       tone = "ok";
     } else {
       // Succeeded but not submitted — dry-run / preview downgrade. Honest.
@@ -86,6 +97,15 @@ export function OrderStatusPill() {
       title = "Cart checked — nothing ordered (practice run)";
       tone = "warn";
     }
+    // Summarize what MILO found; tap opens the full detail sheet.
+    if (oosCount > 0) {
+      sub = `${oosCount} item${oosCount === 1 ? "" : "s"} out of stock — tap to review`;
+    } else {
+      const net = vr?.order_summary?.netTotal;
+      const netStr = money(net);
+      sub = netStr ? `Everything in stock · ${netStr}` : "Everything in stock";
+    }
+    tapOpensResult = true;
   } else {
     // failed / cancelled
     icon = <IconAlert size={14} />;
@@ -96,42 +116,48 @@ export function OrderStatusPill() {
     tone = "err";
   }
 
+  const bodyClickable = tapOpensResult || navigateTo !== null;
   const handleBodyClick = () => {
-    if (navigateTo) navigate(navigateTo);
+    if (tapOpensResult) {
+      setShowResult(true);
+    } else if (navigateTo) {
+      navigate(navigateTo);
+    }
   };
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        left: "50%",
-        transform: "translateX(-50%)",
-        // Sit just above the bottom tab bar (tab bar ~56px + margin).
-        bottom: 72,
-        zIndex: 1200,
-        pointerEvents: "auto",
-        maxWidth: "calc(100vw - 24px)",
-      }}
-    >
+    <>
       <div
-        onClick={navigateTo ? handleBodyClick : undefined}
-        role={navigateTo ? "button" : undefined}
-        tabIndex={navigateTo ? 0 : undefined}
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "8px 10px",
-          borderRadius: 999,
-          background: toneBackground(tone),
-          color: "#ffffff",
-          boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
-          cursor: navigateTo ? "pointer" : "default",
-          fontSize: 13,
-          lineHeight: 1.2,
+          position: "fixed",
+          left: "50%",
+          transform: "translateX(-50%)",
+          // Sit just above the bottom tab bar (tab bar ~56px + margin).
+          bottom: 72,
+          zIndex: 1200,
+          pointerEvents: "auto",
           maxWidth: "calc(100vw - 24px)",
         }}
       >
+        <div
+          onClick={bodyClickable ? handleBodyClick : undefined}
+          role={bodyClickable ? "button" : undefined}
+          tabIndex={bodyClickable ? 0 : undefined}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 10px",
+            borderRadius: 999,
+            background: toneBackground(tone),
+            color: "#ffffff",
+            boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
+            cursor: bodyClickable ? "pointer" : "default",
+            fontSize: 13,
+            lineHeight: 1.2,
+            maxWidth: "calc(100vw - 24px)",
+          }}
+        >
         <span style={{ display: "inline-flex", flexShrink: 0 }}>{icon}</span>
         <span
           style={{
@@ -182,8 +208,16 @@ export function OrderStatusPill() {
         >
           <IconX size={14} />
         </button>
+        </div>
       </div>
-    </div>
+      {showResult && activeOrder && activeOrder.result ? (
+        <RunResultSheet
+          result={activeOrder.result}
+          mode={activeOrder.mode}
+          onClose={() => setShowResult(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
