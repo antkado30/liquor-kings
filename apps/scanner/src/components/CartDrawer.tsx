@@ -1790,7 +1790,14 @@ export function CartDrawer({
             // survive until a confirmed placement (a later portion clears it).
             setIsFiring(true);
             void (async () => {
-              const r = await fireOrder(items);
+              // P2.b2: choose the run mode from the TRUE armed state. With
+              // REAL_SUBMISSION_WIRED=false (P1c), submissionArmed is always
+              // false today → orderMode is always "rpa_run" (practice), so
+              // behavior is identical to before. Go-live flips the flag +
+              // arms env/store, and this resolves to "submit"; the server
+              // then independently re-gates env + store + checkout regardless.
+              const orderMode = submissionArmed ? "submit" : "rpa_run";
+              const r = await fireOrder(items, orderMode);
               setIsFiring(false);
               if (r.ok) {
                 trackOrder(r.runId, "rpa_run");

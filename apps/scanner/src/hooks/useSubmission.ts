@@ -190,6 +190,7 @@ export function useSubmission(
    */
   fireOrder: (
     items: CartItem[],
+    mode?: RunMode,
   ) => Promise<{ ok: true; runId: string } | { ok: false; error: string }>;
 } {
   const [state, setState] = useState<SubmissionState>({ kind: "idle" });
@@ -615,11 +616,12 @@ export function useSubmission(
   const fireOrder = useCallback(
     async (
       items: CartItem[],
+      mode: RunMode = "rpa_run",
     ): Promise<{ ok: true; runId: string } | { ok: false; error: string }> => {
       try {
         if (items.length === 0) return { ok: false, error: "Cart is empty." };
         const cartId = await syncCart(items, () => {});
-        const runId = await triggerRun(cartId, "rpa_run");
+        const runId = await triggerRun(cartId, mode);
         return { ok: true, runId };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };

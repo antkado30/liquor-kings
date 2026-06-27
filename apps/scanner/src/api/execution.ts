@@ -54,7 +54,7 @@ export type RunStatus =
  * without ever entering Stage 5. After review the user clicks Submit
  * separately, which triggers a "rpa_run" run for the real checkout.
  */
-export type RunMode = "rpa_run" | "validate_only";
+export type RunMode = "rpa_run" | "validate_only" | "submit";
 
 /**
  * Live cart state surfaced by the backend after a validate_only run
