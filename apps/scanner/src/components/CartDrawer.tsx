@@ -1800,7 +1800,7 @@ export function CartDrawer({
               const r = await fireOrder(items, orderMode);
               setIsFiring(false);
               if (r.ok) {
-                trackOrder(r.runId, "rpa_run");
+                trackOrder(r.runId, orderMode);
                 onClose();
               } else {
                 setFireError(r.error);

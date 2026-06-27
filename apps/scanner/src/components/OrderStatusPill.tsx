@@ -76,9 +76,11 @@ export function OrderStatusPill() {
     // In flight. Headline is mode-aware so we never lie: a validate_only run
     // is "checking", not "placing". The stage label gives the live detail.
     icon = <IconLoader size={14} strokeWidth={2.25} className="rpa-progress__spin" />;
-    title = activeOrder.mode === "validate_only" ? "Checking your cart" : "Placing your order";
+    title = activeOrder.mode === "submit" ? "Placing your order" : "Checking your cart";
     const stageLabel = activeOrder.progressStage
-      ? STAGE_LABELS[activeOrder.progressStage] ?? null
+      ? activeOrder.progressStage === "rpa_checkout" && activeOrder.mode !== "submit"
+        ? "Finalizing the check"
+        : (STAGE_LABELS[activeOrder.progressStage] ?? null)
       : null;
     sub = stageLabel ?? activeOrder.progressMessage ?? "Working…";
     sub = `${sub} · ${formatElapsed(activeOrder.startedAtMs)}`;
