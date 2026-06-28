@@ -315,7 +315,59 @@ export async function navigateToProducts(session, options = {}) {
           await page.waitForTimeout(750);
         }
 
+        let usedDropdown = false;
         if (!licenseLink) {
+          // Dropdown fallback (2026-06-28): MILO sometimes renders the license
+          // selector as an Angular dropdown widget (<app-location-widget
+          // ngbDropdownToggle> with a hidden <a.dropdown-item
+          // routerlink="/location">) instead of a plain href link. The link
+          // scan above finds nothing in that state. Open the dropdown and
+          // click its /location item. The direct-link scan stays PRIMARY;
+          // this is fallback-only.
+          const toggle = page
+            .locator(
+              "#location-widget, app-location-widget [ngbDropdownToggle], app-location-widget .dropdown-toggle, [ngbDropdownToggle].dropdown-toggle",
+            )
+            .first();
+          if ((await toggle.count()) > 0 && (await toggle.isVisible().catch(() => false))) {
+            logStep("opening license dropdown (no direct link found)");
+            await clickSafely(page, toggle, {
+              step: "2a-open-location-dropdown",
+              selectorNote: "license dropdown toggle",
+            });
+            const itemDeadline = Date.now() + 5_000;
+            let dropdownItem = null;
+            for (;;) {
+              const cand = page
+                .locator(
+                  "a.dropdown-item[routerlink='/location'], a.dropdown-item[href*='/location'], a[routerlink='/location']",
+                )
+                .first();
+              if ((await cand.count()) > 0 && (await cand.isVisible().catch(() => false))) {
+                dropdownItem = cand;
+                break;
+              }
+              if (Date.now() >= itemDeadline) break;
+              await page.waitForTimeout(300);
+            }
+            if (dropdownItem) {
+              await clickSafely(page, dropdownItem, {
+                step: "2a-dropdown-to-location",
+                selectorNote: "license dropdown item (routerlink=/location)",
+              });
+              await waitForSpaNavigation(
+                page,
+                "/milo/location",
+                ["div.location-card-title", "text=/Your Licenses/i"],
+                HOME_TO_LOCATION_TIMEOUT_MS,
+                "stage2-dropdown-to-location",
+              );
+              usedDropdown = true;
+            }
+          }
+        }
+
+        if (!licenseLink && !usedDropdown) {
           const linksFound = await page.evaluate(() => {
             return [...document.querySelectorAll("a[href*='/milo/location']")].map((a) => {
               const rect = a.getBoundingClientRect();
@@ -350,17 +402,19 @@ export async function navigateToProducts(session, options = {}) {
           );
         }
 
-        await clickSafely(page, licenseLink, {
-          step: "2a-home-to-location",
-          selectorNote: `select a license from home page (${selectedSelector})`,
-        });
-        await waitForSpaNavigation(
-          page,
-          "/milo/location",
-          ["div.location-card-title", "text=/Your Licenses/i"],
-          HOME_TO_LOCATION_TIMEOUT_MS,
-          "stage2-home-to-location",
-        );
+        if (licenseLink) {
+          await clickSafely(page, licenseLink, {
+            step: "2a-home-to-location",
+            selectorNote: `select a license from home page (${selectedSelector})`,
+          });
+          await waitForSpaNavigation(
+            page,
+            "/milo/location",
+            ["div.location-card-title", "text=/Your Licenses/i"],
+            HOME_TO_LOCATION_TIMEOUT_MS,
+            "stage2-home-to-location",
+          );
+        }
       } else if (initialUrl.includes("/milo/location")) {
         await waitForAngularStable(page, 10_000);
       } else {
