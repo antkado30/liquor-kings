@@ -113,6 +113,8 @@ Proves the matching logic; becomes the core of the `resolve_order_list` tool.
 Status: ⏳ bugs #1 + #2 are freeze-compatible hardening; the verify + add-to-cart
 UI is a feature — sequencing vs the 3-order mandate is Tony's call.
 
+- 💡 **Bulk/fast order entry as the core differentiator.** MILO only offers Add-By-Code (one code at a time) — painful. LK's edge is effortless cart-building: scan, photo of barcode/tag/bottle, search, paste-a-list — no manual codes. Keep expanding + polishing this; consider an explicit "import/upload an order" too. (Tony, 2026-06-27.)
+
 ---
 
 ## 🗄️ Permanent price-book archive + history (stated 2026-06-16)
