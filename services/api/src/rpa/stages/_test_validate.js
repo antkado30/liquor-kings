@@ -101,6 +101,13 @@ async function main() {
     }
     process.exitCode = 1;
   } finally {
+    // Close the CONTEXT before the browser. Playwright flushes the recorded
+    // HAR (and video) on context.close(); browser.close() alone didn't flush
+    // the HAR, so the network capture (R2 experiment) was missing. Closing
+    // the context first ensures network.har is written to the output dir.
+    if (session?.context) {
+      await session.context.close().catch(() => {});
+    }
     if (session?.browser) {
       await session.browser.close().catch(() => {});
     }
