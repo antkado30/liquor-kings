@@ -1,3 +1,10 @@
+import dotenv from "dotenv";
+// Load creds from the gitignored services/api/.env so MILO_USERNAME /
+// MILO_PASSWORD / MILO_TEST_LICENSE never have to be passed on the command
+// line (process list / shell history). Mirrors src/config/supabase.js.
+// quiet: dotenv 17 prints a promo banner on load; suppress it.
+dotenv.config({ quiet: true });
+
 import { loginToMilo } from "./login.js";
 import { navigateToProducts } from "./navigate-to-products.js";
 import { addItemsToCart } from "./add-items-to-cart.js";
