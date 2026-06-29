@@ -10,6 +10,7 @@ import { navigateToProducts } from "../rpa/stages/navigate-to-products.js";
 import { addItemsToCart, clearMiloCart } from "../rpa/stages/add-items-to-cart.js";
 import { validateCartOnMilo } from "../rpa/stages/validate-cart.js";
 import { checkoutOnMilo } from "../rpa/stages/checkout.js";
+import { buildAndValidateViaApi } from "../rpa/engine/engine-api.js";
 import {
   acquireSession,
   attachFreshSession,
@@ -734,6 +735,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
   ]);
   const runType = payload?.metadata?.run_type ?? null;
   const isValidateOnly = runType === "validate_only";
+  const orderEngine = (process.env.LK_ORDER_ENGINE || "rpa").toLowerCase();
   const isCartResetOnly = runType === "cart_reset_only";
   if (!acceptedRunTypes.has(runType)) {
     await finalizeRun({
@@ -1238,6 +1240,160 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         current_url: session?.page?.url?.() ?? session?.currentUrl ?? null,
       }),
     );
+
+    // ─── API ENGINE PATH (opt-in, validate-only) ──────────────────────────
+    // When LK_ORDER_ENGINE=api AND this is a validate_only run, replace RPA
+    // Stages 2-4 with direct MILO API calls (no DOM typing). Self-contained:
+    // own keepalive, own failure finalize, own validate-only finalize+return.
+    // A submit run NEVER uses this path (the engine cannot submit). Flag off
+    // (default "rpa") => this block is skipped and behavior is unchanged.
+    if (orderEngine === "api" && isValidateOnly) {
+      const engineKeepalive = setInterval(() => {
+        void heartbeatRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          workerId,
+          progressStage: "rpa_validate",
+          progressMessage: "Confirming your cart with MLCC",
+        }).catch(() => {});
+      }, 15_000);
+      try {
+        const engineResult = await buildAndValidateViaApi(session, normalizedItems, { username, password });
+        session.validated = engineResult.validated;
+        session.canCheckout = engineResult.canCheckout;
+        session.adaOrders = engineResult.adaOrders;
+        session.orderSummary = engineResult.orderSummary;
+        session.outOfStockItems = engineResult.outOfStockItems;
+        session.validationMessages = engineResult.validationMessages;
+        session.deliveryDates = engineResult.deliveryDates;
+        session.currentUrl = session?.page?.url?.() ?? session?.currentUrl ?? null;
+        stepEvidence.push(
+          buildWorkerStepEvidence(
+            "engine_validate_complete",
+            "API engine validate succeeded (Stages 2-4 via direct API)",
+            {
+              can_checkout: session.canCheckout,
+              out_of_stock_count: Array.isArray(session.outOfStockItems) ? session.outOfStockItems.length : null,
+              engine_timings: engineResult.engineTimings ?? null,
+            },
+          ),
+        );
+      } catch (engineError) {
+        clearInterval(engineKeepalive);
+        const failure = summarizeFailure(
+          engineError?.message ?? "API engine validate failed",
+          engineError?.code ?? FAILURE_TYPE.UNKNOWN,
+          {
+            stage: "engine_validate",
+            details:
+              engineError?.details && typeof engineError.details === "object"
+                ? engineError.details
+                : {},
+          },
+        );
+        await finalizeRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          status: "failed",
+          workerNotes: "API engine validate failed",
+          errorMessage: failure.message,
+          failureType: failure.failureType,
+          failureDetails: failure.details,
+          evidence: [
+            ...stepEvidence,
+            buildNoSubmitAttestationEvidence("engine_validate", "validate_only"),
+          ],
+        });
+        return {
+          success: false,
+          claimed: true,
+          failed: true,
+          runId: run.id,
+          stage: "engine_validate",
+          error: engineError?.code ?? FAILURE_TYPE.UNKNOWN,
+        };
+      } finally {
+        clearInterval(engineKeepalive);
+      }
+
+      // Validate-only finalize — copied verbatim from the isValidateOnly
+      // block below (build validateOnlySummary from session.*, push
+      // validate_only_complete + validate_only_summary + no-submit attestation
+      // evidence, finalizeRun(status:"succeeded"), set runSucceeded = true,
+      // and return the same validate_only result object). Identical strings/shape.
+      const validateOnlySummary = {
+        validated: session?.validated ?? null,
+        can_checkout: session?.canCheckout ?? null,
+        ada_breakdown: session?.adaOrders ?? null,
+        order_summary: session?.orderSummary ?? null,
+        items_added: Array.isArray(session?.itemsAdded)
+          ? session.itemsAdded
+          : null,
+        items_rejected: Array.isArray(session?.itemsRejected)
+          ? session.itemsRejected
+          : null,
+        out_of_stock_items: Array.isArray(session?.outOfStockItems)
+          ? session.outOfStockItems
+          : null,
+        validate_messages: Array.isArray(session?.validationMessages)
+          ? session.validationMessages
+          : null,
+        validate_errors: Array.isArray(session?.validationErrors)
+          ? session.validationErrors
+          : null,
+        current_url: session?.currentUrl ?? null,
+      };
+
+      stepEvidence.push(
+        buildWorkerStepEvidence(
+          "validate_only_complete",
+          "validate_only pipeline complete; Stage 5 deliberately skipped",
+          { ...validateOnlySummary, stage_5_invoked: false },
+        ),
+      );
+
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "succeeded",
+        workerNotes:
+          "validate_only complete — Stages 1-4 ran successfully; Stage 5 was not reachable",
+        evidence: [
+          ...stepEvidence,
+          buildEvidenceEntry({
+            kind: "validate_only_summary",
+            stage: "validate_only_complete",
+            message:
+              "Live MILO cart state for the scanner's Validate-against-MLCC UI",
+            attributes: validateOnlySummary,
+          }),
+          buildNoSubmitAttestationEvidence(
+            "validate_only_complete",
+            "validate_only",
+          ),
+        ],
+      });
+      console.log(
+        `[worker] validate_only run ${run.id} finalized succeeded (canCheckout=${session?.canCheckout}, oos=${Array.isArray(session?.outOfStockItems) ? session.outOfStockItems.length : "?"})`,
+      );
+      runSucceeded = true;
+      return {
+        success: true,
+        claimed: true,
+        failed: false,
+        runId: run.id,
+        runType: "validate_only",
+        canCheckout: session?.canCheckout ?? null,
+        outOfStockCount: Array.isArray(session?.outOfStockItems)
+          ? session.outOfStockItems.length
+          : null,
+        sessionReused: sessionWasReused,
+      };
+    }
+    // ─── END API ENGINE PATH ──────────────────────────────────────────────
 
     await heartbeatRun({
       apiBaseUrl,
