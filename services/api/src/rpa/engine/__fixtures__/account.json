@@ -1,0 +1,19 @@
+{
+  "id": "31d52c76-3fcc-42ca-9aa4-cc53d00437f1",
+  "username": "redacted",
+  "email": "redacted@example.com",
+  "authorities": [
+    "OWNER"
+  ],
+  "groups": [
+    {
+      "id": "1fdec7cb-b51c-449c-b068-5a76074dfdee",
+      "name": "000000",
+      "active": true,
+      "subscriptionId": "96992bbb-0a10-4a7f-87d5-84cee1d3fafc",
+      "subscriptionName": null,
+      "subscriptionType": "LIQUOR_LICENSE",
+      "authority": "OWNER"
+    }
+  ]
+}

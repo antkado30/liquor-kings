@@ -1,0 +1,110 @@
+{
+  "id": 271941905,
+  "userId": "000000",
+  "items": [
+    {
+      "product": {
+        "id": "99955686451243",
+        "code": "9121",
+        "oldCode": null,
+        "name": "J DANIELS OLD 7 BLACK (TN)",
+        "price": 31.24,
+        "caseSize": 12,
+        "proof": "80",
+        "distributor": {
+          "id": "3",
+          "referenceNumber": "321",
+          "name": "NWS Michigan, Inc."
+        },
+        "typeId": "2",
+        "typeName": "TENNESSEE",
+        "sizeInMilliliters": 1000,
+        "splittableInto": [
+          1,
+          3,
+          6
+        ],
+        "michiganDistiller": false,
+        "effectiveOn": "2024-08-04",
+        "delisted": false,
+        "discontinued": false,
+        "soldInCasesOnly": false,
+        "bottlesPerPack": 1
+      },
+      "id": 271941906,
+      "quantity": 12,
+      "total": 374.88,
+      "error": false,
+      "orderedQuantity": null,
+      "available": true,
+      "confirmationNumber": null,
+      "restrictedQuantity": 0
+    },
+    {
+      "product": {
+        "id": "252063246",
+        "code": "11022",
+        "oldCode": null,
+        "name": "DEEP EDDY RUBY RED",
+        "price": 15.16,
+        "caseSize": 12,
+        "proof": "70.0",
+        "distributor": {
+          "id": "2",
+          "referenceNumber": "221",
+          "name": "General Wine & Liquor"
+        },
+        "typeId": "29",
+        "typeName": "FLAVORED VODKA",
+        "sizeInMilliliters": 750,
+        "splittableInto": [
+          1,
+          3,
+          6
+        ],
+        "michiganDistiller": false,
+        "effectiveOn": "2026-02-01",
+        "delisted": false,
+        "discontinued": false,
+        "soldInCasesOnly": false,
+        "bottlesPerPack": 1
+      },
+      "id": 271941907,
+      "quantity": 12,
+      "total": 181.92,
+      "error": false,
+      "orderedQuantity": null,
+      "available": true,
+      "confirmationNumber": null,
+      "restrictedQuantity": 0
+    }
+  ],
+  "taxes": [
+    {
+      "beforeTaxAmt": 0,
+      "taxType": "Gross Total",
+      "taxAmt": 556.8,
+      "liquorCode": ""
+    },
+    {
+      "beforeTaxAmt": 0,
+      "taxType": "Liquor Tax",
+      "taxAmt": 66.96000000000001,
+      "liquorCode": ""
+    },
+    {
+      "beforeTaxAmt": 0,
+      "taxType": "Discount",
+      "taxAmt": 94.68,
+      "liquorCode": ""
+    },
+    {
+      "beforeTaxAmt": 0,
+      "taxType": "Net Total",
+      "taxAmt": 529.08,
+      "liquorCode": ""
+    }
+  ],
+  "total": 556.8,
+  "netTotal": 1614.96
+}
