@@ -29,8 +29,8 @@ describe("parseMiloValidate", () => {
     expect(r.orderSummary.netTotal).toBe(529.08);
     // orderSummary matches validate-cart keys + sign convention (discount negative).
     expect(r.orderSummary.grossTotal).toBe(556.8);
-    expect(r.orderSummary.liquorTax).toBeCloseTo(66.96, 2);
-    expect(r.orderSummary.discount).toBeCloseTo(-94.68, 2);
+    expect(r.orderSummary.liquorTax).toBe(66.96);
+    expect(r.orderSummary.discount).toBe(-94.68);
     // deliveryDates carries all three ADAs.
     expect(r.deliveryDates["141"]).toBe("2026-07-02");
     expect(r.deliveryDates["221"]).toBe("2026-07-07");

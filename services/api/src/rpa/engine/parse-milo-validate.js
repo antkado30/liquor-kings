@@ -129,11 +129,13 @@ export function parseMiloValidate({ cart, inventory, validate, deliveryByRef } =
       const t = taxByType.get(type);
       return t && Number.isFinite(Number(t.taxAmt)) ? Number(t.taxAmt) : null;
     };
-    const grossTotal = taxAmt("Gross Total") ?? num(cart?.total);
-    const liquorTax = taxAmt("Liquor Tax");
+    // Round to cents — MILO returns float noise (e.g. liquorTax 66.96000000000001).
+    const round2 = (x) => (x == null ? null : Math.round(Number(x) * 100) / 100);
+    const grossTotal = round2(taxAmt("Gross Total") ?? num(cart?.total));
+    const liquorTax = round2(taxAmt("Liquor Tax"));
     const discTaxAmt = taxAmt("Discount");
-    const discount = discTaxAmt != null ? -discTaxAmt : null;
-    const netTotal = taxAmt("Net Total");
+    const discount = discTaxAmt != null ? round2(-discTaxAmt) : null;
+    const netTotal = round2(taxAmt("Net Total"));
     const orderSummary = { grossTotal, liquorTax, discount, netTotal };
 
     // ── deliveryDates ({141, 221, 321}) ───────────────────────────────────
