@@ -54,6 +54,8 @@ export type ActiveOrderResult = {
    * RunResultSheet so the user sees what MILO actually found.
    */
   validateResult: ValidateResult | null;
+  /** Wall-clock the check took (tap → terminal). Null until terminal. */
+  durationMs: number | null;
 };
 
 export type ActiveOrder = {
@@ -178,6 +180,7 @@ export function ActiveOrderProvider({ children }: { children: ReactNode }) {
           failureType: s.failure_type ?? null,
           failureMessage: s.failure_message ?? null,
           validateResult: s.validate_result ?? null,
+          durationMs: Date.now() - order.startedAtMs,
         };
         setActiveOrder((cur) =>
           cur && cur.runId === order.runId ? { ...cur, status, result } : cur,

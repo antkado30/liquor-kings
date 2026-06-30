@@ -30,6 +30,20 @@ function money(n: number | null | undefined): string {
 }
 
 /**
+ * Wall-clock the check took, formatted for a subtle one-line readout.
+ * <10s shows one decimal (e.g. 7.4s); 10–59s rounds; ≥60s is "Xm Ys".
+ * Returns null for missing/invalid/non-positive values (rendered as nothing).
+ */
+function formatDuration(ms: number | null | undefined): string | null {
+  if (ms == null || !Number.isFinite(Number(ms)) || Number(ms) <= 0) return null;
+  const s = Number(ms) / 1000;
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
+  const m = Math.floor(s / 60);
+  const r = Math.round(s % 60);
+  return `${m}m ${r}s`;
+}
+
+/**
  * MILO sometimes echoes bare numbers or single chars alongside real messages.
  * Skip pure-numeric and too-short strings so the messages list stays signal.
  * Mirrors the junk filter ValidateResultPanel uses.
@@ -48,6 +62,7 @@ export function RunResultSheet({ result, mode, onClose }: Props) {
   const submitted = result.submitted === true;
   const oos = Array.isArray(vr?.out_of_stock_items) ? vr!.out_of_stock_items : [];
   const summary = vr?.order_summary ?? null;
+  const checkedIn = formatDuration(result.durationMs);
 
   // Headline: placed > ready > review. Honest about a non-submission.
   let headline: string;
@@ -107,6 +122,11 @@ export function RunResultSheet({ result, mode, onClose }: Props) {
         </div>
 
         <div style={bodyStyle}>
+          {checkedIn ? (
+            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginBottom: 12 }}>
+              Checked in {checkedIn}
+            </div>
+          ) : null}
           {/* ─── Practice-run honesty note ─── */}
           {!submitted ? (
             <div style={practiceNoteStyle}>
