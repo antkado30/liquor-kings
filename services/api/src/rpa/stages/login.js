@@ -12,7 +12,7 @@ const DEFAULT_LOGIN_URL = "https://www.lara.michigan.gov/milo/auth/sign-in";
 // (which finish well under the cap) — a slow MILO day should run slow, not fail.
 const DEFAULT_TIMEOUT_MS = 150_000;
 const LOGIN_CLICK_TIMEOUT_MS = 15_000;
-const GOTO_TIMEOUT_MS = 15_000;
+const GOTO_TIMEOUT_MS = 30_000;
 // Retry policy. A transient cold-start failure — Playwright "Target page,
 // context or browser has been closed" on first launch, or an unreachable
 // login page — should not kill a run the next attempt would complete fine.
@@ -528,7 +528,7 @@ export async function loginToMilo(credentials, options = {}) {
       const canRetry = attempt < maxAttempts && RETRYABLE_LOGIN_CODES.has(error?.code);
       if (!canRetry) throw error;
       console.warn(
-        `[login] attempt ${attempt}/${maxAttempts} failed transiently (${error.code}) — retrying`,
+        `[login] attempt ${attempt}/${maxAttempts} failed transiently (${error.code})${error?.details?.reason ? " — " + error.details.reason : ""} — retrying`,
       );
       // brief escalating backoff before the next attempt
       await new Promise((resolve) => setTimeout(resolve, 1_000 * attempt));
