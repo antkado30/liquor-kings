@@ -2303,8 +2303,12 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         healthy: runSucceeded,
         reason: runUnhealthyReason || (runSucceeded ? null : "run_did_not_complete"),
       });
-    } else if (session?.browser) {
-      await session.browser.close().catch(() => {});
+    } else {
+      // Close the CONTEXT before the browser so Playwright flushes recordHar
+      // (network.har) to disk. browser.close() alone does NOT flush it
+      // (documented in _test_validate.js). Best-effort — teardown never throws.
+      if (session?.context) await session.context.close().catch(() => {});
+      if (session?.browser) await session.browser.close().catch(() => {});
     }
   }
 }
