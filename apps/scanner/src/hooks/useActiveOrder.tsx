@@ -11,9 +11,10 @@
  * cadence as useSubmission's pollUntilTerminal (2500ms, easing to 10000ms
  * after 60s, never giving up until terminal or cancelled/unmounted).
  *
- * INFRASTRUCTURE ONLY. Nothing calls trackOrder yet — with no order tracked,
- * activeOrder is null, the pill renders null, and the app behaves exactly as
- * today. No validate/submit behavior is changed.
+ * WIRED: CartDrawer calls trackOrder after firing a non-blocking Check/Place
+ * Order run, so the pill tracks it app-wide. With no order tracked, activeOrder
+ * is null and the pill renders null. This provider only OBSERVES an
+ * already-triggered run — no validate/submit behavior is changed here.
  */
 import {
   createContext,
@@ -139,55 +140,59 @@ export function ActiveOrderProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /**
-   * Background poll for one run. Mirrors pollUntilTerminal: getRunSummary
-   * every POLL_INTERVAL_MS, ease to POLL_BACKOFF_INTERVAL_MS after 60s, keep
-   * going until terminal / superseded / unmounted. Transient API errors are
-   * swallowed (fetchWithRetry already handles blips) — we never give up on a
-   * live run. On terminal, set `result` and STOP, keeping the terminal state
+   * Background poll for one run. Fetches getRunSummary IMMEDIATELY — a
+   * freshly-tracked or rehydrated run reflects its live status right away, with
+   * no dead interval before the first update (instant-feel on reopen). Then
+   * waits POLL_INTERVAL_MS between ticks, easing to POLL_BACKOFF_INTERVAL_MS
+   * after 60s, until terminal / superseded / unmounted. Transient API errors
+   * are swallowed (fetchWithRetry already handles blips) — we never give up on
+   * a live run. On terminal, set `result` and STOP, keeping the terminal state
    * for the pill to show until dismiss().
    */
   const poll = useCallback(async (order: ActiveOrder) => {
     const gen = ++runGenRef.current;
     const pollStart = Date.now();
-    let interval = POLL_INTERVAL_MS;
     while (mountedRef.current && runGenRef.current === gen) {
-      await new Promise<void>((resolve) => setTimeout(resolve, interval));
-      if (!mountedRef.current || runGenRef.current !== gen) return;
-      if (Date.now() - pollStart > POLL_BACKOFF_AFTER_MS) {
-        interval = POLL_BACKOFF_INTERVAL_MS;
-      }
+      // Fetch FIRST so the pill reflects the live run immediately (no dead
+      // interval on a fresh tap or an app-reopen rehydrate).
       const res = await getRunSummary({ runId: order.runId });
       if (!mountedRef.current || runGenRef.current !== gen) return;
-      if (!res.ok) {
-        // Transient API error — keep polling, don't fail the run.
-        continue;
-      }
-      const s = res.summary;
-      const status = s.status;
-      const progressStage = s.progress_stage;
-      const progressMessage = s.progress_message;
+      if (res.ok) {
+        const s = res.summary;
+        const status = s.status;
+        const progressStage = s.progress_stage;
+        const progressMessage = s.progress_message;
 
-      // Live progress update (only if this run is still the active one).
-      setActiveOrder((cur) =>
-        cur && cur.runId === order.runId
-          ? { ...cur, status, progressStage, progressMessage }
-          : cur,
-      );
-
-      if (isTerminalStatus(status)) {
-        const result: ActiveOrderResult = {
-          submitted: s.submit_result?.submitted ?? null,
-          failureType: s.failure_type ?? null,
-          failureMessage: s.failure_message ?? null,
-          validateResult: s.validate_result ?? null,
-          durationMs: Date.now() - order.startedAtMs,
-        };
+        // Live progress update (only if this run is still the active one).
         setActiveOrder((cur) =>
-          cur && cur.runId === order.runId ? { ...cur, status, result } : cur,
+          cur && cur.runId === order.runId
+            ? { ...cur, status, progressStage, progressMessage }
+            : cur,
         );
-        // STOP polling; KEEP the terminal result in state until dismiss().
-        return;
+
+        if (isTerminalStatus(status)) {
+          const result: ActiveOrderResult = {
+            submitted: s.submit_result?.submitted ?? null,
+            failureType: s.failure_type ?? null,
+            failureMessage: s.failure_message ?? null,
+            validateResult: s.validate_result ?? null,
+            durationMs: Date.now() - order.startedAtMs,
+          };
+          setActiveOrder((cur) =>
+            cur && cur.runId === order.runId ? { ...cur, status, result } : cur,
+          );
+          // STOP polling; KEEP the terminal result in state until dismiss().
+          return;
+        }
       }
+      // Transient API errors fall through here too — never give up on a live
+      // run. Wait before the next tick; ease off after the first minute.
+      const interval =
+        Date.now() - pollStart > POLL_BACKOFF_AFTER_MS
+          ? POLL_BACKOFF_INTERVAL_MS
+          : POLL_INTERVAL_MS;
+      await new Promise<void>((resolve) => setTimeout(resolve, interval));
+      if (!mountedRef.current || runGenRef.current !== gen) return;
     }
   }, []);
 
