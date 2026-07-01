@@ -550,11 +550,17 @@ internally re-validates on MILO and Stage 5 physically refuses checkout on
 any OOS / rule failure / cart mismatch — it can't send a cart MILO didn't
 bless. The want is about *seeing before committing*, not about safety.
 
-Status: ⏳ NEXT UI BUILD after the submit-endpoint capture. Design
-questions to ask Tony (he invited them): (1) after a clean check, should
-Place re-check silently anyway (belt-and-suspenders, costs seconds) or
-trust the fresh check? (2) should a cart edit after a check disable Place
-until re-checked (MILO-style strictness)?
+Status: ⏳ NEXT UI BUILD after the submit-endpoint capture.
+**Design DECIDED by Tony 2026-07-01 (asked, he answered):**
+1. **Place trusts a fresh check** — if the last check is recent (<~10 min)
+   and the cart is byte-identical since, Place sends immediately, no
+   silent re-verify (instant-feel). Server-side Stage-5 gates still apply
+   regardless — this is UX speed, not a safety trade.
+2. **Any cart edit LOCKS Place until re-checked** — MILO-style strictness;
+   you can never send a cart MILO hasn't blessed. Together: check is
+   always fresh, so trusting it is safe. Implementation note: hash the
+   cart lines at check time; Place enabled only while (hash unchanged &&
+   check age < threshold && check came back green).
 
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
 
