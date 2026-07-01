@@ -529,6 +529,33 @@ carts. Revisit only if a real order with a big cart actually blows past
 
 ### In progress / next up
 
+## 🔥🔥 MILO-style two-step ordering — Check, SEE, then Place (Tony, 2026-07-01, said while ARMED for the first real order)
+
+> "So is there no more validate button, just one button to submit? I don't
+> really like that. I wanna work just how MLCC does."
+
+The armed cart currently collapses to ONE button ("Check Order" becomes
+"Place Order"). Tony wants the MILO rhythm: **check the cart → SEE MILO's
+answer (OOS, totals, delivery dates) → then deliberately place.** Two
+explicit buttons, both always available when armed:
+
+- **"Check with MLCC"** — always runs a validate_only (fast engine, ~5-15s
+  today; ~3s after productId pre-map). Result sheet shows the full truth.
+- **"Place Order"** — the armed submit, keeps the line-by-line confirm
+  modal. After the engine gains submit (post 2026-07-01 capture), this is
+  seconds too — check + place both instant = BETTER than MILO.
+
+Safety note (why tonight was still safe with one button): the submit run
+internally re-validates on MILO and Stage 5 physically refuses checkout on
+any OOS / rule failure / cart mismatch — it can't send a cart MILO didn't
+bless. The want is about *seeing before committing*, not about safety.
+
+Status: ⏳ NEXT UI BUILD after the submit-endpoint capture. Design
+questions to ask Tony (he invited them): (1) after a clean check, should
+Place re-check silently anyway (belt-and-suspenders, costs seconds) or
+trust the fresh check? (2) should a cart edit after a check disable Place
+until re-checked (MILO-style strictness)?
+
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
 
 - ✅ **CartDrawer premium overhaul** — the LAST core screen, built
