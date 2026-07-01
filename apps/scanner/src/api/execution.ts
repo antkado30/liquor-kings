@@ -126,7 +126,17 @@ export type RunSummary = {
 export type SubmitResult = {
   mode: string | null;
   submitted: boolean;
-  confirmation_numbers: string[] | null;
+  /**
+   * REAL shape (verified against the worker 2026-07-01): an OBJECT keyed by
+   * ADA reference number — e.g. `{"321": "30765405", "221": "5654920"}` —
+   * built by Stage 5's orders-history scrape (checkout.js
+   * parseOrdersHistoryPage). Keys fall back to "ada_1"/"ada_2" when the
+   * distributor name couldn't be matched; values can be null when a matched
+   * order block was missing its confirmation cell. The old `string[]`
+   * reading was wrong — kept in the union defensively for any historic run
+   * evidence that stored an array.
+   */
+  confirmation_numbers: Record<string, string | null> | string[] | null;
   dry_run_reason: string | null;
 };
 

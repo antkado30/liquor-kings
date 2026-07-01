@@ -162,6 +162,84 @@ describe("useActiveOrder persistence", () => {
     expect(typeof result.current.activeOrder?.result?.durationMs).toBe("number");
   });
 
+  it("threads confirmation numbers through on a REAL submitted order (ADA-object shape)", async () => {
+    // The worker's real shape (order-day contract, 2026-07-01): an object
+    // keyed by ADA reference number, from Stage 5's orders-history scrape.
+    // RunResultSheet renders these at the moment of truth — dropping them
+    // (the pre-2026-07-01 behavior) made the user dig for the confirmation.
+    seedStored({
+      runId: "run-real-1",
+      mode: "submit",
+      storeId: "store-1",
+      startedAtMs: Date.now() - 5000,
+    });
+    mockGetRunSummary.mockResolvedValue({
+      ok: true,
+      summary: {
+        id: "run-real-1",
+        status: "succeeded",
+        progress_stage: "rpa_checkout",
+        progress_message: "Order placed",
+        failure_type: null,
+        failure_message: null,
+        validate_result: {
+          validated: true,
+          can_checkout: true,
+          out_of_stock_items: [],
+          order_summary: { netTotal: 5462.8 },
+        },
+        submit_result: {
+          mode: "submit",
+          submitted: true,
+          confirmation_numbers: { "321": "30765405", "221": "5654920" },
+          dry_run_reason: null,
+        },
+      },
+    });
+
+    const { result } = renderHook(() => useActiveOrder(), { wrapper });
+    await flushImmediate();
+
+    expect(result.current.activeOrder?.result?.submitted).toBe(true);
+    expect(result.current.activeOrder?.result?.confirmationNumbers).toEqual({
+      "321": "30765405",
+      "221": "5654920",
+    });
+  });
+
+  it("leaves confirmation numbers null on a practice check (no submit_result numbers)", async () => {
+    seedStored({
+      runId: "run-practice-1",
+      mode: "validate_only",
+      storeId: "store-1",
+      startedAtMs: Date.now() - 5000,
+    });
+    mockGetRunSummary.mockResolvedValue({
+      ok: true,
+      summary: {
+        id: "run-practice-1",
+        status: "succeeded",
+        progress_stage: "rpa_validate",
+        progress_message: "Confirming your cart with MLCC",
+        failure_type: null,
+        failure_message: null,
+        validate_result: {
+          validated: true,
+          can_checkout: true,
+          out_of_stock_items: [],
+          order_summary: { netTotal: 100.0 },
+        },
+        submit_result: { submitted: false },
+      },
+    });
+
+    const { result } = renderHook(() => useActiveOrder(), { wrapper });
+    await flushImmediate();
+
+    expect(result.current.activeOrder?.result?.submitted).toBe(false);
+    expect(result.current.activeOrder?.result?.confirmationNumbers).toBeNull();
+  });
+
   it("drops a stale (>30 min) stored order on remount and clears the key", async () => {
     seedStored({
       runId: "old-run",

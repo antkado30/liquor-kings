@@ -55,6 +55,48 @@ function isUsefulMessage(s: string): boolean {
   return true;
 }
 
+/**
+ * MLCC's three Authorized Distribution Agents, keyed by MILO's distributor
+ * referenceNumber. Stable state-level identities (they're baked into MLCC's
+ * ordering rules), used only as display labels — unknown keys fall back
+ * gracefully below.
+ */
+const ADA_NAMES: Record<string, string> = {
+  "141": "Imperial Beverage",
+  "221": "General Wine & Liquor",
+  "321": "NWS Michigan",
+};
+
+/**
+ * Normalize submit-result confirmation numbers into display rows.
+ * Accepts the REAL worker shape (object keyed by ADA ref or "ada_N") and,
+ * defensively, a plain array from any historic run evidence. Rows with no
+ * number are dropped — a null never renders as a fake confirmation.
+ */
+function confirmationRows(
+  confirmations: Record<string, string | null> | string[] | null | undefined,
+): Array<{ label: string; number: string }> {
+  if (!confirmations) return [];
+  if (Array.isArray(confirmations)) {
+    return confirmations
+      .filter((n): n is string => typeof n === "string" && n.trim().length > 0)
+      .map((n, i) => ({ label: `Order ${i + 1}`, number: n.trim() }));
+  }
+  const rows: Array<{ label: string; number: string }> = [];
+  for (const [key, value] of Object.entries(confirmations)) {
+    if (typeof value !== "string" || value.trim().length === 0) continue;
+    const adaMatch = /^(\d{3})$/.exec(key.trim());
+    const fallbackMatch = /^ada_(\d+)$/i.exec(key.trim());
+    const label = adaMatch
+      ? ADA_NAMES[adaMatch[1]] ?? `ADA ${adaMatch[1]}`
+      : fallbackMatch
+        ? `Order ${fallbackMatch[1]}`
+        : key;
+    rows.push({ label, number: value.trim() });
+  }
+  return rows;
+}
+
 export function RunResultSheet({ result, mode, onClose }: Props) {
   useLockBodyScroll();
 
@@ -63,6 +105,7 @@ export function RunResultSheet({ result, mode, onClose }: Props) {
   const oos = Array.isArray(vr?.out_of_stock_items) ? vr!.out_of_stock_items : [];
   const summary = vr?.order_summary ?? null;
   const checkedIn = formatDuration(result.durationMs);
+  const confirmations = confirmationRows(result.confirmationNumbers);
 
   // Headline: placed > ready > review. Honest about a non-submission.
   let headline: string;
@@ -138,6 +181,29 @@ export function RunResultSheet({ result, mode, onClose }: Props) {
                 and pricing only.
               </span>
             </div>
+          ) : null}
+
+          {/* ─── Confirmation numbers (real submitted orders only) ─── */}
+          {submitted ? (
+            confirmations.length > 0 ? (
+              <section style={{ marginBottom: 16 }}>
+                <div style={sectionLabelStyle}>Confirmation</div>
+                <ul style={listStyle}>
+                  {confirmations.map((c) => (
+                    <li key={`${c.label}-${c.number}`} style={confirmationRowStyle}>
+                      <span style={{ opacity: 0.85 }}>{c.label}</span>
+                      <span style={confirmationNumberStyle}>#{c.number}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : (
+              <div style={confirmationPendingStyle}>
+                Your order went through, but the confirmation number
+                didn&apos;t come back with this run — it&apos;s on the Orders
+                tab, and on MILO under your order history.
+              </div>
+            )
           ) : null}
 
           {/* ─── Out of stock ─── */}
@@ -358,6 +424,36 @@ const totalsStyle: React.CSSProperties = {
   background: "rgba(255,255,255,0.04)",
   borderRadius: 10,
   padding: "8px 12px",
+};
+
+const confirmationRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: 12,
+  fontSize: 14,
+  padding: "8px 12px",
+  background: "rgba(52,211,153,0.08)",
+  border: "1px solid rgba(52,211,153,0.25)",
+  borderRadius: 8,
+};
+
+const confirmationNumberStyle: React.CSSProperties = {
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  fontWeight: 700,
+  fontSize: 15,
+  letterSpacing: "0.02em",
+  color: "#34d399",
+};
+
+const confirmationPendingStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: 10,
+  padding: "10px 12px",
+  fontSize: 13,
+  marginBottom: 16,
+  color: "rgba(255,255,255,0.85)",
 };
 
 const footerStyle: React.CSSProperties = {

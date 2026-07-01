@@ -55,6 +55,15 @@ export type ActiveOrderResult = {
    * RunResultSheet so the user sees what MILO actually found.
    */
   validateResult: ValidateResult | null;
+  /**
+   * MILO confirmation numbers for a REAL submitted order, keyed by ADA
+   * reference number ("321"/"221"/"141", or "ada_1"-style when the
+   * distributor couldn't be matched). Null on practice checks, dry runs,
+   * and while polling. Threaded from submit_result so RunResultSheet can
+   * show the number at the moment of truth (2026-07-01 — the sheet said
+   * "Order placed" but made the user dig for the confirmation).
+   */
+  confirmationNumbers: Record<string, string | null> | string[] | null;
   /** Wall-clock the check took (tap → terminal). Null until terminal. */
   durationMs: number | null;
 };
@@ -176,6 +185,7 @@ export function ActiveOrderProvider({ children }: { children: ReactNode }) {
             failureType: s.failure_type ?? null,
             failureMessage: s.failure_message ?? null,
             validateResult: s.validate_result ?? null,
+            confirmationNumbers: s.submit_result?.confirmation_numbers ?? null,
             durationMs: Date.now() - order.startedAtMs,
           };
           setActiveOrder((cur) =>
