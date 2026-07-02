@@ -695,6 +695,35 @@ Status: ⏳ planned + root-caused; build starts after engine-submit wiring.
   cycles, maybe EDI). Doctrine work doubles as the security story.
 
 ### Future / V2 / post-launch
+
+## 🔮 THE FATHOM LIST (Tony + Claude vision session, 2026-07-01 night)
+
+> Tony: "Think of anything competitors wish they could even fathom…
+> the future has to come." All of these stack on assets ONLY LK has:
+> the order loop (engine submit), NRS sell-through, OOS telemetry,
+> price-book history, in-store ground truth.
+
+- 💡 **The store that orders itself (ENDGAME).** NRS sales-out + order
+  history + par levels → Thursday-morning drafted cart, pre-validated,
+  "review + tap once," engine submits in seconds. Inventory-management
+  want taken to its conclusion. Nobody else can close this loop.
+- 💡 **Statewide stockout radar.** Every run logs MLCC OOS events →
+  "out 9 days, here are in-stock subs." At scale = real-time MI supply
+  intelligence nobody (even distributors) has; sellable dataset,
+  acquisition-narrative gold.
+- 💡 **Buy-timing intelligence.** Price-book archive (already planned) →
+  "hold Bacardi 4 days, drops $2.10 next book / stock up before the
+  rise." Pays the subscription visibly. Pairs with NRS margin analytics.
+- 💡 **Proactive operator AI.** Reads MILO announcements automatically
+  (tonight's holiday-cutoff find proves the value) → push alerts;
+  notices skipped usuals; voice-first cart building for dad; AI drafts →
+  human confirms → engine submits.
+- 💡 **Delivery-day receiving mode.** We placed the order = we have the
+  manifest. Scan-in at the truck, auto-reconcile vs invoice, shortage
+  claim pre-written. Universal unserved pain, nearly free for us.
+
+Sequencing: ALL post-mandate (3 real orders) and post-engine-submit.
+None of it changes V1 scope; it's what V1's foundation is FOR.
 - 💡 **Inventory management.** Par levels, on-hand quantity, reorder
   points, low-stock alerts. Tony confirmed 2026-06-07 this is the
   NEXT real feature after the tab bar redesign. Promotes to its own
