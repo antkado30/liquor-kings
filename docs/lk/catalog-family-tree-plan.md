@@ -136,6 +136,18 @@ engine `src/mlcc/family-key.js`, 16 unit tests):
    singleton (match the longest family key sharing a ≥10-char prefix).
 2. ADA-healed rows were only 14 — the ADA constraint matters less than
    feared, but dropping it is still correct.
+3. ~20 family keys span 2 categories (9,826 raw keys vs 9,846
+   key+category families) — the endpoint MUST keep filtering by category
+   alongside family_key, same as today's route.
+4. The price-book ingestor must compute the four columns on every upsert
+   (today only the backfill writes them; a brand-new SKU lands with NULL
+   family_key until then — falls back to the old name-pool path).
+
+**BACKFILL APPLIED TO PROD 2026-07-01 night:** migration
+`20260702011500` + `scripts/backfill-family-key.mjs --apply` = 13,828/13,828
+rows written, 0 failures, --verify PASS. The columns are LIVE DATA, still
+read by nothing — the endpoint/UI flip is the next deploy after the
+2026-07-02 Colony order.
 
 ## Safety rails
 - No RPA/order-path files are touched by any step.
