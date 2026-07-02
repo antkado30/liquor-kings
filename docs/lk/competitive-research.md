@@ -1,5 +1,25 @@
 # Competitive Research — Michigan Liquor Ordering Tools
 
+> **UPDATE 2026-07-01 — new entrant: "minimum." (iOS price-lookup app).**
+> Tony found it live. What it is: state **minimum shelf price** reference —
+> downloadable offline state datasets (Michigan 10,928 listings · 5.6 MB,
+> Iowa 2,410, Ohio 4,017, "coming soon" for more), clean catalog with
+> search, **family-grouped results** (one Tito's card → all 7 sizes with
+> prices), product detail (case size, ≈/unit, type/tags/proof/liquor code,
+> price-book effective date), Favorites, source-transparency page. Polished,
+> fast, offline-first.
+> **What it is NOT:** no ordering, no cart, no MILO/MLCC submission, no
+> scanning, no store data. Zero overlap with LK's core wedge (automation).
+> **Threat: LOW direct / MEDIUM as a UX bar + wedge validator.** Their
+> family-grouped catalog exposed real LK grouping bugs (plastic/glass
+> splits — root-caused same night, plan at
+> [catalog-family-tree-plan.md](catalog-family-tree-plan.md)). They prove
+> demand for clean MLCC price/catalog tooling; if they ever add ordering
+> they become real — watch their "coming soon" states and any retailer
+> features. Note: LK already holds minimum-shelf-price data (price book +
+> MILO API `minimumShelfPrice`) — their entire feature set is one
+> ProductCard section for us when we choose (post-freeze).
+
 **Date:** 2026-05-17
 **Trigger:** Tony surfaced concern that competitors already exist for Liquor Kings' wedge (Austin's uncle "already has an app", Buscemi's "has an app").
 **Goal:** Identify and characterize actual MI-focused competitors, find pricing, identify feature gaps.

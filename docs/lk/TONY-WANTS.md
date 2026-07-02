@@ -562,6 +562,29 @@ Status: ⏳ NEXT UI BUILD after the submit-endpoint capture.
    cart lines at check time; Place enabled only while (hash unchanged &&
    check age < threshold && check came back green).
 
+## 🔥🔥 Catalog quality — family tree 100% + grouped search (Tony, 2026-07-01, after finding competitor "minimum.")
+
+> "Their biggest moat is their family tree of every single bottle… ours
+> doesn't work like that. Ours is ass. We have to fix it and make it 100%
+> work for every single bottle… scan a plastic pint of Jack and it won't
+> show the family tree. We also have to fix our search catalogue. We
+> cannot let our competition be better than us in any single shape or form."
+
+**Root cause FOUND same night** (mlcc-product-family.js): container
+tokens (PL/PET/TRAV…) not stripped from the name base + incomplete size
+list + families wrongly split by ADA + per-tap fuzzy pool instead of a
+precomputed key. Full plan: [catalog-family-tree-plan.md](catalog-family-tree-plan.md).
+
+**Decisions (Tony, 2026-07-01):** ONE family tree per product line;
+container is DATA — mixed-container sizes show as separate labeled chips
+(`750 mL · Plastic`), label travels chip → cart → confirm modal (his
+fear: ordering glass, receiving plastic — killed by design). Search
+groups into family cards like the competitor. Sequencing: engine submit
+FIRST, then this. Audit loop grades all ~14k bottles for splits + false
+merges before any UI ships.
+
+Status: ⏳ planned + root-caused; build starts after engine-submit wiring.
+
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
 
 - ✅ **CartDrawer premium overhaul** — the LAST core screen, built
