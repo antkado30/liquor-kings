@@ -56,7 +56,7 @@ const rows = [];
 for (let from = 0; ; from += PAGE) {
   const { data, error } = await supabase
     .from("mlcc_items")
-    .select("id, code, name, size, category, ada_name, ada_number, brand_family, is_active")
+    .select("id, code, name, bottle_size_label, bottle_size_ml, category, ada_name, ada_number, brand_family, is_active")
     .eq("is_active", true)
     .order("id", { ascending: true })
     .range(from, from + PAGE - 1);
@@ -127,21 +127,50 @@ const containerStripped = rows.filter((r) =>
 const aggressiveStrips = rows.filter((r) =>
   perRow.get(r.id).identity.strippedTokens.some((t) => /^\d{1,2} (?:ML|L)$/i.test(t)),
 );
+// Families as the APP will show them: combo SKUs (gift packs, W/-glasses)
+// map to the base key for SCAN resolution but are NOT family members — the
+// live endpoint's anchor-only policy. Count them separately.
+const isComboRow = (r) => perRow.get(r.id).identity.isCombo;
 const bigFamilies = [...newGroups.entries()]
-  .map(([k, list]) => ({ key: k, codes: codesOf(list).size, names: [...new Set(list.map((r) => r.name))] }))
+  .map(([k, list]) => {
+    const real = list.filter((r) => !isComboRow(r));
+    const combos = list.length - real.length;
+    return {
+      key: k,
+      codes: codesOf(real).size,
+      comboSkusAttached: combos,
+      names: [...new Set(real.map((r) => r.name))],
+    };
+  })
   .filter((f) => f.codes >= 7)
   .sort((a, b) => b.codes - a.codes);
 
+// Families containing BOTH glass and plastic non-combo members — every one
+// of these needs the container label on its size chips (the Tony rule).
+let mixedContainerFamilies = 0;
+for (const list of newGroups.values()) {
+  const real = list.filter((r) => !isComboRow(r));
+  const containers = new Set(real.map((r) => perRow.get(r.id).identity.container));
+  if (containers.size > 1) mixedContainerFamilies += 1;
+}
+
 // ─── 5. Known-case cards ─────────────────────────────────────────────────────
-const KNOWN = ["JACK DANIELS", "TITO", "SMIRNOFF 80", "MOHAWK VODKA", "FIREBALL"];
+// Probes match MLCC's ACTUAL spellings (learned round 1: the standard Jack
+// line is "J DANIELS OLD 7", Mohawk drops "VODKA" from most names).
+const KNOWN = ["J DANIELS", "JACK DANIELS", "TITO", "SMIRNOFF 80", "MOHAWK", "FIREBALL CINNAMON"];
 const knownCards = KNOWN.map((probe) => {
-  const hits = rows.filter((r) => String(r.name ?? "").toUpperCase().includes(probe));
+  // Combos excluded — mirrors the live endpoint's anchor-only policy, so the
+  // card here is exactly what the app will render.
+  const hits = rows.filter(
+    (r) => String(r.name ?? "").toUpperCase().includes(probe) && !isComboRow(r),
+  );
   const fams = new Map();
   for (const r of hits) {
     const { newKey, identity } = perRow.get(r.id);
     if (!fams.has(newKey)) fams.set(newKey, []);
+    const sizeLabel = r.bottle_size_label ?? (r.bottle_size_ml ? `${r.bottle_size_ml}ML` : "?");
     fams.get(newKey).push(
-      `${r.code} · ${r.size ?? "?"} · ${identity.container}${identity.packCount ? ` · ${identity.packCount}pk` : ""} · ${r.name}`,
+      `${r.code} · ${sizeLabel} · ${identity.container}${identity.packCount ? ` · ${identity.packCount}pk` : ""} · ${r.name}`,
     );
   }
   return { probe, families: [...fams.entries()].map(([k, members]) => ({ key: k, members: [...new Set(members)].sort() })) };
@@ -164,6 +193,8 @@ const summary = {
   containerStrippedRows: containerStripped.length,
   aggressiveTwoTokenStrips: aggressiveStrips.length,
   bigFamilies7plus: bigFamilies.length,
+  comboSkus: rows.filter((r) => isComboRow(r)).length,
+  mixedContainerFamilies,
 };
 
 console.log("\n══ FAMILY GROUPING AUDIT ══");
@@ -189,9 +220,9 @@ if (aggressiveStrips.length > 0) {
   }
 }
 
-console.log("\n── Biggest new families (over-merge eyeball, ≥7 codes) ──");
+console.log("\n── Biggest new families (over-merge eyeball, ≥7 REAL codes; combos counted separately) ──");
 for (const f of bigFamilies.slice(0, 10)) {
-  console.log(`  ${f.codes} codes → ${f.key}`);
+  console.log(`  ${f.codes} codes (+${f.comboSkusAttached} combo SKUs attached) → ${f.key}`);
   for (const n of f.names.slice(0, 8)) console.log(`      ${n}`);
 }
 

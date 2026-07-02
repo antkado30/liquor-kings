@@ -109,6 +109,34 @@ getting a plastic pint.")
    Each step deployable alone; catalog work never touches the order
    pipeline (disjoint files; safe to parallelize if Tony wants pace).
 
+## Audit results — engine VALIDATED on the full prod catalog (2026-07-01 night)
+
+Two audit rounds against all 13,828 active rows (`scripts/audit-family-grouping.mjs`,
+engine `src/mlcc/family-key.js`, 16 unit tests):
+
+- **644 orphaned rows healed** (old logic stranded them; new key reunites) —
+  Tony's plastic-pint class, catalog-wide.
+- **1,426 plastic SKUs** extracted as container data; **527 families mix
+  glass+plastic** → the always-label-the-chip rule is load-bearing.
+- **0 aggressive strips**, **0 over-merges** found in the big-family eyeball
+  (biggest real families: Fireball Cinnamon 12, Early Times 11, Tito's 11 —
+  all legit lines).
+- **474 gift-combo SKUs** map to their base key (scan a combo → real family)
+  and are excluded from family membership (anchor-only policy, as live).
+- **Proof cards:** J DANIELS TENNESSEE FIRE = 7 sizes glass+plastic in ONE
+  family; Honey/Apple/Fire correctly separate; MOHAWK's six lines each
+  reunify glass+plastic; SMIRNOFF 80 one family, 100 separate; FIREBALL
+  CINNAMON 11 sizes with editions quarantined.
+- `brand_family` column is **0% populated in prod** → the name-derived key is
+  the sole grouping truth; the live route's brand_family branch never fires.
+
+**Known follow-ups for the wiring phase (documented, non-blocking):**
+1. MLCC-truncated combo names ("TITO'S HANDMADE VODK/50ML …") orphan their
+   key → scan-time prefix fallback when an isCombo row's family is a
+   singleton (match the longest family key sharing a ≥10-char prefix).
+2. ADA-healed rows were only 14 — the ADA constraint matters less than
+   feared, but dropping it is still correct.
+
 ## Safety rails
 - No RPA/order-path files are touched by any step.
 - Migration is additive (new columns); old name-pool path stays as
