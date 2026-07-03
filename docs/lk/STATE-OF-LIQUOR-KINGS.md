@@ -17,19 +17,48 @@ table, script, flag, service, and feature — each marked:
 ## 0. THE WOUND — order day failed (fix these FIRST, they are why)
 
 The app white-screened at 7:15pm Thursday; Tony hand-placed the order at
-dinner. Three failures, in priority order:
+dinner. Postmortem complete 2026-07-03 from fly logs — ROOT CAUSE FOUND:
 
-1. 🟡 **API app went dark, silently.** The `liquor-kings` machine has timed
-   out on every config change all week; treated as cosmetic. VERIFY with
-   fly logs — this is the postmortem. → **Fix: solve the boot problem for real.**
-2. 🟡 **No alerting.** Sentry DSN is a placeholder; no uptime monitor. The
-   app died and nobody knew. → **Fix: uptime ping + real Sentry, this week.**
-3. 🟡 **No "needs your decision" notification.** 8 bottles went OOS; the app
-   waited silently for Tony to reopen it instead of pushing "8 items OOS —
-   tap to fix." → **Fix: push/text when an order needs a human.**
+### The white-screen, mechanically (not a mystery, a config bug)
+- `fly.toml`: `kill_signal=SIGINT` + `kill_timeout=5m`, start command `npm start`.
+- `src/index.js`: `app.listen()` with **no signal handler**.
+- **Only ONE API machine** (`min_machines_running=1`).
+- Chain: any restart (deploy OR `fly secrets set`) → Fly sends SIGINT →
+  `npm start` does NOT forward it to the node child, and node had no handler →
+  process never exits → Fly waits the **full 5-minute kill_timeout**, then
+  SIGTERM force-kills. Proven in logs: SIGINT 17:50:28 → SIGTERM 17:55:28,
+  "Machine created and started in 5m1s". **Every restart = 5 min of the single
+  machine down = blank site.** Thursday's arming ran several secrets changes
+  back-to-back; Tony hit the site during a cycle → white screen. This is ALSO
+  why every `fly secrets set` "timed out" all week — it was never cosmetic; it
+  was the 5-minute-downtime bug waving at us, and it got dismissed. Owned.
 
-These three ARE the product's core promise ("never silent, never a mystery,
-never a wait"). They outrank every feature below.
+### The fixes (code READY 2026-07-03, awaiting Tony's deploy)
+1. ✅ **Graceful shutdown** (`index.js`): SIGINT/SIGTERM → `server.close()` →
+   exit in ~seconds (+10s force-exit safety net).
+2. ✅ **Exec node directly** (`fly.toml`: `npm start` → `node src/index.js`) so
+   the signal actually reaches the process.
+3. ✅ **kill_timeout 5m → 30s** (this app runs no RPA; that cap was vestigial
+   from before the worker split).
+4. ✅ **Silence the `git: not found` boot noise** (`sentry.js`).
+5. 🟡 **Run 2 API machines** (`fly scale count 2 -a liquor-kings`) — so restarts
+   are rolling: one serves while the other cycles = ZERO downtime, ever. ~$2-4/mo.
+   THE thing that makes the white-screen structurally impossible. **Do at deploy.**
+
+### Still open (not code — Tony actions)
+6. 🟡 **External uptime monitor** — Sentry canNOT catch a down machine (a dead
+   machine runs no code to report itself). Need an outside pinger
+   (UptimeRobot free tier) hitting `liquor-kings.fly.dev/health` every 1-5 min →
+   alert on failure. This is the "never blind again" piece.
+7. 🟡 **"Needs your decision" notification** — 8 bottles went OOS; the app waited
+   silently for Tony to reopen it. Should push/text "8 items OOS — tap to fix."
+8. ℹ️ **Census correction:** Sentry is NOT a placeholder — logs show it
+   initializes in prod (real DSN). But it's not instrumenting express + release
+   is "unknown". Partially wired; finish it. Still wouldn't have caught the
+   white-screen (that's what #6 is for).
+
+These ARE the product's core promise ("never silent, never a mystery, never a
+wait"). They outrank every feature below.
 
 ---
 

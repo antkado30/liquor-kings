@@ -17,13 +17,16 @@
 app = "liquor-kings"
 primary_region = "ord"
 kill_signal = "SIGINT"
-# 5m is Fly's HARD MAX for kill_timeout (anything higher is rejected). We use
-# the full cap so an in-flight RPA run has the best chance of finishing
-# gracefully on SIGINT (deploy/restart). If a run is still mid-flight at 5m,
-# Fly force-kills the machine — the orphan reaper picks it up within ~15 min
-# and marks it failed (status='running' with stale heartbeat → never
-# auto-retried, no double-order risk).
-kill_timeout = "5m"
+# 30s (was 5m). ROOT CAUSE of the 2026-07-02 white-screen: this API app does
+# NOT run RPA (the worker split moved all Chromium to liquor-kings-worker — see
+# note below), so the 5m cap was vestigial from the pre-split days. With no
+# graceful-shutdown handler AND `npm start` swallowing SIGINT, every restart sat
+# the full 5m before Fly force-killed — and with one machine the site was blank
+# the whole time. index.js now closes the server on SIGINT/SIGTERM and the start
+# command execs node directly (below), so a clean shutdown is ~seconds; 30s is
+# just the force-kill safety net. RPA-run safety lives on the worker app's own
+# kill_timeout, not here. Postmortem: docs/lk/STATE-OF-LIQUOR-KINGS.md §0.
+kill_timeout = "30s"
 
 [build]
   dockerfile = "Dockerfile"
@@ -45,7 +48,13 @@ kill_timeout = "5m"
 # only the slim API/web image and deploys fast. This app no longer runs any
 # RPA / Chromium process.
 [processes]
-  app = "npm start"
+  # Exec node DIRECTLY (was "npm start"). npm does not forward SIGINT/SIGTERM to
+  # its child, so Fly's restart signal never reached the server and the process
+  # hung until the kill_timeout force-kill — the 2026-07-02 white-screen. With
+  # node as PID 1 it receives the signal and index.js shuts down gracefully in
+  # seconds. (WORKDIR is /app/services/api in the Dockerfile, so this path is
+  # correct — matches the old `> node src/index.js` npm-script target.)
+  app = "node src/index.js"
 
 [env]
   # Default to dry_run-only in production until per-store ARM is wired.

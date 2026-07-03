@@ -3,8 +3,16 @@ import { execSync } from "node:child_process";
 
 function deriveRelease() {
   if (process.env.SENTRY_RELEASE) return process.env.SENTRY_RELEASE;
+  // The production Docker image has no `git`, so this shells out and fails on
+  // every boot, printing "/bin/sh: 1: git: not found" to the logs and leaving
+  // the Sentry release tagged "unknown". Silence the shell's own stderr
+  // (stdio) so a clean boot log doesn't look alarming; the try/catch already
+  // handles the throw. Best fix long-term: pass SENTRY_RELEASE at deploy time.
   try {
-    const sha = execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+    const sha = execSync("git rev-parse HEAD", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
     return sha || "unknown";
   } catch {
     return "unknown";
