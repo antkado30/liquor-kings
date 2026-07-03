@@ -57,21 +57,30 @@ never a wait"). They outrank every feature below.
 - ❓ `mlcc_code_map` / `mlcc_item_codes` — code mapping (6/13). VERIFY still used.
 - ✅ `bottles` — legacy per-store bottle table (name_searchable added 6/10)
 
-### UPC / matching (❓ some may be stale)
+### UPC / matching (✅ mostly live — corrected 7/3)
 - ✅ `upc_mappings` — UPC→code (the scan path)
 - ✅ `upc_match_audit` — every scan match logged
-- ❓ `upc_lookups` — UPC lookup cache. VERIFY hit-rate; may be dead if
-   UPCitemdb (its source) is abandoned (it is — see §4).
+- ✅ `upc_lookups` — **STILL LIVE** (verified 7/3): written by
+  `price-book.routes.js` on the UPC scan path. NOT dead. (Note: UPCitemdb was
+  dropped as an IMAGE source 6/4, but `lookupUpcFromUpcitemdb` is STILL called
+  for UPC→size/candidate lookup at price-book.routes.js:1315 — so the
+  `UPCITEMDB_API_KEY` is still doing real work. **Do NOT cancel it** without
+  first replacing that call path.)
 - ❓ `nrs_ambiguous_review` — NRS import review queue (1,329 rows built
-   5/12). VERIFY: was this ever worked through, or abandoned mid-review?
+   5/12). VERIFY: was this ever worked through, or abandoned mid-review? (This
+   one is a genuine ❓ — data table, need to check if any UI reads it.)
 
-### Pilot ops (❓ ALL FOUR — likely abandoned experiment)
-- ❓ `pilot_ops_workflow_states`
-- ❓ `pilot_ops_workflow_state_history`
-- ❓ `pilot_ops_notifications`
-- ❓ `pilot_ops_notification_state`
-  → Built 4/15, one week's work, never referenced in recent journal entries.
-  **PRIME SUSPECT for 💀.** Verify no route reads them, then plan removal.
+### Pilot ops (✅ LIVE — census guess was WRONG, verified 7/3)
+- ✅ `pilot_ops_workflow_states`
+- ✅ `pilot_ops_workflow_state_history`
+- ✅ `pilot_ops_notifications`
+- ✅ `pilot_ops_notification_state`
+  → **NOT dead.** Verified 7/3: wired into 5 service files
+  (`pilot-ops-*.service.js`), the `operator-review.routes.js` route, the admin
+  `PilotOpsPage.tsx` (routed at `/pilot-ops` in App.tsx), and 4 unit test
+  files. This is the operator-review subsystem. **DO NOT DROP.** Lesson: the
+  census's "looks abandoned" instinct was wrong — verification caught it before
+  we broke the admin. This is exactly why we verify before we kill.
 
 ### System
 - ✅ `lk_system_diagnostics` — auth failures, store mismatches, photo events
@@ -154,19 +163,30 @@ one-time loaders to archive. A `scripts/archive/` folder solves most of it.
 - ✅ **GitHub** — repo + the (maybe-inactive) cron workflow.
 - ✅ **Michigan LARA / MILO** — the thing we automate (not a subscription).
 
-### Paid but MAYBE unused — CHECK + LIKELY CANCEL (💀/❓)
+### Paid but MAYBE unused — CHECK (💀/❓) — CORRECTED 7/3
 - ❓ **Serper.dev** — Google Images API for bottle photos. Signed up, **never
   ran the full backfill.** If you're paying monthly, either run it once and
-  keep, or cancel until you need it.
-- 💀 **UPCitemdb** — tested 6/4, rate-limited + poor liquor coverage,
-  ABANDONED. If there's any paid key, **cancel it.**
-- 💀 **Google Custom Search (CSE)** — dead-ended 6/8. If billing is enabled on
-  that Google Cloud project, **disable it.**
+  keep, or cancel until you need it. (Genuinely optional — safe to cancel.)
+- ⚠️ **UPCitemdb** — dropped as an IMAGE source 6/4, BUT verified 7/3 it's
+  STILL wired into the UPC scan path (`lookupUpcFromUpcitemdb`,
+  price-book.routes.js:1315). **DO NOT cancel yet** — it's doing real work on
+  scans. Retiring it means replacing that lookup first (Open Food Facts is the
+  other source already in the code). Was on my "cancel it" list — that was
+  WRONG, corrected here.
+- 💀 **Google Custom Search (CSE)** — genuinely dead-ended 6/8, the script is
+  standalone (nothing imports it). Safe to disable billing on that Google
+  Cloud project. **This is the one real "cancel it" today.**
 - ❓ **Sentry** — account exists, DSN is a placeholder = not actually wired.
   Free tier is fine; just needs the real DSN. Don't pay until it's used.
 - ❓ **Any others you subscribed to and forgot** — if it's not in this list,
   the CODE doesn't reference it → it's almost certainly cancelable. Send me
   the name and I'll confirm from the repo.
+
+**⚠️ CENSUS LESSON (7/3): my first-pass "likely dead" guesses were WRONG on
+pilot_ops, upc_lookups, and UPCitemdb — all three are still wired in.
+Verification caught it before we deleted anything. The takeaway isn't "the
+system is junk" — it's the opposite: it's MORE connected than it looks. Only
+truly-dead things confirmed: the 2 unused image scripts + Google CSE billing.**
 
 ### Free / referenced only
 - Open Food Facts (UPC fallback, free), cdnjs (CDN), npm (packages)
