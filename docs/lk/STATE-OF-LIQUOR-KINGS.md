@@ -41,9 +41,14 @@ dinner. Postmortem complete 2026-07-03 from fly logs — ROOT CAUSE FOUND:
 3. ✅ **kill_timeout 5m → 30s** (this app runs no RPA; that cap was vestigial
    from before the worker split).
 4. ✅ **Silence the `git: not found` boot noise** (`sentry.js`).
-5. 🟡 **Run 2 API machines** (`fly scale count 2 -a liquor-kings`) — so restarts
-   are rolling: one serves while the other cycles = ZERO downtime, ever. ~$2-4/mo.
-   THE thing that makes the white-screen structurally impossible. **Do at deploy.**
+5. ✅ **Running 2 API machines** — DONE + VERIFIED 2026-07-03 (`fly scale count 2`;
+   `fly status` shows both `started`, both `1/1 passing`, deploy rolled across
+   both). Restarts are now rolling: one serves while the other cycles = ZERO
+   downtime. The white-screen is structurally impossible now.
+
+**✅ FIX DEPLOYED 2026-07-03 (commit 9c9112f):** items 1-5 all live. The
+5-minute-restart bug is gone; next `fly secrets set` will finish in seconds
+(the proof). Postmortem closed.
 
 ### Still open (not code — Tony actions)
 6. 🟡 **External uptime monitor** — Sentry canNOT catch a down machine (a dead
