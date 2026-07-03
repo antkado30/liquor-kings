@@ -707,20 +707,42 @@ Status: ⏳ planned + root-caused; build starts after engine-submit wiring.
   history + par levels → Thursday-morning drafted cart, pre-validated,
   "review + tap once," engine submits in seconds. Inventory-management
   want taken to its conclusion. Nobody else can close this loop.
+  **Tony 2026-07-01: yes, BUT the register problem is real — every store
+  runs something different (NRS, franchise chains, small-company
+  registers, some NON-digital).** → needs a register-agnostic ladder:
+  tier 1 NRS (built), tier 2 common POS APIs/exports (Clover/Square/
+  CSV), tier 3 no-register mode (par levels from LK's own order cadence
+  + optional shelf scans). Draft-order works at EVERY tier; data quality
+  just improves the draft.
 - 💡 **Statewide stockout radar.** Every run logs MLCC OOS events →
   "out 9 days, here are in-stock subs." At scale = real-time MI supply
   intelligence nobody (even distributors) has; sellable dataset,
-  acquisition-narrative gold.
+  acquisition-narrative gold. **Tony: love it.**
 - 💡 **Buy-timing intelligence.** Price-book archive (already planned) →
   "hold Bacardi 4 days, drops $2.10 next book / stock up before the
   rise." Pays the subscription visibly. Pairs with NRS margin analytics.
+  **Tony 2026-07-01 HARD GATE: only if the info is ACTUALLY accurate —
+  "if there's a chance it's not accurate then cut it off."** → advice
+  only from CONFIRMED published next-book prices (MLCC publishes ahead),
+  never from prediction/inference. No confirmed future price = say
+  nothing. Doctrine: the app never guesses with money.
 - 💡 **Proactive operator AI.** Reads MILO announcements automatically
   (tonight's holiday-cutoff find proves the value) → push alerts;
   notices skipped usuals; voice-first cart building for dad; AI drafts →
-  human confirms → engine submits.
+  human confirms → engine submits. **Tony: yes, WITH restrictions on
+  what it can do** → hard action-tier list: AI may READ/draft/notify
+  freely; may WRITE carts only as drafts; may NEVER validate-spam,
+  submit, change settings, or touch credentials. Submission always
+  requires the human confirm + the existing triple gate. Restriction
+  list is part of the spec, not an afterthought.
 - 💡 **Delivery-day receiving mode.** We placed the order = we have the
   manifest. Scan-in at the truck, auto-reconcile vs invoice, shortage
   claim pre-written. Universal unserved pain, nearly free for us.
+  **Tony 2026-07-01 (real operator insight): bottles can go OOS BETWEEN
+  validate and delivery — the truck sheet is the SECOND truth, so
+  receiving mode must re-check the whole order against what physically
+  arrives, not just against what validated.** Exactly — the design
+  reconciles ordered vs delivered vs invoiced, three-way.
 
 Sequencing: ALL post-mandate (3 real orders) and post-engine-submit.
 None of it changes V1 scope; it's what V1's foundation is FOR.
