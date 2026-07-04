@@ -177,9 +177,17 @@ one-time loaders to archive. A `scripts/archive/` folder solves most of it.
 
 ### ❓ VERIFY / cleanup
 - 🟡 `SENTRY_DSN` — **placeholder = the reason nobody knew the app died.** FIX.
-- ❓ `LK_CRON_SECRET` — daily price-book cron. **Never confirmed the GitHub
-  secret was set → the cron may have NEVER run → stale prices → wrong codes.**
-  CHECK THIS (GitHub repo → Settings → Secrets → Actions).
+- ✅ `LK_CRON_SECRET` — **RESOLVED 7/4.** Verified the cron had failed ALL 36
+  runs (GitHub secret was never set → 401 daily). Fixed: fresh secret set on
+  BOTH Fly + GitHub repo secrets; manual `check-updates` returned 200.
+  Verified against MLCC's site: May 3 book is still the newest full book →
+  **prices were never actually stale — nothing was missed.** Remaining proof:
+  tomorrow's ~6-7am scheduled run should go GREEN (check Actions tab once).
+- 🟡 NEW (found 7/4): ingestor deliberately skips MLCC's between-book
+  **"New Item Price List"** (e.g. June 7, 2026 list published; excluded at
+  mlcc-price-book-ingestor.js:116). New SKUs released between full books are
+  missing from the catalog (scanner/search can't see them) until the next full
+  book. Small, real. Decide: ingest new-item lists too, or accept the lag.
 - 💀 `UPCITEMDB_API_KEY` — UPCitemdb abandoned 6/4. Remove.
 - ❓ `SUPABASE_JWT_SECRET` — replaced by ES256/JWKS 6/10; may be vestigial
 - ❓ `DEBUG_UPC_FILTER`, `MILO_TEST_*`, `*_HEADFUL` — dev-only, confirm not set in prod
@@ -261,9 +269,11 @@ but nothing reads them yet (the wiring we planned).
 ## THE PATH — finish-to-empty, in order (no new features until 🟡 = 0)
 
 **Phase 0 — Trust & safety (this week, before anything):**
-1. White-screen postmortem (fly logs) → fix the API boot problem for real.
+1. ✅ White-screen postmortem (fly logs) → fix the API boot problem for real. (DONE 7/3)
 2. Uptime monitor + real Sentry DSN → the app can never die silently again.
-3. Confirm `LK_CRON_SECRET` is set → prices aren't silently stale.
+3. ✅ Confirm `LK_CRON_SECRET` is set → prices aren't silently stale. (FIXED 7/4 —
+   was broken all 36 runs; secret re-keyed both sides; prices verified current.
+   Final proof = tomorrow's scheduled run green.)
 
 **Phase 1 — Kill the dead (one afternoon, pure subtraction, feels amazing):**
 4. Confirm + drop the 4 `pilot_ops_*` tables + their admin pages.
