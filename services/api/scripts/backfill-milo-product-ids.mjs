@@ -50,16 +50,28 @@ async function selectTargetCodes(supabase, args) {
   if (args.codes && args.codes.length > 0) return args.codes;
   // Un-mapped (or all, with --refresh) active codes, deterministic order so
   // repeated batches march through the catalog without repeating work.
-  let q = supabase
-    .from("mlcc_items")
-    .select("code")
-    .eq("is_active", true)
-    .order("code", { ascending: true })
-    .limit(args.limit);
-  if (!args.refresh) q = q.is("milo_product_id", null);
-  const { data, error } = await q;
-  if (error) throw new Error(`select target codes failed: ${error.message}`);
-  return (data ?? []).map((r) => String(r.code));
+  // PostgREST caps a single response at ~1000 rows, so page with .range()
+  // until we've collected --limit codes (or the catalog is exhausted). We
+  // gather the FULL target list up front, before any writes, so paging over
+  // the `milo_product_id is null` filter is stable during selection.
+  const PAGE = 1000;
+  const pageSize = Math.min(PAGE, args.limit);
+  const out = [];
+  for (let from = 0; out.length < args.limit; from += pageSize) {
+    let q = supabase
+      .from("mlcc_items")
+      .select("code")
+      .eq("is_active", true)
+      .order("code", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (!args.refresh) q = q.is("milo_product_id", null);
+    const { data, error } = await q;
+    if (error) throw new Error(`select target codes failed: ${error.message}`);
+    const batch = (data ?? []).map((r) => String(r.code));
+    out.push(...batch);
+    if (batch.length < pageSize) break; // reached the end of the catalog
+  }
+  return out.slice(0, args.limit);
 }
 
 async function main() {
