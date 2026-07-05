@@ -26,6 +26,7 @@ import homeRouter from "./routes/home.routes.js";
 import browseRouter from "./routes/browse.routes.js";
 import orderTemplatesRouter, { runSchedulerHandler as orderTemplatesRunSchedulerHandler } from "./routes/order-templates.routes.js";
 import authRouter from "./routes/auth.routes.js";
+import pushRouter from "./routes/push.routes.js";
 import { landingPageHtml } from "./lib/landing-page.js";
 import { termsPageHtml } from "./lib/terms-page.js";
 import { privacyPageHtml } from "./lib/privacy-page.js";
@@ -84,6 +85,12 @@ app.use("/inventory", resolveAuthenticatedStore, inventoryRouter);
 app.use("/bottles", resolveAuthenticatedStore, bottlesRouter);
 app.use("/execution-runs", resolveAuthenticatedStore, executionRunsRouter);
 app.use("/stores", resolveAuthenticatedStore, storeMlccCredentialsRouter);
+/**
+ * Web Push device registration — the "order needs you" notify layer
+ * (2026-07-05). Dormant without LK_PUSH_VAPID_* secrets; /push/config tells
+ * the client whether to even offer the toggle.
+ */
+app.use("/push", resolveAuthenticatedStore, pushRouter);
 app.use("/operator-review", operatorReviewRouter);
 app.use("/price-book", priceBookRouter);
 /** AI Assistant: POST /assistant/ask — Claude tool-use over store data. */

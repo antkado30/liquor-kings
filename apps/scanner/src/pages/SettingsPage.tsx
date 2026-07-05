@@ -12,6 +12,7 @@ import {
 import { MlccCredentialsForm } from "../components/MlccCredentialsForm";
 import {
   IconAlert,
+  IconBell,
   IconCheck,
   IconChevronLeft,
   IconChevronRight,
@@ -22,6 +23,12 @@ import {
   IconStore,
   IconX,
 } from "../components/Icons";
+import {
+  disablePush,
+  enablePush,
+  getPushState,
+  type PushState,
+} from "../lib/push";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import { useMlccVerifyProbe } from "../hooks/useMlccVerifyProbe";
 import {
@@ -260,6 +267,107 @@ function AddStoreModal({
         </form>
       </div>
     </div>
+  );
+}
+
+/**
+ * Notifications — the device side of the "order needs you" push layer
+ * (2026-07-05). Renders nothing while loading, when the server hasn't been
+ * armed with VAPID keys, or on browsers with no push at all — no dead
+ * switches. On iOS-not-installed it becomes Home-Screen guidance instead.
+ */
+function NotificationsSection() {
+  const [pushState, setPushState] = useState<PushState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setPushState(await getPushState());
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (pushState === null) return null;
+  if (!pushState.serverEnabled) return null;
+  if (pushState.support === "unsupported") return null;
+
+  const on =
+    pushState.support === "ok" &&
+    pushState.subscribed &&
+    pushState.permission === "granted";
+
+  const toggle = async () => {
+    setBusy(true);
+    setPushError(null);
+    const r = on ? await disablePush() : await enablePush();
+    setBusy(false);
+    if (!r.ok) setPushError(r.error);
+    void refresh();
+  };
+
+  return (
+    <section className="settings-block" aria-labelledby="settings-notify-title">
+      <div className="settings-block__head">
+        <span className="settings-block__icon" aria-hidden>
+          <IconBell size={18} strokeWidth={1.75} />
+        </span>
+        <h2 id="settings-notify-title" className="settings-block__title">
+          Notifications
+        </h2>
+      </div>
+
+      <div className="settings-card">
+        <p className="settings-card__desc">
+          Get told the moment a check or order finishes and needs you —
+          out-of-stock decisions, results, or a stalled run — even with the
+          app closed.
+        </p>
+
+        {pushState.support === "needs_install" ? (
+          <p className="settings-card__desc muted small">
+            On iPhone: open this site in Safari, tap Share, then &quot;Add to
+            Home Screen.&quot; Open Liquor Kings from that icon and turn
+            notifications on here.
+          </p>
+        ) : (
+          <>
+            {on ? (
+              <div className="banner banner-ok settings-inline-msg">
+                <IconCheck size={16} strokeWidth={2} aria-hidden />
+                On for this device.
+              </div>
+            ) : null}
+
+            {pushError ? (
+              <div className="banner banner-err settings-inline-msg" role="alert">
+                <IconAlert size={16} strokeWidth={2} aria-hidden />
+                {pushError}
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              className={`settings-btn ${on ? "settings-btn--ghost" : "settings-btn--primary"}`}
+              onClick={() => void toggle()}
+              disabled={busy}
+            >
+              {busy ? (
+                <>
+                  <IconLoader size={16} strokeWidth={2} aria-hidden />
+                  Working…
+                </>
+              ) : on ? (
+                "Turn off notifications"
+              ) : (
+                "Turn on notifications"
+              )}
+            </button>
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -616,6 +724,9 @@ export function SettingsPage() {
           ) : null}
         </div>
       </section>
+
+      {/* ─── Notifications ─── */}
+      <NotificationsSection />
 
       {/* ─── Legal ─── */}
       <section className="settings-block" aria-labelledby="settings-legal-title">

@@ -51,10 +51,11 @@ dinner. Postmortem complete 2026-07-03 from fly logs — ROOT CAUSE FOUND:
 (the proof). Postmortem closed.
 
 ### Still open (not code — Tony actions)
-6. 🟡 **External uptime monitor** — Sentry canNOT catch a down machine (a dead
-   machine runs no code to report itself). Need an outside pinger
-   (UptimeRobot free tier) hitting `liquor-kings.fly.dev/health` every 1-5 min →
-   alert on failure. This is the "never blind again" piece.
+6. ✅ **External uptime monitor — DONE 2026-07-05.** UptimeRobot (free) live on
+   `https://liquor-kings.fly.dev/health`, 5-min interval, email alerts to
+   Tony's account (+ UptimeRobot phone app for lock-screen push). Verified Up,
+   ~72ms response at setup. This was the last Phase 0 box — a dead machine now
+   alerts Tony within ~5 min instead of silently white-screening.
 7. 🟡 **"Needs your decision" notification** — 8 bottles went OOS; the app waited
    silently for Tony to reopen it. Should push/text "8 items OOS — tap to fix."
 8. ℹ️ **Census correction:** Sentry is NOT a placeholder — logs show it

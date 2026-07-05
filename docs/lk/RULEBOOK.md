@@ -38,6 +38,11 @@ if broken, cost real money, real trust, or a real order.
 
 6. **Tony does ALL git + deploys.** The sandbox cannot commit. Fable makes
    direct edits + self-audits; Tony runs every `git` and every deploy.
+   **Sandbox git READS leave a stale lock (learned 7/5):** even `git status` /
+   `git diff` from Fable's sandbox takes `.git/index.lock` and the mount blocks
+   deleting it — Fable must always run `git --no-optional-locks status/diff`.
+   If Tony ever hits "index.lock: File exists" with no git running, that's the
+   leftover: `rm ~/dev/liquor-kings/.git/index.lock` and retry.
 7. **Give exact commands — NO placeholder text** Tony might run literally.
 8. **Batch deploys — never deploy per change.** Build + verify all day; deploy
    ONCE when Tony wants to ship/test. Deploy uses `npm run deploy` (or

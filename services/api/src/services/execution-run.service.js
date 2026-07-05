@@ -19,6 +19,7 @@ import {
 } from "./mlcc-operator-context.service.js";
 import { isUuid } from "../utils/validation.js";
 import { resolveFromCartRunMode } from "../lib/resolve-run-mode.js";
+import { notifyRunFinal } from "../lib/push-notify.js";
 
 const ACTIVE_STATUSES = ["queued", "running"];
 
@@ -2253,6 +2254,23 @@ export const updateExecutionRunStatus = async (
     if (fin.error) return serverError(fin.error.message);
   }
 
+  /*
+   * "Order needs you" push (2026-07-05, census #7). Fire-and-forget, same
+   * contract as the creds-verified stamp above: the notify layer can never
+   * fail or slow the run's own finalize. GUARD ON patch.status, not the
+   * requested status — a retryable failure re-queues (patch.status "queued")
+   * and must NOT notify; only a TERMINAL succeeded/failed does. Canceled is
+   * user-initiated in-app — no push (builder also returns null for it).
+   */
+  if (patch.status === "succeeded" || patch.status === "failed") {
+    void notifyRunFinal({ supabase, run: updatedRun ?? run }).catch((e) =>
+      console.warn("[push] notifyRunFinal failed", {
+        runId,
+        error: e instanceof Error ? e.message : String(e),
+      }),
+    );
+  }
+
   return {
     statusCode: 200,
     body: { success: true, data: updatedRun },
@@ -2730,7 +2748,30 @@ export const reapStaleExecutionRuns = async (
     if (updateError) {
       return { ok: false, error: updateError.message, reapedCount: reapedRunIds.length, reapedRunIds };
     }
-    if (updated) reapedRunIds.push(updated.id);
+    if (updated) {
+      reapedRunIds.push(updated.id);
+      /*
+       * A reaped run IS the order-day silence — a run died and nobody knew.
+       * Tell the owner's devices. Fire-and-forget: notifyRunFinal is dormant
+       * without VAPID keys and never throws; a push problem can never break
+       * the reaper. Synthetic row: the reaper's SELECT is minimal, and the
+       * builder's reaped branch only needs id/store_id/status/failure_type.
+       */
+      void notifyRunFinal({
+        supabase,
+        run: {
+          id: run.id,
+          store_id: run.store_id,
+          status: "failed",
+          failure_type: "LK_RUN_REAPED",
+        },
+      }).catch((e) =>
+        console.warn("[push] reaper notify failed", {
+          runId: run.id,
+          error: e instanceof Error ? e.message : String(e),
+        }),
+      );
+    }
   }
 
   return { ok: true, reapedCount: reapedRunIds.length, reapedRunIds };
