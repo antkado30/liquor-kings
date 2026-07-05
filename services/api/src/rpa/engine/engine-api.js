@@ -180,39 +180,62 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
   if (!add.ok) throw new Error(`bulk add failed (${add.status}): ${safeBody(add)}`);
   const addedItems = Array.isArray(add.body?.items) ? add.body.items : [];
 
-  // Step 6: inventory check (stock).
+  // Steps 6+7+8 IN PARALLEL (2026-07-05): the stock check, the rules
+  // validate, and the 3 per-ADA delivery lookups are five independent READ
+  // calls — none mutates the cart, none consumes another's response. Firing
+  // them concurrently cuts post-add wall time from sum(5) to max(5). The only
+  // cart WRITE after bulk-add (taxes, step 9) still runs strictly AFTER all
+  // five complete, so read/write ordering vs the sequential version is
+  // unchanged. NOTE apiCall never rejects on an HTTP failure (returns
+  // { ok:false }); a rejection here means the PAGE died, which failed the run
+  // in the sequential version too. Every soft-fail bias is preserved exactly:
+  // inv not-ok → inventory [] (parser flags every item needsRecheck —
+  // fail-safe), validate not-ok → { success:false } (fail-safe), a failed
+  // delivery ref is omitted (same as before).
+  const DELIVERY_REFS = ["141", "221", "321"];
   const invPayload = resolved.map((r) => ({
     quantity: r.quantity,
     itemCode: r.code,
     productId: String(r.product.id),
   }));
-  const inv = await apiCall(page, "PUT", `/inventory/check?groupid=${groupId}`, {
-    token,
-    body: invPayload,
-    label: "PUT /inventory/check (stock)",
-  });
+  const postAddStart = Date.now();
+  const [inv, validate, ...deliveryResults] = await Promise.all([
+    // Step 6: inventory check (stock).
+    apiCall(page, "PUT", `/inventory/check?groupid=${groupId}`, {
+      token,
+      body: invPayload,
+      label: "PUT /inventory/check (stock)",
+    }),
+    // Step 7: validate (rules).
+    apiCall(page, "GET", `/validate?licenseId=${subscriptionId}`, { token, label: "GET /validate (rules)" }),
+    // Step 8: per-ADA delivery info → deliveryByRef + deliveriesArr (raw).
+    ...DELIVERY_REFS.map((ref) =>
+      apiCall(page, "GET", `/distributor/delivery?groupId=${groupId}&referenceNumber=${ref}`, {
+        token,
+        label: `GET /distributor/delivery ${ref}`,
+      }),
+    ),
+  ]);
+  const postAddWallMs = Date.now() - postAddStart;
+
+  // Record results in the SAME fixed order as the old sequential flow so
+  // perCallMs stays deterministic regardless of which call finished first.
   track(inv, "inventory/check");
   const inventory = inv.ok ? inv.body : [];
 
-  // Step 7: validate (rules).
-  const validate = await apiCall(page, "GET", `/validate?licenseId=${subscriptionId}`, { token, label: "GET /validate (rules)" });
   track(validate, "validate");
   const validateBody = validate.ok ? validate.body : { success: false };
 
-  // Step 8: per-ADA delivery info → deliveryByRef + deliveriesArr (raw).
   const deliveryByRef = {};
   const deliveriesArr = [];
-  for (const ref of ["141", "221", "321"]) {
-    const d = await apiCall(page, "GET", `/distributor/delivery?groupId=${groupId}&referenceNumber=${ref}`, {
-      token,
-      label: `GET /distributor/delivery ${ref}`,
-    });
+  DELIVERY_REFS.forEach((ref, i) => {
+    const d = deliveryResults[i];
     track(d, `delivery/${ref}`);
     if (d.ok && d.body) {
       deliveryByRef[ref] = d.body;
       deliveriesArr.push(d.body);
     }
-  }
+  });
 
   // Step 9: price the cart. PUT /users/cart/taxes with the cart items + the
   // deliveries array. Its RESPONSE is the PRICED cart (taxes[] populated).
@@ -237,7 +260,8 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
     engineTimings: {
       loginMs,
       perCallMs,
-      totalApiMs,
+      totalApiMs, // sum of per-call durations (≥ wall time now that reads overlap)
+      postAddWallMs, // wall-clock time of the parallel read batch (steps 6-8)
       cachedCount,
       liveResolveCount: cartItems.length - cachedCount,
     },
