@@ -66,14 +66,26 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const username = process.env.MILO_USERNAME;
   const password = process.env.MILO_PASSWORD;
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  // Prefer prod creds (LK_PROD_*) like every other prod-writing script, falling
+  // back to the plain vars. This backfill MUST write to prod (the catalog the app
+  // reads), so it REFUSES a localhost/dev URL rather than silently filling the
+  // wrong database — the local .env points SUPABASE_URL at 127.0.0.1 by default.
+  const supabaseUrl = process.env.LK_PROD_SUPABASE_URL || process.env.SUPABASE_URL;
+  const supabaseServiceKey =
+    process.env.LK_PROD_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!username || !password) throw new Error("Missing MILO_USERNAME / MILO_PASSWORD in services/api/.env");
-  if (!supabaseUrl || !supabaseServiceKey) throw new Error("Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY in services/api/.env");
+  if (!supabaseUrl || !supabaseServiceKey) {
+    throw new Error("Missing LK_PROD_SUPABASE_URL / LK_PROD_SUPABASE_SERVICE_ROLE_KEY (prod) in services/api/.env");
+  }
+  if (/127\.0\.0\.1|localhost/.test(supabaseUrl)) {
+    throw new Error("Supabase target is the LOCAL dev stack — set LK_PROD_SUPABASE_URL + LK_PROD_SUPABASE_SERVICE_ROLE_KEY so the backfill writes to PROD.");
+  }
+  const dbTarget = supabaseUrl.includes("eamoozfhqolshdztbrez") ? "PROD (eamoozfhqolshdztbrez)" : supabaseUrl;
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } });
 
   console.log("=== BACKFILL MILO PRODUCT IDs (read-only resolve; no add/validate/submit) ===");
+  console.log(`DB target: ${dbTarget}`);
   const codes = await selectTargetCodes(supabase, args);
   console.log(`Target: ${codes.length} code(s) | delay ${args.delayMs}ms | ${args.dryRun ? "DRY-RUN (no writes)" : "WRITES ENABLED"} | refresh=${args.refresh}`);
   if (codes.length === 0) {
@@ -85,9 +97,10 @@ async function main() {
   const session = await loginToMilo({ username, password }, { headless: true, slowMo: 0, captureArtifacts: false });
   let resolved = 0;
   let failed = 0;
+  let tokenRefreshes = 0;
   const failures = [];
   try {
-    const token = await loginViaApi(session.page, username, password);
+    let token = await loginViaApi(session.page, username, password);
     const account = await apiCall(session.page, "GET", "/account", { token, label: "GET /account", silent: true });
     if (!account.ok) throw new Error(`GET /account failed (${account.status})`);
     const subscriptionId = account.body?.groups?.[0]?.subscriptionId;
@@ -96,12 +109,30 @@ async function main() {
     console.log(`Step 2: resolving ${codes.length} code(s)…`);
     for (let i = 0; i < codes.length; i += 1) {
       const code = codes[i];
-      const r = await apiCall(session.page, "POST", `/products/code/${code}`, {
+      let r = await apiCall(session.page, "POST", `/products/code/${code}`, {
         token,
         body: { include_pr: subscriptionId },
         label: `products/code/${code}`,
         silent: true,
       });
+      // Long runs (~90min for the full catalog) can outlive MILO's JWT. On an
+      // auth failure, re-capture the token in-page (same session/Cloudflare
+      // clearance) and retry the code ONCE so the run continues uninterrupted.
+      if (r.status === 401 || r.status === 403) {
+        try {
+          token = await loginViaApi(session.page, username, password);
+          tokenRefreshes += 1;
+          console.log(`  token refreshed at ${i + 1}/${codes.length} (was ${r.status})`);
+          r = await apiCall(session.page, "POST", `/products/code/${code}`, {
+            token,
+            body: { include_pr: subscriptionId },
+            label: `products/code/${code}`,
+            silent: true,
+          });
+        } catch (reloginErr) {
+          console.warn(`  token refresh failed: ${reloginErr?.message ?? reloginErr}`);
+        }
+      }
       if (!r.ok || !r.body?.id || !r.body?.distributor) {
         failed += 1;
         failures.push({ code, status: r.status });
@@ -136,6 +167,7 @@ async function main() {
   console.log("\n=== SUMMARY ===");
   console.log(`resolved+written: ${resolved}${args.dryRun ? " (dry-run, nothing written)" : ""}`);
   console.log(`failed: ${failed}`);
+  if (tokenRefreshes > 0) console.log(`token refreshes (long-run re-logins): ${tokenRefreshes}`);
   if (failures.length > 0) {
     console.log("failures (likely discontinued codes or DB errors):");
     for (const f of failures.slice(0, 25)) console.log(`  - ${f.code}: ${f.status}`);
