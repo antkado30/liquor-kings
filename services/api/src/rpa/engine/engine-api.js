@@ -124,9 +124,28 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
   const subscriptionId = group.subscriptionId;
   if (!groupId || !subscriptionId) throw new Error(`Missing groupId/subscriptionId from /account: ${safeBody(account)}`);
 
-  // Step 3: resolve each code → full product (productId kept as STRING).
+  // Step 3: resolve each code → productId + distributor (productId kept STRING).
+  // FAST PATH: if the caller pre-attached a cached MILO product (item.miloProduct,
+  // sourced from mlcc_items.milo_product_id/milo_distributor by the worker), we
+  // SKIP the per-code /products/code network round-trip entirely — that call is
+  // ~1.3s each (first ~5.5s), so a fully-cached cart makes ZERO of them. For the
+  // bulk-add + inventory payloads the engine only needs {id, distributor}, and
+  // add already hardcodes restrictedQuantity:0, so the cached shape is complete.
+  // An UNCACHED code falls through to the identical live resolve as before.
   const resolved = [];
+  let cachedCount = 0;
   for (const item of cartItems) {
+    const cached = item.miloProduct;
+    if (cached && cached.id != null && String(cached.id).trim() !== "" && cached.distributor) {
+      resolved.push({
+        code: item.code,
+        quantity: item.quantity,
+        product: { id: String(cached.id), distributor: cached.distributor },
+        fromCache: true,
+      });
+      cachedCount += 1;
+      continue;
+    }
     const r = await apiCall(page, "POST", `/products/code/${item.code}`, {
       token,
       body: { include_pr: subscriptionId },
@@ -134,7 +153,10 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
     });
     track(r, `products/code/${item.code}`);
     if (!r.ok || !r.body?.id) throw new Error(`resolve ${item.code} failed (${r.status}): ${safeBody(r)}`);
-    resolved.push({ code: item.code, quantity: item.quantity, product: r.body });
+    resolved.push({ code: item.code, quantity: item.quantity, product: r.body, fromCache: false });
+  }
+  if (cachedCount > 0) {
+    console.log(`  productId cache: ${cachedCount}/${cartItems.length} codes pre-mapped (skipped ${cachedCount} /products/code call${cachedCount === 1 ? "" : "s"})`);
   }
 
   // Step 4: clear cart (prep; NOT a submit).
@@ -210,5 +232,14 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
   const result = parseMiloValidate({ cart: pricedCart, inventory, validate: validateBody, deliveryByRef });
 
   const totalApiMs = perCallMs.reduce((s, c) => s + c.ms, 0);
-  return { ...result, engineTimings: { loginMs, perCallMs, totalApiMs } };
+  return {
+    ...result,
+    engineTimings: {
+      loginMs,
+      perCallMs,
+      totalApiMs,
+      cachedCount,
+      liveResolveCount: cartItems.length - cachedCount,
+    },
+  };
 }

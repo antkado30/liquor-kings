@@ -41,6 +41,15 @@ app failed its founder on its core job, on a deadline, in his own store.
 This section sits ABOVE every list in this file on purpose. It expires
 never.
 
+**⏱ SHARPENED 2026-07-04 (Tony):** the ordering bar is now a NUMBER —
+**every check/place run UNDER 60 SECONDS, every time, any cart size.**
+"I want Liquor Kings to be the highlight of someone's week — they look
+forward to using it because of how speedy, reliable and amazing it is."
+Plan of record (in order): productId pre-map → warm engine session →
+loud/honest failures + order-needs-you notify → capture submit endpoint
+(next real order) → engine submit → 3 timed green orders. See
+docs/lk/architecture/ordering-speed-strategy.md.
+
 **Status 2026-06-12:** The wedge that killed both real orders is root-caused
 and DEAD (worker zombie-browser starvation — see journal + 06-12 commit).
 Deployed in v147 + worker: camera sleeps under overlays (the overheat),

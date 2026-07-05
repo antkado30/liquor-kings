@@ -11,6 +11,7 @@ import { addItemsToCart, clearMiloCart } from "../rpa/stages/add-items-to-cart.j
 import { validateCartOnMilo } from "../rpa/stages/validate-cart.js";
 import { checkoutOnMilo } from "../rpa/stages/checkout.js";
 import { buildAndValidateViaApi } from "../rpa/engine/engine-api.js";
+import { attachMiloProductCache } from "../rpa/engine/attach-product-cache.js";
 import {
   acquireSession,
   attachFreshSession,
@@ -1258,8 +1259,32 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
           progressMessage: "Confirming your cart with MLCC",
         }).catch(() => {});
       }, 15_000);
+
+      // Pre-map: attach cached MILO productIds so the engine skips the per-code
+      // /products/code resolves (the per-bottle bottleneck). PURE OPTIMIZATION —
+      // any lookup failure logs and falls back to normalizedItems unchanged, so
+      // the order still runs identically via live resolve (never blocked).
+      let engineItems = normalizedItems;
       try {
-        const engineResult = await buildAndValidateViaApi(session, normalizedItems, { username, password });
+        const cartCodes = normalizedItems.map((i) => String(i.code));
+        const { data: cacheRows, error: cacheErr } = await workerSupabase
+          .from("mlcc_items")
+          .select("code, milo_product_id, milo_distributor")
+          .in("code", cartCodes)
+          .not("milo_product_id", "is", null);
+        if (cacheErr) {
+          console.warn(`[engine] productId cache lookup failed — live resolve fallback: ${cacheErr.message}`);
+        } else {
+          const merged = attachMiloProductCache(normalizedItems, cacheRows);
+          engineItems = merged.items;
+          console.log(`[engine] productId cache: ${merged.hits}/${normalizedItems.length} cart codes pre-mapped`);
+        }
+      } catch (cacheLookupError) {
+        console.warn(`[engine] productId cache lookup threw — live resolve fallback: ${cacheLookupError?.message ?? cacheLookupError}`);
+      }
+
+      try {
+        const engineResult = await buildAndValidateViaApi(session, engineItems, { username, password });
         session.validated = engineResult.validated;
         session.canCheckout = engineResult.canCheckout;
         session.adaOrders = engineResult.adaOrders;
