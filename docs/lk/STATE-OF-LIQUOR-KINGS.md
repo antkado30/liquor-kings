@@ -56,8 +56,13 @@ dinner. Postmortem complete 2026-07-03 from fly logs — ROOT CAUSE FOUND:
    Tony's account (+ UptimeRobot phone app for lock-screen push). Verified Up,
    ~72ms response at setup. This was the last Phase 0 box — a dead machine now
    alerts Tony within ~5 min instead of silently white-screening.
-7. 🟡 **"Needs your decision" notification** — 8 bottles went OOS; the app waited
-   silently for Tony to reopen it. Should push/text "8 items OOS — tap to fix."
+7. 🟡 **"Needs your decision" notification — BUILT 2026-07-05, dormant, needs
+   arming.** Web Push end-to-end (commit `25f504b`): finalize + reaper hooks →
+   every device registered to the store; Settings toggle; push-only service
+   worker (no caching — can't stale-bundle). To arm: apply the
+   `push_subscriptions` migration to prod, `npx web-push generate-vapid-keys`,
+   set the 2 `LK_PUSH_VAPID_*` secrets on the API app, deploy API, toggle on
+   in Settings. Flip to ✅ only after Tony receives a real push on a real check.
 8. ℹ️ **Census correction:** Sentry is NOT a placeholder — logs show it
    initializes in prod (real DSN). But it's not instrumenting express + release
    is "unknown". Partially wired; finish it. Still wouldn't have caught the

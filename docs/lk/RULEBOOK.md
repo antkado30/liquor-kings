@@ -44,10 +44,18 @@ if broken, cost real money, real trust, or a real order.
    If Tony ever hits "index.lock: File exists" with no git running, that's the
    leftover: `rm ~/dev/liquor-kings/.git/index.lock` and retry.
 7. **Give exact commands — NO placeholder text** Tony might run literally.
+   **And every command comes with ONE plain line of what it does and why
+   (learned 7/5)** — Tony must be able to judge it, never run it on faith.
+   If a step changes scope, strategy, or anything he'd want a say in, get on
+   the same page BEFORE handing him the command.
 8. **Batch deploys — never deploy per change.** Build + verify all day; deploy
    ONCE when Tony wants to ship/test. Deploy uses `npm run deploy` (or
    `--strategy immediate --wait-timeout 600` — the default 120s timeout fails
    this 810MB image every time). Don't end every turn with a deploy.
+   **Lockfile law (learned 7/5, failed a deploy):** any edit to a
+   `package.json` MUST be followed by `npm install` in that package on Tony's
+   Mac + committing the updated `package-lock.json` BEFORE deploying — the
+   Docker build runs `npm ci`, which refuses a lock file that's out of sync.
 9. **Fable is Tony's external memory.** Capture wants the moment he states them,
    surface the next step proactively, never make him recall. Keep chat to Tony
    PLAIN — he is not technical.

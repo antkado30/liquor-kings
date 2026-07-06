@@ -375,6 +375,10 @@ carts. Revisit only if a real order with a big cart actually blows past
 3. ⏳ **AI accepts images** — send a photo from camera roll OR take one live,
    to the assistant. (Was already ⏳ "AI accepts images".)
 4. **Catalog photos — every single bottle (13k+).**
+   - **RE-AFFIRMED 2026-07-05 (hard bar):** every bottle has a photo and it
+     is right EVERY time — "1000000% accurate 10000000% of the time."
+     Accuracy outranks coverage: a wrong photo is worse than no photo. Real
+     photos only (AI-generated = dead end per 2026-06-10).
    - ✅ **Premium placeholder shipped 2026-06-08** — glass-bottle art with
      brand monogram (apps/scanner/src/components/BottleArt.tsx), used in Browse
      grid + ProductCard. Killed the "ugly silhouette" complaint. Real photos
@@ -571,7 +575,25 @@ Status: ⏳ NEXT UI BUILD after the submit-endpoint capture.
    cart lines at check time; Place enabled only while (hash unchanged &&
    check age < threshold && check came back green).
 
+## 🔥 Status pill must open DURING the run, not only after (Tony, 2026-07-05)
+
+> "when i press preview order and check order then the little pill is at the
+> bottom it doesnt let me click on it to see the progress only after it has
+> finished it lets me"
+
+⏳ Tap the pill mid-run → sheet opens LIVE: current stage, elapsed timer,
+honest progress copy; the result fills in when it lands. This REVERSES the
+2026-06-30 "skip tap-through progress" call — that call assumed a ~10s engine
+run; real checks are 30–60s (56s on 2026-07-05) and an untappable pill reads
+as frozen. Related: the "staged progress, no dead spinner" want above.
+
 ## 🔥🔥 Catalog quality — family tree 100% + grouped search (Tony, 2026-07-01, after finding competitor "minimum.")
+
+**RE-AFFIRMED 2026-07-05:** "when someones searching in the catalog the
+families of each bottle should pop up so they can easily click between
+them." Data layer is DONE (family_key backfilled to all 13,828 prod rows
+7/1, read by nothing yet) — the open work is the wiring: endpoint + grouped
+search UI + labeled size/container chips per the plan doc.
 
 > "Their biggest moat is their family tree of every single bottle… ours
 > doesn't work like that. Ours is ass. We have to fix it and make it 100%
