@@ -11,7 +11,6 @@
  * addition. Icons reuse the existing inline-SVG set (no emoji).
  */
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useActiveOrder } from "../hooks/useActiveOrder";
 import { IconAlert, IconCheck, IconLoader, IconX } from "./Icons";
 import { RunResultSheet } from "./RunResultSheet";
@@ -52,7 +51,6 @@ function useNowTicker(active: boolean) {
 
 export function OrderStatusPill() {
   const { activeOrder, dismiss } = useActiveOrder();
-  const navigate = useNavigate();
   const [showResult, setShowResult] = useState(false);
 
   const isRunning = activeOrder !== null && activeOrder.result === null;
@@ -62,14 +60,14 @@ export function OrderStatusPill() {
 
   const terminal = activeOrder.result !== null;
 
-  // Resolve copy + icon + tap action per state.
+  // Resolve copy + icon per state. EVERY state is tappable (2026-07-08 want:
+  // "the pill doesn't let me click to see the progress" — now it does):
+  // in-flight opens the LIVE sheet, succeeded opens the result, failed opens
+  // the honest failure view. The sheet is rendered from this component's
+  // state, so a run finishing while it's open fills the result in place.
   let icon: React.ReactNode;
   let title: string;
   let sub: string | null = null;
-  let navigateTo: string | null = null;
-  // On a succeeded run, tapping the pill opens the result sheet (in-stock /
-  // OOS / totals) rather than navigating.
-  let tapOpensResult = false;
   let tone: "running" | "ok" | "warn" | "err" = "running";
 
   if (!terminal) {
@@ -107,25 +105,17 @@ export function OrderStatusPill() {
       const netStr = money(net);
       sub = netStr ? `Everything in stock · ${netStr}` : "Everything in stock";
     }
-    tapOpensResult = true;
   } else {
-    // failed / cancelled
+    // failed / cancelled — tap opens the honest failure sheet (was: navigate
+    // home, which explained nothing).
     icon = <IconAlert size={14} />;
     title = "Order didn't go through";
     const result = activeOrder.result;
     sub = result?.failureMessage || result?.failureType || "Please try again";
-    navigateTo = "/";
     tone = "err";
   }
 
-  const bodyClickable = tapOpensResult || navigateTo !== null;
-  const handleBodyClick = () => {
-    if (tapOpensResult) {
-      setShowResult(true);
-    } else if (navigateTo) {
-      navigate(navigateTo);
-    }
-  };
+  const handleBodyClick = () => setShowResult(true);
 
   return (
     <>
@@ -142,9 +132,10 @@ export function OrderStatusPill() {
         }}
       >
         <div
-          onClick={bodyClickable ? handleBodyClick : undefined}
-          role={bodyClickable ? "button" : undefined}
-          tabIndex={bodyClickable ? 0 : undefined}
+          onClick={handleBodyClick}
+          role="button"
+          tabIndex={0}
+          aria-label={terminal ? "Show run result" : "Show run progress"}
           style={{
             display: "flex",
             alignItems: "center",
@@ -154,7 +145,7 @@ export function OrderStatusPill() {
             background: toneBackground(tone),
             color: "#ffffff",
             boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
-            cursor: bodyClickable ? "pointer" : "default",
+            cursor: "pointer",
             fontSize: 13,
             lineHeight: 1.2,
             maxWidth: "calc(100vw - 24px)",
@@ -212,9 +203,11 @@ export function OrderStatusPill() {
         </button>
         </div>
       </div>
-      {showResult && activeOrder && activeOrder.result ? (
+      {showResult && activeOrder ? (
         <RunResultSheet
           result={activeOrder.result}
+          live={!terminal ? { title, sub } : null}
+          failed={terminal && activeOrder.status !== "succeeded"}
           mode={activeOrder.mode}
           onClose={() => setShowResult(false)}
         />

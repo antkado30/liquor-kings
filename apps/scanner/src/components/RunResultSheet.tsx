@@ -16,10 +16,19 @@
 import type { ActiveOrderResult } from "../hooks/useActiveOrder";
 import type { RunMode } from "../api/execution";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
-import { IconAlert, IconCheck, IconX } from "./Icons";
+import { IconAlert, IconCheck, IconLoader, IconX } from "./Icons";
 
 type Props = {
-  result: ActiveOrderResult;
+  /**
+   * Terminal run result — or null while the run is still in flight (the
+   * sheet then renders the LIVE view and fills in when the result lands,
+   * because the pill re-renders it with fresh props; 2026-07-08 want).
+   */
+  result: ActiveOrderResult | null;
+  /** Live copy while result is null: the pill's own headline + stage line. */
+  live?: { title: string; sub: string | null } | null;
+  /** True when the run finalized failed/canceled → honest failure view. */
+  failed?: boolean;
   mode: RunMode;
   onClose: () => void;
 };
@@ -97,8 +106,104 @@ function confirmationRows(
   return rows;
 }
 
-export function RunResultSheet({ result, mode, onClose }: Props) {
+export function RunResultSheet({ result, live = null, failed = false, mode, onClose }: Props) {
   useLockBodyScroll();
+
+  // ─── LIVE view: the run is still in flight (2026-07-08 want — tap the pill
+  // DURING the run). Same sheet shell; the result body replaces this in place
+  // the moment the run lands, because the pill re-renders us with `result`.
+  if (!result) {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="MLCC run progress"
+        style={backdropStyle}
+        onClick={onClose}
+      >
+        <div style={cardStyle} onClick={(e) => e.stopPropagation()}>
+          <div style={headerStyle}>
+            <div style={headerIconRowStyle}>
+              <span style={{ display: "inline-flex", color: "#93c5fd" }}>
+                <IconLoader size={18} strokeWidth={2.25} className="rpa-progress__spin" />
+              </span>
+              <strong style={{ fontSize: 17 }}>{live?.title ?? "Working on it"}</strong>
+            </div>
+            <button type="button" aria-label="Close" onClick={onClose} style={closeBtnStyle}>
+              <IconX size={18} />
+            </button>
+          </div>
+          <div style={bodyStyle}>
+            {live?.sub ? (
+              <div style={{ fontSize: 14, color: "rgba(255,255,255,0.85)", marginBottom: 14 }}>
+                {live.sub}
+              </div>
+            ) : null}
+            {mode === "validate_only" ? (
+              <div style={practiceNoteStyle}>
+                Practice check — nothing is being ordered.{" "}
+                <span style={{ opacity: 0.7 }}>MILO is checking the cart and pricing only.</span>
+              </div>
+            ) : null}
+            <p style={mutedStyle}>
+              MILO is checking your cart against live stock and rules. You can
+              close this — the pill keeps tracking, and the result lands here
+              the moment it&apos;s done.
+            </p>
+          </div>
+          <div style={footerStyle}>
+            <button type="button" style={primaryBtnStyle} onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── FAILED view: honest, names the reason, careful about retry advice.
+  if (failed) {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="MLCC run failed"
+        style={backdropStyle}
+        onClick={onClose}
+      >
+        <div style={cardStyle} onClick={(e) => e.stopPropagation()}>
+          <div style={headerStyle}>
+            <div style={headerIconRowStyle}>
+              <span style={{ display: "inline-flex", color: "#f87171" }}>
+                <IconAlert size={18} />
+              </span>
+              <strong style={{ fontSize: 17 }}>
+                {mode === "submit" ? "Order run couldn't finish" : "Check couldn't finish"}
+              </strong>
+            </div>
+            <button type="button" aria-label="Close" onClick={onClose} style={closeBtnStyle}>
+              <IconX size={18} />
+            </button>
+          </div>
+          <div style={bodyStyle}>
+            <div style={practiceNoteStyle}>
+              {result.failureMessage || result.failureType || "It hit a problem and stopped."}
+            </div>
+            <p style={mutedStyle}>
+              {mode === "validate_only"
+                ? "Nothing was ordered — this was a check. Fix what it names above, or just try again."
+                : "Before retrying, open the Orders tab and make sure nothing went through — never double an order."}
+            </p>
+          </div>
+          <div style={footerStyle}>
+            <button type="button" style={primaryBtnStyle} onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const vr = result.validateResult;
   const submitted = result.submitted === true;
