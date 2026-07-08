@@ -151,13 +151,26 @@ export async function sendPushToStore(supabase, storeId, payload) {
  */
 export async function notifyRunFinal({ supabase, run }) {
   try {
-    if (!isPushConfigured()) return { skipped: "not_configured" };
+    // Observability (2026-07-08): every outcome logs ONE line — a push that
+    // silently doesn't happen is undebuggable, and "nothing in the logs"
+    // must never be ambiguous.
+    if (!isPushConfigured()) {
+      console.log(`[push] run ${run?.id ?? "?"}: skipped — VAPID not configured`);
+      return { skipped: "not_configured" };
+    }
     const payload = buildRunFinalPush(run);
-    if (!payload) return { skipped: "no_notification_for_run" };
+    if (!payload) {
+      console.log(`[push] run ${run?.id ?? "?"}: skipped — no notification for this run type/status`);
+      return { skipped: "no_notification_for_run" };
+    }
     const result = await sendPushToStore(supabase, run.store_id, payload);
     if (result.sent > 0) {
       console.log(
         `[push] run ${run.id} → ${result.sent} device(s) (${payload.data?.kind ?? "?"})`,
+      );
+    } else {
+      console.log(
+        `[push] run ${run.id} → 0 devices notified (failed:${result.failed ?? 0}, pruned:${result.pruned ?? 0}${result.skipped ? `, skipped:${result.skipped}` : ""})`,
       );
     }
     return result;

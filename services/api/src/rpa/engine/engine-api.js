@@ -16,6 +16,7 @@
  * (MILO doesn't persist it in reachable storage). Token is redacted in all logs.
  */
 import { parseMiloValidate } from "./parse-milo-validate.js";
+import { cartExactlyMatchesRequest } from "../../lib/cart-match.js";
 
 const API_BASE = "https://www.lara.michigan.gov/LiquorOrderingApi/api";
 
@@ -162,6 +163,16 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
   // Step 4: clear cart (prep; NOT a submit).
   const clear = await apiCall(page, "DELETE", `/users/cart?groupid=${groupId}`, { token, label: "DELETE /users/cart (clear)" });
   track(clear, "clear");
+  // FAIL CLOSED (2026-07-08, doctrine §14): a failed clear means the cart is
+  // in an UNKNOWN state — adding onto it would price/validate a cart that
+  // isn't the requested order. Found live: MILO returned 500 on clear and the
+  // engine sailed on. Never again. (No status carve-outs on purpose — if MILO
+  // ever 404s a clear we want to SEE it and decide with evidence, not assume.)
+  if (!clear.ok) {
+    throw new Error(
+      `cart clear failed (${clear.status}): ${safeBody(clear)} — cart state unknown, refusing to build on it`,
+    );
+  }
 
   // Step 5: BULK ADD — entire cart in ONE call. Keep its .items (full product
   // objects) for the step-9 pricing call.
@@ -250,6 +261,27 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
   track(taxes, "cart/taxes");
   if (!taxes.ok) throw new Error(`price cart failed (${taxes.status}): ${safeBody(taxes)}`);
   const pricedCart = taxes.body;
+
+  // Step 9.5 — BOUNDARY COMPARISON GATE (2026-07-08, doctrine §11 + §14/§18):
+  // what we sent === what came back. The priced cart MILO returned must hold
+  // EXACTLY the requested lines — same codes, same quantities, nothing extra,
+  // nothing missing. Uses the same pure matcher the RPA path trusts
+  // (cart-match.js, bias toward false). ANY mismatch fails the run LOUD
+  // before the result can reach the user as truth. This is what turns a
+  // silently-ignored clear failure (or any MILO cart weirdness) into an
+  // honest, named failure instead of a wrong validate result.
+  const requestedLines = resolved.map((r) => ({ code: r.code, quantity: r.quantity }));
+  const pricedLines = (Array.isArray(pricedCart?.items) ? pricedCart.items : []).map((it) => ({
+    code: it?.product?.code,
+    quantity: it?.quantity,
+  }));
+  const cartGate = cartExactlyMatchesRequest(requestedLines, pricedLines);
+  if (!cartGate.match) {
+    throw new Error(
+      `MILO cart does not match the requested order (${cartGate.reason}) — ` +
+      `failing closed. Requested ${requestedLines.length} line(s), MILO returned ${pricedLines.length}. Nothing was submitted.`,
+    );
+  }
 
   // Step 10: parse the priced cart into the validate-result shape. DRY-RUN ENDS.
   const result = parseMiloValidate({ cart: pricedCart, inventory, validate: validateBody, deliveryByRef });

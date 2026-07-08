@@ -217,6 +217,42 @@ describe("buildAndValidateViaApi (parallel post-add reads)", () => {
     await expect(run(page)).rejects.toThrow(/page crashed/);
   });
 
+  it("FAIL CLOSED: cart-clear failure aborts BEFORE anything is added (found live 2026-07-08: MILO 500 on clear)", async () => {
+    const page = makeMockPage([
+      { method: "DELETE", match: "/users/cart?", body: "server error", status: 500, ok: false },
+    ]);
+    await expect(run(page)).rejects.toThrow(/cart clear failed \(500\)/);
+    expect(page.calls.some((c) => c.url.includes("/users/cart/items"))).toBe(false);
+    expect(page.calls.some((c) => c.url.includes("/users/cart/taxes"))).toBe(false);
+  });
+
+  it("BOUNDARY GATE: an EXTRA line in the priced cart fails the run loud (stale cart can't become truth)", async () => {
+    const staleCart = {
+      ...cartFixture,
+      items: [
+        ...cartFixture.items,
+        { product: { code: "9999", name: "GHOST BOTTLE", distributor: cartFixture.items[0].product.distributor }, quantity: 6 },
+      ],
+    };
+    const page = makeMockPage([{ method: "PUT", match: "/users/cart/taxes", body: staleCart }]);
+    await expect(run(page)).rejects.toThrow(/does not match the requested order \((count_mismatch|extra:9999)\)/);
+  });
+
+  it("BOUNDARY GATE: a MISSING line in the priced cart fails the run loud", async () => {
+    const shortCart = { ...cartFixture, items: cartFixture.items.slice(0, 1) };
+    const page = makeMockPage([{ method: "PUT", match: "/users/cart/taxes", body: shortCart }]);
+    await expect(run(page)).rejects.toThrow(/does not match the requested order/);
+  });
+
+  it("BOUNDARY GATE: a tampered QUANTITY fails the run loud with the code named", async () => {
+    const tampered = {
+      ...cartFixture,
+      items: cartFixture.items.map((it, i) => (i === 0 ? { ...it, quantity: it.quantity + 1 } : it)),
+    };
+    const page = makeMockPage([{ method: "PUT", match: "/users/cart/taxes", body: tampered }]);
+    await expect(run(page)).rejects.toThrow(new RegExp(`qty_mismatch:${cartFixture.items[0].product.code}`));
+  });
+
   it("CACHE MIX: uncached item live-resolves exactly once; cached items make zero resolve calls", async () => {
     const items = cachedCartItems();
     const bare = { code: items[0].code, quantity: items[0].quantity }; // no miloProduct

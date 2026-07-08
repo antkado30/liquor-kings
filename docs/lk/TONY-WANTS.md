@@ -89,6 +89,14 @@ PWA icon re-add dance, camera permission quirks). App Store review needs:
 privacy policy (✅ live), support contact, screenshots. The audit's
 hardening all carries over — nothing built now is throwaway.
 
+**⏳ 2026-07-08 (Tony): iOS asks for CAMERA permission on every app open** —
+direct core-loop friction (the scan page is the front door). iOS gives
+installed web apps separate, stricter permissions and re-prompts
+getUserMedia per launch. Interim to verify: iOS 18 Settings → app entry for
+the installed scanner → Camera = Allow (if iOS exposes it there, the nag
+dies). Permanent kill = this native wrap: native camera permission asks
+ONCE, ever. This want raises the wrap's priority.
+
 ---
 
 ## 🔥 Bulk paste-to-cart via the AI (stated 2026-06-16)
