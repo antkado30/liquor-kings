@@ -27,6 +27,23 @@
 
 const NOTIFY_RUN_TYPES = new Set(["validate_only", "rpa_run"]);
 
+/**
+ * run_type is NOT a top-level column on execution_runs — it lives at
+ * payload_snapshot.metadata.run_type (see the 2026-06-04 scar in
+ * execution-run.service.js: selecting a `metadata` column 500'd in prod).
+ * Found again the hard way 2026-07-08: this builder read run.run_type, got
+ * undefined, and silently skipped EVERY notification. Read every shape,
+ * canonical first.
+ */
+function resolveRunType(run) {
+  return (
+    run?.payload_snapshot?.metadata?.run_type ??
+    run?.metadata?.run_type ??
+    run?.run_type ??
+    null
+  );
+}
+
 /** Best-effort money string; null-safe. "$1,234.56" style, no cents games. */
 function money(v) {
   const n = Number(v);
@@ -87,7 +104,7 @@ export function buildRunFinalPush(run) {
   try {
     if (!run || typeof run !== "object" || !run.id) return null;
     const status = run.status;
-    const runType = run.run_type;
+    const runType = resolveRunType(run);
 
     const base = (kind, title, body) => ({
       title,
