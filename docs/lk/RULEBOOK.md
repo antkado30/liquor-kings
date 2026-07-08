@@ -67,6 +67,15 @@ if broken, cost real money, real trust, or a real order.
 11. **The Quality Mandate is absolute: instant, reliable, never silent, never a
     lie.** Any perceived wait is a P0. Quality outranks features, always. Full
     text at the top of `TONY-WANTS.md`; disciplines in `INTEGRITY-DOCTRINE.md`.
+    **PLUS the HARDENING MANDATE (Tony, 2026-07-07, doctrine §13-31):**
+    zero-trust (verify everything, all input hostile, fail CLOSED, minimum
+    attack surface, audit trail on everything) · one canonical truth
+    (reconciled, deterministic, idempotent, ATOMIC — never half-done,
+    invariants checked loud) · production-grade robustness (all edge cases,
+    graceful degradation) · architecture that lasts (maintainable > clever,
+    zero vendor lock-in + migration path, no interest-charging shortcuts) ·
+    craft (self-documenting, high test coverage, observability, versioned,
+    YAGNI/MVP scope built bulletproof).
 12. **Prove before trust.** Only Tony seeing it work in the real app = "fixed."
     Never declare victory from the sandbox. Verify each change.
 13. **One bug found = fix the whole CLASS.** Grep the codebase for every

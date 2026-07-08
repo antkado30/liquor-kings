@@ -97,6 +97,68 @@ Every morning: open Founder Console, look at last 24 hours of
 failures. Ask "could this have hit dad in a way he didn't notice?"
 Don't wait for customer complaints to find bugs.
 
+## THE HARDENING MANDATE (Tony, 2026-07-07 — verbatim intent, permanent)
+
+Tony's words, organized. This extends the 12 disciplines with security and
+architecture law. Every build decision checks against this list.
+
+### Security — zero trust
+13. **Trust nothing by default; verify everything.** Every input, every
+    caller, every boundary. Treat ALL user input as hostile — including
+    Tony's own ("treat everything I type as hostile").
+14. **Fail CLOSED, never open.** When something breaks, the system denies by
+    default — a broken gate never lets an action through. (Already true on
+    the money path: submit gates, cart-mismatch refusal. Make it universal.)
+15. **Minimize the attack surface every possible way.** Fewest routes, fewest
+    permissions, fewest secrets in the fewest places, nothing exposed that
+    doesn't have to be.
+16. **Sanitize all input.** Strict validation at every entry point; reject
+    weird shapes early with a human error.
+17. **Audit trail on everything, inspectable at all times.** Every action
+    leaves an immutable record Tony can look at whenever he wants.
+
+### Data — one truth, kept true
+18. **Single source of truth, canonical.** Every fact lives in exactly ONE
+    place; everything else derives from it. Reconcile derived copies against
+    the canon (parity checks) and alarm on drift.
+19. **Deterministic, idempotent, atomic.** Same input → same output. Safe to
+    re-run. All-or-nothing: fully complete or fully rolled back — NEVER
+    half-done.
+20. **Invariants — rules that must always be true.** (Quantity never
+    negative; a cart line always maps to a real code; an armed submit always
+    has all gates.) State them in code, check them, crash LOUD on violation.
+21. **No regressions, no silent failures.** Changes prove the old behavior
+    still holds (tests). Anything that fails says so out loud. (Disciplines
+    5 + 8 apply.)
+
+### Robustness — production grade
+22. **Robust, resilient, fault-tolerant, graceful degradation.** A dependency
+    dying degrades honestly, never corrupts and never lies.
+23. **Handle ALL edge cases** — the rare weird situation that breaks amateur
+    code is the case we handle explicitly (discipline 10, restated as law).
+
+### Architecture — built to last and to leave
+24. **Maintainable > clever. Modular, decoupled, separation of concerns,
+    extensible, backward-compatible.**
+25. **No unnecessary technical debt** — "shortcuts that charge interest
+    forever." Take a shortcut only deliberately, documented, with a payoff
+    date.
+26. **Durable, portable, ZERO vendor lock-in, full data portability, a real
+    migration path off every vendor** (Fly, Supabase, any of them). Disaster
+    recovery is a plan, not a hope. History/audit data immutable.
+27. **Scalable with no hiding bottlenecks** — find the bottleneck, name it,
+    kill it (see the scale mandate: millions of stores, 5-min ceiling).
+
+### Craft
+28. **Self-documenting code; DRY unless duplication is genuinely clearer.**
+29. **High test coverage** — how much of the code is protected by automated
+    tests is a number we care about; adversarial tests count double.
+30. **Refactor continuously; full observability; everything versioned.**
+31. **YAGNI + MVP scope, hardened build.** Don't build what we don't need
+    yet — but what we DO build is production-grade to this whole list. Scope
+    small; harden completely. (This is how "MVP" and "handle everything"
+    coexist: fewer things, each bulletproof.)
+
 ## How this gets enforced
 
 - **Every PR description** lists which disciplines apply and how they
