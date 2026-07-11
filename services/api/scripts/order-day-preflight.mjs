@@ -18,7 +18,8 @@
  *      than 1 machine makes the HAR capture land on a random machine (warn)
  *   3. API env gate  LK_ALLOW_ORDER_SUBMISSION  (must match --expect)
  *   4. Worker env: gate (must match --expect), LK_RPA_PERSIST_SESSION
- *      (must be "no" on capture day or the recording never flushes),
+ *      (HARD "no" only with --expect armed — the capture requirement;
+ *      informational when disarmed, warm checks rest at "yes"),
  *      LK_ORDER_ENGINE (reported, informational)
  *   5. Colony store flag stores.allow_order_submission in prod Supabase
  *      (needs LK_PROD_SUPABASE_URL / LK_PROD_SUPABASE_SERVICE_ROLE_KEY in
@@ -156,28 +157,58 @@ try {
     env.GATE === expectedGate,
     `live value: ${env.GATE ?? "unreadable"}`,
   );
-  record(
-    'Worker LK_RPA_PERSIST_SESSION = "no" (capture switch — recording flushes)',
-    env.PERSIST === "no",
-    `live value: ${env.PERSIST ?? "unreadable"}${env.PERSIST !== "no" ? " — the submit run's HAR will NOT save" : ""}`,
-  );
+  /*
+    Capture switch semantics fixed 2026-07-11: persist="no" is a CAPTURE
+    requirement, not a resting state. Warm fast checks between order days
+    correctly run persist="yes" — hard-gating "no" in disarmed mode made
+    every resting-morning preflight false-alarm (and the runbook's step 0
+    runs BEFORE step 1 flips the switch). Armed mode still gates HARD:
+    placing with persist="yes" means the submit run's HAR never flushes
+    and the capture goal is silently lost.
+  */
+  if (expectArmed) {
+    record(
+      'Worker LK_RPA_PERSIST_SESSION = "no" (capture switch — recording flushes)',
+      env.PERSIST === "no",
+      `live value: ${env.PERSIST ?? "unreadable"}${env.PERSIST !== "no" ? " — the submit run's HAR will NOT save" : ""}`,
+    );
+  } else {
+    record(
+      "Worker LK_RPA_PERSIST_SESSION (info — capture day flips it to \"no\" in step 1)",
+      null,
+      `live value: ${env.PERSIST ?? "unreadable"}`,
+    );
+  }
   record("Worker LK_ORDER_ENGINE (info)", null, env.ENGINE ?? "unreadable");
 } catch (e) {
   record(`Worker gate LK_ALLOW_ORDER_SUBMISSION = "${expectedGate}"`, false, `ssh failed: ${String(e?.message || e).slice(0, 160)}`);
-  record('Worker LK_RPA_PERSIST_SESSION = "no" (capture switch — recording flushes)', false, "unknown (ssh failed)");
+  if (expectArmed) {
+    record('Worker LK_RPA_PERSIST_SESSION = "no" (capture switch — recording flushes)', false, "unknown (ssh failed)");
+  } else {
+    record("Worker LK_RPA_PERSIST_SESSION (info — capture day flips it to \"no\" in step 1)", null, "unknown (ssh failed)");
+  }
 }
 
-// 5: store flag in prod
+// 5: store flag in prod — follows --expect, exactly like the env gates.
+//
+// 2026-07-11: the flag used to be asserted `= true` unconditionally,
+// because until then it sat armed year-round and only the env gates
+// flipped. On 2026-07-11 we disarmed it between order days (defense in
+// depth — BOTH locks off at rest), so the correct resting state is now
+// FALSE and the arming step (go-live runbook) sets it TRUE. Without this
+// fix every disarmed-morning preflight would false-alarm NO-GO.
+const expectedFlag = expectArmed; // armed → true, disarmed → false
+const FLAG_CHECK_NAME = `Colony stores.allow_order_submission = ${expectedFlag}`;
 const SUPABASE_URL = process.env.LK_PROD_SUPABASE_URL || process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.LK_PROD_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   record(
-    "Colony stores.allow_order_submission = true",
+    FLAG_CHECK_NAME,
     null,
     "SKIPPED — set LK_PROD_SUPABASE_URL + LK_PROD_SUPABASE_SERVICE_ROLE_KEY in services/api/.env to enable",
   );
 } else if (/127\.0\.0\.1|localhost/.test(SUPABASE_URL)) {
-  record("Colony stores.allow_order_submission = true", null, "SKIPPED — SUPABASE_URL points at localhost, not prod");
+  record(FLAG_CHECK_NAME, null, "SKIPPED — SUPABASE_URL points at localhost, not prod");
 } else {
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
@@ -187,18 +218,18 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
       .eq("id", COLONY_STORE_ID)
       .maybeSingle();
     if (error) {
-      record("Colony stores.allow_order_submission = true", false, `query failed: ${error.message}`);
+      record(FLAG_CHECK_NAME, false, `query failed: ${error.message}`);
     } else if (!data) {
-      record("Colony stores.allow_order_submission = true", false, `no store row for ${COLONY_STORE_ID}`);
+      record(FLAG_CHECK_NAME, false, `no store row for ${COLONY_STORE_ID}`);
     } else {
       record(
-        "Colony stores.allow_order_submission = true",
-        data.allow_order_submission === true,
+        FLAG_CHECK_NAME,
+        data.allow_order_submission === expectedFlag,
         `live value: ${String(data.allow_order_submission)} (${data.store_name ?? "unnamed"})`,
       );
     }
   } catch (e) {
-    record("Colony stores.allow_order_submission = true", false, `query threw: ${String(e?.message || e).slice(0, 160)}`);
+    record(FLAG_CHECK_NAME, false, `query threw: ${String(e?.message || e).slice(0, 160)}`);
   }
 }
 
@@ -207,7 +238,7 @@ const failures = results.filter((r) => r.ok === false);
 const skips = results.filter((r) => r.ok === null);
 console.log("");
 console.log("  NOTE: the deployed client flag (REAL_SUBMISSION_WIRED) can't be read remotely —");
-console.log(`  verify on the phone: ${expectArmed ? 'confirm modal MUST say "This goes to MILO immediately and can\'t be unsent"' : 'button should read "Check Order" with practice copy'}.`);
+console.log(`  verify on the phone: ${expectArmed ? 'TWO buttons ("Check with MLCC" + "Place Order", Place locked until a green check); Place\'s confirm modal MUST say "This goes to MILO immediately and can\'t be unsent"' : 'single "Check Order" button with practice copy'}.`);
 console.log("");
 if (failures.length === 0) {
   console.log(`VERDICT: GO — every readable check matches "${expectArmed ? "armed" : "disarmed"}"${skips.length ? ` (${skips.length} skipped)` : ""}.`);
