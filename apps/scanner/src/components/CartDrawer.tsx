@@ -26,7 +26,7 @@
  * successful MLCC validate. This means a user can never accidentally
  * submit a cart that hasn't been confirmed against MLCC's live view.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { validateCart, type CartValidationResult } from "../api/cart";
 import {
@@ -35,6 +35,7 @@ import {
   recoverStore,
   triggerMlccCartReset,
   type RecoverStoreResult,
+  type RunMode,
 } from "../api/execution";
 import {
   createOrderTemplate,
@@ -47,6 +48,8 @@ import { useSubmission } from "../hooks/useSubmission";
 import { useActiveOrder } from "../hooks/useActiveOrder";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
+import { hashCart } from "../hooks/useBackgroundPreValidate";
+import { resolvePlaceGate } from "../lib/place-gate";
 import { useHideTabBar } from "../hooks/useHideTabBar";
 import { SubmitConfirmationModal } from "./SubmitConfirmationModal";
 import {
@@ -266,7 +269,7 @@ export function CartDrawer({
   // App-level active-order tracker (P1a). The new "Place Order" flow hands the
   // fired runId here so the persistent OrderStatusPill shows progress after the
   // drawer closes. activeOrder also gates double-fire (one order in flight).
-  const { activeOrder, trackOrder } = useActiveOrder();
+  const { activeOrder, trackOrder, lastGreenCheck } = useActiveOrder();
 
   // Compound "is the flow doing something async right now" flag. Used to
   // disable UI controls during sync / poll. Covers both validate and
@@ -810,6 +813,58 @@ export function CartDrawer({
   // imply a real order. Fed to SubmitConfirmationModal in place of the raw
   // store flag (whose not-armed copy is already correct).
   const submissionArmed = allowOrderSubmission && REAL_SUBMISSION_WIRED;
+
+  // ─── Two-step Check → SEE → Place (2026-07-11, Tony's 2026-07-01 design) ──
+  // Armed shows TWO explicit buttons, MILO's rhythm: "Check with MLCC"
+  // (always available, direct fire — a check is non-destructive, so no
+  // confirm modal) and "Place Order" (keeps the line-by-line confirm modal;
+  // doctrine #3 pre-commit verification is for destructive actions).
+  // Place unlocks ONLY while the last GREEN check is fresh (<10 min) and
+  // the cart is byte-identical to what MILO blessed — any edit re-locks it
+  // via the hash mismatch, no event wiring needed. UX honesty only: the
+  // server's Stage-5 triple gate re-validates regardless.
+  const itemsHash = hashCart(items);
+  // Minute-ticker so the 10-minute expiry re-locks the button on screen
+  // without requiring a tap. Armed-only — practice mode has no Place.
+  const [, setGateTick] = useState(0);
+  useEffect(() => {
+    if (!submissionArmed) return;
+    const t = setInterval(() => setGateTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, [submissionArmed]);
+  const placeGate = resolvePlaceGate({
+    armed: submissionArmed,
+    currentCartHash: itemsHash,
+    lastGreenCheck,
+    nowMs: Date.now(),
+    rulesValid,
+    busy: isFiring || orderInFlight,
+  });
+
+  /*
+    Shared fire path for BOTH buttons (and the confirm modal): sync the
+    cart, trigger the run (validate_only latches onto an identical
+    in-flight background check — the 2026-07-11 dedupe), hand the runId +
+    the fired cart's hash to the app-level tracker, close the drawer. The
+    hash is what lets a green check unlock Place for exactly these lines.
+  */
+  const fireRun = useCallback(
+    (mode: RunMode) => {
+      setFireError(null);
+      setIsFiring(true);
+      void (async () => {
+        const r = await fireOrder(items, mode);
+        setIsFiring(false);
+        if (r.ok) {
+          trackOrder(r.runId, mode, { cartHash: itemsHash });
+          onClose();
+        } else {
+          setFireError(r.error);
+        }
+      })();
+    },
+    [fireOrder, items, itemsHash, trackOrder, onClose],
+  );
 
   // Cart-wide blockers shown above the validate button. Per-line errors
   // render inline on their cart line below.
@@ -1417,40 +1472,82 @@ export function CartDrawer({
                 <strong className="drawer-footer__total-value">{money(totalCost)}</strong>
               </div>
               {/*
-                ONE "Place Order" button (P1b). Fires the full background
-                pipeline after the confirmation modal and hands the runId to
-                the app-level tracker; the drawer then closes and the
-                persistent OrderStatusPill shows progress. Pre-gate is the
-                INSTANT local rules check, not a MILO round-trip. Disabled
-                while an order is already in flight (no double-fire).
+                Two-step Check → SEE → Place (2026-07-11, Tony's 2026-07-01
+                design). ARMED: two explicit buttons — "Check with MLCC"
+                fires a validate_only directly (non-destructive, no modal);
+                "Place Order" opens the line-by-line confirm modal and is
+                LOCKED unless the last green check is fresh (<10 min) for
+                this byte-identical cart (resolvePlaceGate — any edit
+                re-locks via hash mismatch). PRACTICE: the single Check
+                button, now also direct-fire; the confirm modal is reserved
+                for placing. Server gates re-validate regardless.
               */}
               {state.kind === "idle" || state.kind === "validateDone" ? (
-                <button
-                  type="button"
-                  className="btn primary btn-block"
-                  disabled={!canPlaceOrder}
-                  onClick={() => {
-                    setFireError(null);
-                    setConfirmSubmit(true);
-                  }}
-                  title={
-                    !rulesValid
-                      ? "Fix the issues above before placing the order"
-                      : undefined
-                  }
-                >
-                  {isFiring
-                    ? submissionArmed
-                      ? "Sending…"
-                      : "Checking…"
-                    : orderInFlight
-                      ? submissionArmed
-                        ? "Order in progress…"
-                        : "Check in progress…"
-                      : submissionArmed
-                        ? "Place Order"
+                submissionArmed ? (
+                  <>
+                    <div className="drawer-footer__actions">
+                      <button
+                        type="button"
+                        className="btn btn-block"
+                        disabled={!canPlaceOrder}
+                        onClick={() => fireRun("validate_only")}
+                        title={
+                          !rulesValid
+                            ? "Fix the issues above before checking"
+                            : undefined
+                        }
+                      >
+                        {isFiring
+                          ? "Working…"
+                          : orderInFlight
+                            ? "Run in progress…"
+                            : "Check with MLCC"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn primary btn-block"
+                        disabled={!placeGate.ready}
+                        onClick={() => {
+                          setFireError(null);
+                          setConfirmSubmit(true);
+                        }}
+                        title={placeGate.ready ? undefined : placeGate.reason}
+                      >
+                        Place Order
+                      </button>
+                    </div>
+                    {/*
+                      One honest sentence on the Place lock state — the
+                      reason is never a mystery (doctrine §16). When ready,
+                      say what MILO blessed and when.
+                    */}
+                    <p className="drawer-place-hint muted small" role="status">
+                      {placeGate.ready
+                        ? placeGate.checkedAgoMs < 60_000
+                          ? "Checked just now — cart matches MILO."
+                          : `Checked ${Math.round(placeGate.checkedAgoMs / 60_000)} min ago — cart matches MILO.`
+                        : placeGate.reason}
+                    </p>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn primary btn-block"
+                    disabled={!canPlaceOrder}
+                    onClick={() => fireRun("validate_only")}
+                    title={
+                      !rulesValid
+                        ? "Fix the issues above before checking"
+                        : undefined
+                    }
+                  >
+                    {isFiring
+                      ? "Checking…"
+                      : orderInFlight
+                        ? "Check in progress…"
                         : "Check Order"}
-                </button>
+                  </button>
+                )
               ) : null}
             </div>
           </>
@@ -1794,33 +1891,18 @@ export function CartDrawer({
           onCancel={() => setConfirmSubmit(false)}
           onConfirm={() => {
             setConfirmSubmit(false);
-            // P1b: fire the full background pipeline (non-blocking), hand the
-            // runId to the app-level tracker, and close the drawer so the
-            // persistent OrderStatusPill takes over. Do NOT clearCart — the
-            // run is dry-run-gated and may not actually place; the cart must
-            // survive until a confirmed placement (a later portion clears it).
-            setIsFiring(true);
-            void (async () => {
-              // P2.b2: choose the run mode from the TRUE armed state. With
-              // REAL_SUBMISSION_WIRED=false (P1c), submissionArmed is always
-              // false today → orderMode is "validate_only" (a practice CHECK:
-              // login → nav → add → validate, stages 1-4, NEVER Stage 5), so a
-              // successful check can't trip Stage 5's canCheckout gate and be
-              // mislabeled "Order didn't go through." It still adds the cart to
-              // MILO + validates + returns the full result (in-stock / OOS /
-              // totals) for the result sheet. Go-live flips the flag + arms
-              // env/store, and this resolves to "submit"; the server then
-              // independently re-gates env + store + checkout regardless.
-              const orderMode = submissionArmed ? "submit" : "validate_only";
-              const r = await fireOrder(items, orderMode);
-              setIsFiring(false);
-              if (r.ok) {
-                trackOrder(r.runId, orderMode);
-                onClose();
-              } else {
-                setFireError(r.error);
-              }
-            })();
+            /*
+              Two-step (2026-07-11): the modal is now reachable only from
+              "Place Order" (armed), so this fires the submit path through
+              the shared fireRun — which records the cart hash with the
+              tracker and closes the drawer for the pill. The unarmed
+              ternary is a belt: if the modal somehow opens in practice
+              mode, it fires a harmless check (stages 1-4, never Stage 5).
+              Server re-gates env + store + checkout regardless. Do NOT
+              clearCart — the run is dry-run-gated and may not actually
+              place; the cart must survive until a confirmed placement.
+            */
+            fireRun(submissionArmed ? "submit" : "validate_only");
           }}
         />
       ) : null}

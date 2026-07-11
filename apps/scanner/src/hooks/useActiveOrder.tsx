@@ -33,8 +33,19 @@ import {
   type ValidateResult,
 } from "../api/execution";
 import { getCurrentStoreId } from "../lib/currentStore";
+import { CHECK_TRUST_WINDOW_MS, type LastGreenCheck } from "../lib/place-gate";
 
 const STORAGE_KEY = "lk.activeOrder.v1";
+/*
+  Two-step ordering (2026-07-11): the last GREEN check — a validate_only
+  run that finished succeeded with MILO's can_checkout=true — persisted
+  with the hash of the exact cart lines it blessed. This is what unlocks
+  "Place Order" (Tony's 2026-07-01 design: Place trusts a fresh check
+  <10 min for a byte-identical cart; any edit re-locks). Its own key, NOT
+  part of lk.activeOrder.v1 — dismissing the status pill must never
+  revoke Place eligibility.
+*/
+const GREEN_CHECK_STORAGE_KEY = "lk.lastGreenCheck.v1";
 // Poll cadence mirrors useSubmission.pollUntilTerminal EXACTLY.
 const POLL_INTERVAL_MS = 2500;
 const POLL_BACKOFF_AFTER_MS = 60_000;
@@ -76,6 +87,12 @@ export type ActiveOrder = {
   progressStage: string | null;
   progressMessage: string | null;
   startedAtMs: number;
+  /**
+   * hashCart() of the lines this run was fired with (2026-07-11). Lets a
+   * terminal GREEN validate_only run record the Place-unlocking check for
+   * exactly those lines. Null when the caller didn't provide one.
+   */
+  cartHash: string | null;
   /** null while polling; set once the run reaches a terminal status. */
   result: ActiveOrderResult | null;
 };
@@ -86,14 +103,28 @@ type StoredOrder = {
   mode: RunMode;
   storeId: string;
   startedAtMs: number;
+  /** Optional — older stored blobs won't have it; treated as null. */
+  cartHash?: string | null;
 };
+
+/** LastGreenCheck + the store it belongs to (never leak across stores). */
+type StoredGreenCheck = LastGreenCheck & { storeId: string };
 
 type ActiveOrderContextValue = {
   activeOrder: ActiveOrder | null;
-  /** Begin tracking a run. Persists to localStorage and starts the poll. */
-  trackOrder: (runId: string, mode: RunMode) => void;
+  /**
+   * Begin tracking a run. Persists to localStorage and starts the poll.
+   * Pass cartHash (hashCart of the fired lines) so a green validate_only
+   * terminal can unlock Place for exactly that cart.
+   */
+  trackOrder: (runId: string, mode: RunMode, opts?: { cartHash?: string }) => void;
   /** Clear the active order + the persisted key. Stops polling. */
   dismiss: () => void;
+  /**
+   * The freshest green check for the CURRENT store, or null. Consumers
+   * (the Place gate) judge hash match + freshness themselves.
+   */
+  lastGreenCheck: LastGreenCheck | null;
 };
 
 const ActiveOrderContext = createContext<ActiveOrderContextValue | null>(null);
@@ -130,8 +161,55 @@ function writeStoredOrder(order: StoredOrder | null) {
   }
 }
 
+/**
+ * Read the persisted green check, scoped to the given store and pruned
+ * when it can't possibly unlock Place anymore (older than the trust
+ * window). A corrupted blob reads as null — the gate then just demands
+ * a fresh check, which is always the safe answer.
+ */
+function readStoredGreenCheck(storeId: string | null): LastGreenCheck | null {
+  if (!storeId) return null;
+  try {
+    const raw = window.localStorage.getItem(GREEN_CHECK_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredGreenCheck>;
+    if (
+      typeof parsed?.cartHash !== "string" ||
+      parsed.cartHash === "" ||
+      typeof parsed?.at !== "number" ||
+      !Number.isFinite(parsed.at) ||
+      typeof parsed?.runId !== "string" ||
+      typeof parsed?.storeId !== "string"
+    ) {
+      return null;
+    }
+    if (parsed.storeId !== storeId) return null;
+    if (Date.now() - parsed.at >= CHECK_TRUST_WINDOW_MS) return null; // expired — dead weight
+    return { cartHash: parsed.cartHash, at: parsed.at, runId: parsed.runId };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredGreenCheck(check: StoredGreenCheck | null) {
+  try {
+    if (check) {
+      window.localStorage.setItem(GREEN_CHECK_STORAGE_KEY, JSON.stringify(check));
+    } else {
+      window.localStorage.removeItem(GREEN_CHECK_STORAGE_KEY);
+    }
+  } catch {
+    /* non-fatal — Place just needs a re-check after reload. */
+  }
+}
+
 export function ActiveOrderProvider({ children }: { children: ReactNode }) {
   const [activeOrder, setActiveOrder] = useState<ActiveOrder | null>(null);
+  // Rehydrated lazily on mount (store-scoped, expiry-pruned) so Place
+  // eligibility survives an app close/reopen within the trust window.
+  const [lastGreenCheck, setLastGreenCheck] = useState<LastGreenCheck | null>(
+    () => readStoredGreenCheck(getCurrentStoreId()),
+  );
 
   // Generation guard (mirrors useSubmission.runGenRef): only ONE poll loop
   // runs at a time. Each trackOrder/resume/dismiss/unmount bumps the
@@ -191,6 +269,36 @@ export function ActiveOrderProvider({ children }: { children: ReactNode }) {
           setActiveOrder((cur) =>
             cur && cur.runId === order.runId ? { ...cur, status, result } : cur,
           );
+          /*
+            Record the GREEN check (two-step ordering, 2026-07-11): a
+            validate_only run that succeeded with MILO's own
+            can_checkout=true, fired for a known cart hash, unlocks Place
+            for exactly those lines (gated again by freshness + hash match
+            in resolvePlaceGate — and by the server's Stage-5 triple gate
+            regardless). Submit runs and failed/red checks never write
+            this. Timestamped at the moment the result LANDED, not when
+            the run started — freshness measures the age of MILO's answer.
+          */
+          if (
+            order.mode === "validate_only" &&
+            typeof order.cartHash === "string" &&
+            order.cartHash !== "" &&
+            status === "succeeded" &&
+            s.validate_result?.can_checkout === true
+          ) {
+            const green: StoredGreenCheck = {
+              cartHash: order.cartHash,
+              at: Date.now(),
+              runId: order.runId,
+              storeId: order.storeId,
+            };
+            writeStoredGreenCheck(green);
+            setLastGreenCheck({
+              cartHash: green.cartHash,
+              at: green.at,
+              runId: green.runId,
+            });
+          }
           // STOP polling; KEEP the terminal result in state until dismiss().
           return;
         }
@@ -207,11 +315,15 @@ export function ActiveOrderProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const trackOrder = useCallback(
-    (runId: string, mode: RunMode) => {
+    (runId: string, mode: RunMode, opts?: { cartHash?: string }) => {
       const storeId = getCurrentStoreId();
       if (!storeId) return; // no store context — can't scope a tracked run
       const startedAtMs = Date.now();
-      writeStoredOrder({ runId, mode, storeId, startedAtMs });
+      const cartHash =
+        typeof opts?.cartHash === "string" && opts.cartHash !== ""
+          ? opts.cartHash
+          : null;
+      writeStoredOrder({ runId, mode, storeId, startedAtMs, cartHash });
       const order: ActiveOrder = {
         runId,
         mode,
@@ -220,6 +332,7 @@ export function ActiveOrderProvider({ children }: { children: ReactNode }) {
         progressStage: null,
         progressMessage: null,
         startedAtMs,
+        cartHash,
         result: null,
       };
       setActiveOrder(order);
@@ -254,13 +367,16 @@ export function ActiveOrderProvider({ children }: { children: ReactNode }) {
       progressStage: null,
       progressMessage: null,
       startedAtMs: stored.startedAtMs,
+      // Older stored blobs (pre-2026-07-11) have no cartHash → null; a
+      // rehydrated check without a hash simply can't unlock Place.
+      cartHash: typeof stored.cartHash === "string" && stored.cartHash !== "" ? stored.cartHash : null,
       result: null,
     };
     setActiveOrder(order);
     void poll(order);
   }, [poll]);
 
-  const value: ActiveOrderContextValue = { activeOrder, trackOrder, dismiss };
+  const value: ActiveOrderContextValue = { activeOrder, trackOrder, dismiss, lastGreenCheck };
   return (
     <ActiveOrderContext.Provider value={value}>
       {children}

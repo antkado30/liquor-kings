@@ -5571,6 +5571,27 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   color: var(--text);
 }
 
+/* Two-step Check → Place (2026-07-11): armed footer shows both buttons
+   side by side — Check secondary, Place primary. Equal flex so neither
+   reads as an afterthought; the lock state is carried by disabled +
+   the one-line hint below, not by shrinking the button. */
+.drawer-footer__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.drawer-footer__actions .btn {
+  flex: 1;
+  min-width: 0;
+}
+
+.drawer-place-hint {
+  margin: 2px 2px 0;
+  text-align: center;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 /* Validate-result panel structure (inside the banner). */
 .vr-headline {
   display: flex;

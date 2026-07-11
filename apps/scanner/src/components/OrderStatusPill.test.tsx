@@ -33,6 +33,7 @@ const runningOrder = (): ActiveOrder => ({
   progressStage: "rpa_validate",
   progressMessage: null,
   startedAtMs: Date.now() - 5_000,
+  cartHash: null, // pill fixtures don't exercise the Place gate (2026-07-11)
   result: null,
 });
 

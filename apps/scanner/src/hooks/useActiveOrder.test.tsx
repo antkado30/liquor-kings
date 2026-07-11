@@ -370,3 +370,156 @@ describe("useActiveOrder persistence", () => {
     expect(result.current.activeOrder?.result).not.toBeNull();
   });
 });
+
+/**
+ * Green-check recording (two-step Check → SEE → Place, 2026-07-11).
+ * A tracked validate_only run that lands succeeded with MILO's
+ * can_checkout=true — and was fired with a known cart hash — records the
+ * Place-unlocking check. Everything else must NOT.
+ */
+describe("useActiveOrder green-check recording", () => {
+  const GREEN_KEY = "lk.lastGreenCheck.v1";
+
+  function greenSummary(runId: string, overrides: Record<string, unknown> = {}) {
+    return {
+      ok: true,
+      summary: {
+        id: runId,
+        status: "succeeded",
+        progress_stage: "rpa_validate",
+        progress_message: null,
+        failure_type: null,
+        failure_message: null,
+        validate_result: {
+          validated: true,
+          can_checkout: true,
+          out_of_stock_items: [],
+          order_summary: { netTotal: 925.38 },
+        },
+        submit_result: { submitted: false },
+        ...overrides,
+      },
+    };
+  }
+
+  it("records + persists the green check when a hashed validate_only lands clean", async () => {
+    mockGetRunSummary.mockResolvedValue(greenSummary("run-g1"));
+    const { result } = renderHook(() => useActiveOrder(), { wrapper });
+
+    act(() => {
+      result.current.trackOrder("run-g1", "validate_only", { cartHash: "1234:2|555:1" });
+    });
+    expect(result.current.lastGreenCheck).toBeNull(); // not green until terminal
+
+    await flushImmediate();
+    expect(result.current.lastGreenCheck).toMatchObject({
+      cartHash: "1234:2|555:1",
+      runId: "run-g1",
+    });
+    expect(typeof result.current.lastGreenCheck?.at).toBe("number");
+
+    const stored = JSON.parse(window.localStorage.getItem(GREEN_KEY)!);
+    expect(stored).toMatchObject({
+      cartHash: "1234:2|555:1",
+      runId: "run-g1",
+      storeId: "store-1",
+    });
+  });
+
+  it("a FAILED check never records a green", async () => {
+    mockGetRunSummary.mockResolvedValue({
+      ok: true,
+      summary: {
+        id: "run-f1",
+        status: "failed",
+        progress_stage: "rpa_validate",
+        progress_message: null,
+        failure_type: "MILO_LOGIN_NETWORK_ERROR",
+        failure_message: "Could not reach MILO",
+        validate_result: null,
+        submit_result: null,
+      },
+    });
+    const { result } = renderHook(() => useActiveOrder(), { wrapper });
+    act(() => {
+      result.current.trackOrder("run-f1", "validate_only", { cartHash: "h" });
+    });
+    await flushImmediate();
+    expect(result.current.activeOrder?.status).toBe("failed");
+    expect(result.current.lastGreenCheck).toBeNull();
+    expect(window.localStorage.getItem(GREEN_KEY)).toBeNull();
+  });
+
+  it("succeeded but can_checkout=false (OOS / rule trouble) is NOT green", async () => {
+    mockGetRunSummary.mockResolvedValue(
+      greenSummary("run-oos", {
+        validate_result: {
+          validated: true,
+          can_checkout: false,
+          out_of_stock_items: [{ code: "95996" }],
+        },
+      }),
+    );
+    const { result } = renderHook(() => useActiveOrder(), { wrapper });
+    act(() => {
+      result.current.trackOrder("run-oos", "validate_only", { cartHash: "h" });
+    });
+    await flushImmediate();
+    expect(result.current.lastGreenCheck).toBeNull();
+  });
+
+  it("a submit-mode run NEVER records a green check (only checks unlock Place)", async () => {
+    mockGetRunSummary.mockResolvedValue(greenSummary("run-sub"));
+    const { result } = renderHook(() => useActiveOrder(), { wrapper });
+    act(() => {
+      result.current.trackOrder("run-sub", "submit", { cartHash: "h" });
+    });
+    await flushImmediate();
+    expect(result.current.activeOrder?.status).toBe("succeeded");
+    expect(result.current.lastGreenCheck).toBeNull();
+  });
+
+  it("a green terminal WITHOUT a cart hash records nothing (nothing to match against)", async () => {
+    mockGetRunSummary.mockResolvedValue(greenSummary("run-nohash"));
+    const { result } = renderHook(() => useActiveOrder(), { wrapper });
+    act(() => {
+      result.current.trackOrder("run-nohash", "validate_only");
+    });
+    await flushImmediate();
+    expect(result.current.lastGreenCheck).toBeNull();
+  });
+
+  it("rehydrates a fresh same-store green check on mount; drops other-store and expired ones", () => {
+    // Fresh + same store → exposed.
+    window.localStorage.setItem(
+      GREEN_KEY,
+      JSON.stringify({ cartHash: "h1", at: Date.now() - 60_000, runId: "r1", storeId: "store-1" }),
+    );
+    const first = renderHook(() => useActiveOrder(), { wrapper });
+    expect(first.result.current.lastGreenCheck).toMatchObject({ cartHash: "h1", runId: "r1" });
+    first.unmount();
+
+    // Different store → null.
+    window.localStorage.setItem(
+      GREEN_KEY,
+      JSON.stringify({ cartHash: "h2", at: Date.now() - 60_000, runId: "r2", storeId: "store-OTHER" }),
+    );
+    const second = renderHook(() => useActiveOrder(), { wrapper });
+    expect(second.result.current.lastGreenCheck).toBeNull();
+    second.unmount();
+
+    // Expired (>10 min) → null.
+    window.localStorage.setItem(
+      GREEN_KEY,
+      JSON.stringify({ cartHash: "h3", at: Date.now() - 11 * 60_000, runId: "r3", storeId: "store-1" }),
+    );
+    const third = renderHook(() => useActiveOrder(), { wrapper });
+    expect(third.result.current.lastGreenCheck).toBeNull();
+    third.unmount();
+
+    // Corrupted blob → null, no throw.
+    window.localStorage.setItem(GREEN_KEY, "{not json");
+    const fourth = renderHook(() => useActiveOrder(), { wrapper });
+    expect(fourth.result.current.lastGreenCheck).toBeNull();
+  });
+});
