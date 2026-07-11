@@ -145,6 +145,12 @@ const POLL_BACKOFF_INTERVAL_MS = 10_000;
  */
 type PreValidateHit = {
   cartId: string;
+  /**
+   * The REAL execution run id behind the pre-validate (2026-07-11).
+   * Consumers hand it to the order tracker so the pill follows the
+   * actual run instead of the old "background-prevalidate" placeholder.
+   */
+  runId: string;
   validateResult: ValidateResult | null;
   finalStatus: "succeeded";
 };
@@ -159,6 +165,15 @@ export type BackgroundPreValidateCache = {
   getInFlight?: (
     items: CartItem[],
   ) => Promise<PreValidateHit | null> | null;
+  /**
+   * Like getInFlight but exposes the live run itself (2026-07-11):
+   * { runId, promise } for this exact cart, or null. runId is null
+   * during the brief window before the server assigns one. fireOrder
+   * uses this to track the existing run instead of creating a twin.
+   */
+  getInFlightRun?: (
+    items: CartItem[],
+  ) => { runId: string | null; promise: Promise<PreValidateHit | null> } | null;
   invalidateCache: () => void;
 };
 
@@ -392,7 +407,7 @@ export function useSubmission(
         if (cached) {
           setState({
             kind: "validateDone",
-            runId: "background-prevalidate",
+            runId: cached.runId,
             finalStatus: cached.finalStatus,
             cartId: cached.cartId,
             validateResult: cached.validateResult,
@@ -433,7 +448,7 @@ export function useSubmission(
           if (latched) {
             setState({
               kind: "validateDone",
-              runId: "background-prevalidate",
+              runId: latched.runId,
               finalStatus: latched.finalStatus,
               cartId: latched.cartId,
               validateResult: latched.validateResult,
@@ -620,6 +635,42 @@ export function useSubmission(
     ): Promise<{ ok: true; runId: string } | { ok: false; error: string }> => {
       try {
         if (items.length === 0) return { ok: false, error: "Cart is empty." };
+
+        /*
+          Run-dedupe latch (2026-07-11). The one-tap "Check Order" path
+          used to fire a fresh validate run unconditionally while the
+          background pre-validate was ALREADY checking the identical
+          cart — order day 7/9 logged 4 duplicate runs in 66 seconds,
+          each pushing its own banner. For a CHECK (validate_only) we
+          reuse what already exists, in order of preference:
+
+            1. A fresh cached result (same cart, <5 min old) — return
+               its real runId; the pill fetches the summary and lands on
+               the result instantly. No new run, no second banner.
+               Consumes the cache so a deliberate re-tap re-checks.
+            2. A live in-flight pre-validate for this exact cart —
+               return its runId; the pill tracks the run mid-flight.
+
+          STRICTLY validate_only: an armed "submit" NEVER latches onto
+          anything — every submit is a deliberate, fresh, fully-gated
+          run (server re-gates regardless). If the in-flight run exists
+          but hasn't been assigned its id yet (the ~1s sync window), we
+          fall through — the SERVER dedupes identical in-flight
+          validates too (execution-run.service.js, 2026-07-11), so even
+          that window can't produce twins.
+        */
+        if (mode === "validate_only" && preValidateCache) {
+          const cached = preValidateCache.getCachedResult(items);
+          if (cached) {
+            preValidateCache.invalidateCache();
+            return { ok: true, runId: cached.runId };
+          }
+          const inFlightRun = preValidateCache.getInFlightRun?.(items);
+          if (inFlightRun?.runId) {
+            return { ok: true, runId: inFlightRun.runId };
+          }
+        }
+
         const cartId = await syncCart(items, () => {});
         const runId = await triggerRun(cartId, mode);
         return { ok: true, runId };
@@ -627,7 +678,7 @@ export function useSubmission(
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
-    [syncCart, triggerRun],
+    [syncCart, triggerRun, preValidateCache],
   );
 
   return { state, startValidate, startSubmit, invalidateValidation, reset, cancelActiveRun, fireOrder };

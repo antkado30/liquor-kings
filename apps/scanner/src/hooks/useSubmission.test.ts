@@ -443,3 +443,176 @@ describe("useSubmission", () => {
     expect(result.current.state).toEqual({ kind: "idle" });
   });
 });
+
+/**
+ * fireOrder run-dedupe latch (2026-07-11).
+ *
+ * Order day 7/9 logged 4 duplicate validate_only runs in 66 seconds:
+ * the background pre-validate and the one-tap "Check Order" path each
+ * fired their own run for the identical cart, and each run pushed its
+ * own banner. fireOrder now latches onto the pre-validate cache /
+ * in-flight run for validate_only — and NEVER for submit.
+ */
+describe("fireOrder run-dedupe latch", () => {
+  type CacheShape = {
+    getCachedResult: ReturnType<typeof vi.fn>;
+    getInFlight: ReturnType<typeof vi.fn>;
+    getInFlightRun: ReturnType<typeof vi.fn>;
+    invalidateCache: ReturnType<typeof vi.fn>;
+  };
+
+  function makeCache(overrides: Partial<CacheShape> = {}): CacheShape {
+    return {
+      getCachedResult: vi.fn().mockReturnValue(null),
+      getInFlight: vi.fn().mockReturnValue(null),
+      getInFlightRun: vi.fn().mockReturnValue(null),
+      invalidateCache: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  const cachedHit = {
+    cartId: "cart-bg",
+    runId: "run-bg-cached",
+    validateResult: null,
+    finalStatus: "succeeded" as const,
+  };
+
+  it("fires a fresh run when no cache is provided (baseline path unchanged)", async () => {
+    mockReplaceCartLines.mockResolvedValue({ ok: true, cartId: "cart-1" });
+    mockTriggerRun.mockResolvedValue({
+      ok: true,
+      runId: "run-fresh",
+      status: "queued",
+    });
+
+    const { result } = renderHook(() => useSubmission());
+    let r: Awaited<ReturnType<typeof result.current.fireOrder>>;
+    await act(async () => {
+      r = await result.current.fireOrder(makeItems(), "validate_only");
+    });
+
+    expect(r!).toEqual({ ok: true, runId: "run-fresh" });
+    expect(mockReplaceCartLines).toHaveBeenCalledTimes(1);
+    expect(mockTriggerRun).toHaveBeenCalledWith({
+      cartId: "cart-1",
+      mode: "validate_only",
+    });
+  });
+
+  it("returns the CACHED pre-validate runId without creating a run, and consumes the cache", async () => {
+    const cache = makeCache({
+      getCachedResult: vi.fn().mockReturnValue(cachedHit),
+    });
+
+    const { result } = renderHook(() => useSubmission(cache));
+    let r: Awaited<ReturnType<typeof result.current.fireOrder>>;
+    await act(async () => {
+      r = await result.current.fireOrder(makeItems(), "validate_only");
+    });
+
+    expect(r!).toEqual({ ok: true, runId: "run-bg-cached" });
+    expect(mockReplaceCartLines).not.toHaveBeenCalled();
+    expect(mockTriggerRun).not.toHaveBeenCalled();
+    // Consumed: a deliberate re-tap must run a FRESH check.
+    expect(cache.invalidateCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("latches onto the LIVE in-flight pre-validate run instead of creating a twin", async () => {
+    const cache = makeCache({
+      getInFlightRun: vi.fn().mockReturnValue({
+        runId: "run-bg-live",
+        promise: new Promise(() => {}), // never resolves — run is mid-flight
+      }),
+    });
+
+    const { result } = renderHook(() => useSubmission(cache));
+    let r: Awaited<ReturnType<typeof result.current.fireOrder>>;
+    await act(async () => {
+      r = await result.current.fireOrder(makeItems(), "validate_only");
+    });
+
+    expect(r!).toEqual({ ok: true, runId: "run-bg-live" });
+    expect(mockReplaceCartLines).not.toHaveBeenCalled();
+    expect(mockTriggerRun).not.toHaveBeenCalled();
+    // The in-flight run was NOT consumed — its own poll keeps running.
+    expect(cache.invalidateCache).not.toHaveBeenCalled();
+  });
+
+  it("falls through to a fresh run while the in-flight run has no id yet (server dedupes that window)", async () => {
+    const cache = makeCache({
+      getInFlightRun: vi.fn().mockReturnValue({
+        runId: null, // trigger hasn't returned yet
+        promise: new Promise(() => {}),
+      }),
+    });
+    mockReplaceCartLines.mockResolvedValue({ ok: true, cartId: "cart-1" });
+    mockTriggerRun.mockResolvedValue({
+      ok: true,
+      runId: "run-fresh-2",
+      status: "queued",
+    });
+
+    const { result } = renderHook(() => useSubmission(cache));
+    let r: Awaited<ReturnType<typeof result.current.fireOrder>>;
+    await act(async () => {
+      r = await result.current.fireOrder(makeItems(), "validate_only");
+    });
+
+    expect(r!).toEqual({ ok: true, runId: "run-fresh-2" });
+    expect(mockTriggerRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("NEVER latches for submit mode — a submit is always a deliberate fresh run", async () => {
+    const cache = makeCache({
+      getCachedResult: vi.fn().mockReturnValue(cachedHit),
+      getInFlightRun: vi.fn().mockReturnValue({
+        runId: "run-bg-live",
+        promise: new Promise(() => {}),
+      }),
+    });
+    mockReplaceCartLines.mockResolvedValue({ ok: true, cartId: "cart-1" });
+    mockTriggerRun.mockResolvedValue({
+      ok: true,
+      runId: "run-armed-submit",
+      status: "queued",
+    });
+
+    const { result } = renderHook(() => useSubmission(cache));
+    let r: Awaited<ReturnType<typeof result.current.fireOrder>>;
+    await act(async () => {
+      r = await result.current.fireOrder(makeItems(), "submit");
+    });
+
+    // Fresh run with submit mode — the cache was never even consulted.
+    expect(r!).toEqual({ ok: true, runId: "run-armed-submit" });
+    expect(cache.getCachedResult).not.toHaveBeenCalled();
+    expect(cache.getInFlightRun).not.toHaveBeenCalled();
+    expect(cache.invalidateCache).not.toHaveBeenCalled();
+    expect(mockTriggerRun).toHaveBeenCalledWith({
+      cartId: "cart-1",
+      mode: "submit",
+    });
+  });
+
+  it("rpa_run mode also bypasses the latch (only validate_only dedupes)", async () => {
+    const cache = makeCache({
+      getCachedResult: vi.fn().mockReturnValue(cachedHit),
+    });
+    mockReplaceCartLines.mockResolvedValue({ ok: true, cartId: "cart-1" });
+    mockTriggerRun.mockResolvedValue({
+      ok: true,
+      runId: "run-rpa",
+      status: "queued",
+    });
+
+    const { result } = renderHook(() => useSubmission(cache));
+    let r: Awaited<ReturnType<typeof result.current.fireOrder>>;
+    await act(async () => {
+      r = await result.current.fireOrder(makeItems(), "rpa_run");
+    });
+
+    expect(r!).toEqual({ ok: true, runId: "run-rpa" });
+    expect(cache.getCachedResult).not.toHaveBeenCalled();
+  });
+});

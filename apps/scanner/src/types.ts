@@ -39,11 +39,47 @@ export interface MlccProduct {
    * scanner respects it automatically.
    */
   is_active?: boolean;
+  /**
+   * Container material from the family engine ("glass" | "plastic" | …,
+   * 2026-07-11). Rides size chip → cart line → confirm modal so nobody
+   * orders glass and receives plastic (catalog-family-tree-plan §B).
+   * Optional: endpoints that don't select the column omit it — the UI
+   * then shows no label rather than guessing.
+   */
+  container?: string | null;
 }
 
 export interface ProductFamily {
   baseName: string;
   sizes: MlccProduct[];
+  /**
+   * True when this family spans more than one container material
+   * (glass + plastic — 527 such families in the live catalog). Drives
+   * the chip rule: in a mixed family EVERY chip carries its material
+   * label; the label is never hidden (2026-07-01 decision).
+   */
+  mixedContainers?: boolean;
+}
+
+/**
+ * One family card in grouped search results (/items/grouped, 2026-07-11).
+ * Search "tito" → one card, all sizes; tap opens the ProductCard tree at
+ * the representative's code. Combos are their own singleton cards.
+ */
+export interface FamilyGroup {
+  familyKey: string;
+  category: string | null;
+  /** Clean family name for the card title (combo cards keep their real name). */
+  baseName: string;
+  /** Distinct codes in the family = number of size chips the tree will show. */
+  sizeCount: number;
+  minPrice: number | null;
+  maxPrice: number | null;
+  /** Family spans glass + plastic — the card hints it, the chips prove it. */
+  mixedContainers: boolean;
+  isCombo: boolean;
+  /** Full product row driving the thumbnail and the tap-through anchor. */
+  representative: MlccProduct;
 }
 
 export interface UpcCandidateScore {

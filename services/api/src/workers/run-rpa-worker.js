@@ -37,7 +37,17 @@ initSentry();
 
 // Polling cadence when the queue is empty — snappy enough for orders to feel
 // instant, cheap enough that we're not hammering claim-next.
-const IDLE_POLL_MS = 10_000;
+//
+// 10s → 2.5s (2026-07-11, claim-latency dig): with a 10s idle poll, a check
+// fired between polls sat QUEUED for ~5s on average before the worker even
+// looked — the single biggest structural chunk left in the 20-23s check
+// under the <60s / instant-feel mandate. An idle claim-next is two light
+// PostgREST reads (throttled reap + empty-queue check, see the route), so
+// 4x the polls is negligible DB load at this worker count. If we ever run
+// MANY workers, the scale answer is a long-poll claim (server holds the
+// request until work appears) or LISTEN/NOTIFY — deliberately deferred
+// until the fleet grows (YAGNI, documented in the dig notes).
+const IDLE_POLL_MS = 2_500;
 // Back off briefly when processOneRpaRun throws unexpectedly, so an upstream
 // outage doesn't turn into a tight error loop that floods logs.
 const ERROR_BACKOFF_MS = 30_000;

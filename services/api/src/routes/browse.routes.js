@@ -101,9 +101,13 @@ router.get("/browse", async (req, res) => {
   // crosses the Fly-ORD ↔ Supabase-us-east-1 hop, which is where the real
   // browse latency lives (the table itself is only ~14k rows — too small for
   // indexes to matter). Includes every sort column so the cursor keeps working.
+  // container added 2026-07-11 (family-tree §B): a bottle added to the
+  // cart from Browse must carry its material so the cart line + confirm
+  // modal can label non-glass ("375 ML · Plastic · #1505"). One tiny text
+  // column — negligible against the payload-trim win above.
   const BROWSE_COLUMNS =
     "id, code, name, category, ada_number, ada_name, " +
-    "bottle_size_ml, bottle_size_label, licensee_price, proof, " +
+    "bottle_size_ml, bottle_size_label, licensee_price, proof, container, " +
     "is_new_item, last_price_book_date, image_url, image_thumb_url, featured_sort";
   let select = supabase
     .from("mlcc_items")

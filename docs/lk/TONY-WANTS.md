@@ -130,6 +130,13 @@ Proves the matching logic; becomes the core of the `resolve_order_list` tool.
 Status: ⏳ bugs #1 + #2 are freeze-compatible hardening; the verify + add-to-cart
 UI is a feature — sequencing vs the 3-order mandate is Tony's call.
 
+**⭐ PROVEN IN THE WILD 2026-07-09 (order day):** Tony photographed his mom's
+handwritten weekly order → sent the picture to the assistant → it resolved
+"mostly everything" → cart built in-app → checked green → order placed (final
+press on MILO, arming off by design). The image path works on a real order.
+Next tightening: each order day, capture exactly which lines the AI missed —
+that miss-list drives the resolver fixes.
+
 - 💡 **Bulk/fast order entry as the core differentiator.** MILO only offers Add-By-Code (one code at a time) — painful. LK's edge is effortless cart-building: scan, photo of barcode/tag/bottle, search, paste-a-list — no manual codes. Keep expanding + polishing this; consider an explicit "import/upload an order" too. (Tony, 2026-06-27.)
 
 ---

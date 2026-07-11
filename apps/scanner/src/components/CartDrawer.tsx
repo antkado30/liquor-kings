@@ -64,6 +64,7 @@ import {
   getOrderingRuleDisplay,
 } from "../lib/mlcc-ordering-rules";
 import { humanizeRunFailure } from "../lib/run-failure-human";
+import { nonGlassContainerSuffix } from "../lib/container-label";
 import { REAL_SUBMISSION_WIRED } from "../config/submission";
 
 function money(n: number): string {
@@ -980,7 +981,17 @@ export function CartDrawer({
                                   <div className="drawer-line-title">{line.product.name}</div>
                                 )}
                                 <div className="muted small">
-                                  {size} · #{line.product.code}
+                                  {/*
+                                    Container label rides the cart line
+                                    (2026-07-11, family-tree plan §B): a
+                                    non-glass bottle always says so —
+                                    "375 ML · Plastic · #1505" — so glass
+                                    vs plastic is never ambiguous between
+                                    the chip and the confirm modal.
+                                  */}
+                                  {size}
+                                  {nonGlassContainerSuffix(line.product.container)} · #
+                                  {line.product.code}
                                 </div>
                                 <div className="drawer-line-controls">
                                   {/*
@@ -2084,7 +2095,7 @@ function ValidateResultPanel({
                 {line.product.name}
                 {line.quantity ? ` × ${line.quantity}` : ""}
                 {line.product.bottle_size_label
-                  ? ` (${line.product.bottle_size_label})`
+                  ? ` (${line.product.bottle_size_label}${nonGlassContainerSuffix(line.product.container)})`
                   : ""}
               </li>
             ))}

@@ -30,6 +30,7 @@
  */
 import type { CartItem } from "../types";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
+import { nonGlassContainerSuffix } from "../lib/container-label";
 
 type Props = {
   /** Cart lines the user is about to submit. */
@@ -158,7 +159,15 @@ export function SubmitConfirmationModal({
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={lineNameStyle}>{line.product.name}</div>
                     <div style={lineMetaStyle}>
-                      {line.product.bottle_size_label ?? "—"} · Code{" "}
+                      {/*
+                        Container label in the pre-submit confirm
+                        (2026-07-11): the last human check before money
+                        moves says "Plastic" out loud when it isn't
+                        glass — doctrine #3, pre-commit verification in
+                        the user's own language.
+                      */}
+                      {line.product.bottle_size_label ?? "—"}
+                      {nonGlassContainerSuffix(line.product.container)} · Code{" "}
                       {line.product.code} · ADA {line.product.ada_number}
                     </div>
                   </div>

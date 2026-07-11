@@ -52,7 +52,16 @@ function money(n: number | null | undefined): string {
 
 export function ScannerPage() {
   const cart = useCart();
-  const search = useCatalogSearch();
+  /** When set, a search result tap writes `upc_mappings` for this scanned UPC. */
+  const [upcBeingMapped, setUpcBeingMapped] = useState<string | null>(null);
+  const [upcMappingExpectedQuery, setUpcMappingExpectedQuery] = useState<string | null>(null);
+  /*
+    Grouped search is OFF while mapping a UPC (2026-07-11): mapping must
+    pick an EXACT SKU, and a family card only carries a representative —
+    tapping it could bind the UPC to the wrong bottle. Declared above the
+    hook so the mode is known on the first render of a mapping session.
+  */
+  const search = useCatalogSearch({ grouped: upcBeingMapped == null });
   const navigate = useNavigate();
   const isOnline = useOnlineStatus();
   /*
@@ -137,9 +146,8 @@ export function ScannerPage() {
   } | null>(null);
   /** When set, ProductCard may flag this UPC (camera scan + UPCitemdb match path only). */
   const [upcScanContext, setUpcScanContext] = useState<{ upc: string } | null>(null);
-  /** When set, a search result tap writes `upc_mappings` for this scanned UPC. */
-  const [upcBeingMapped, setUpcBeingMapped] = useState<string | null>(null);
-  const [upcMappingExpectedQuery, setUpcMappingExpectedQuery] = useState<string | null>(null);
+  // (upcBeingMapped / upcMappingExpectedQuery moved above useCatalogSearch,
+  //  2026-07-11 — the hook needs the mapping mode to disable grouping.)
   // Price-book staleness was previously rendered as a banner here;
   // smart cards now handle that surfacing (task #63). We still need
   // the latest book date for ProductCard's per-product freshness
@@ -531,12 +539,53 @@ export function ScannerPage() {
         ) : null}
       </div>
 
-      {search.loading && search.results.length === 0 ? (
+      {search.loading && search.results.length === 0 && search.groups.length === 0 ? (
         <div className="scanhm-results-skeleton" aria-hidden>
           <div className="scanhm-shimmer scanhm-shimmer--result" />
           <div className="scanhm-shimmer scanhm-shimmer--result" />
           <div className="scanhm-shimmer scanhm-shimmer--result" />
         </div>
+      ) : null}
+
+      {/*
+        Grouped search results (plan §C, 2026-07-11): ONE card per product
+        line — name, size count, price range — tap opens the ProductCard
+        tree at the representative's code (openFamily fetches the full
+        family; the tree endpoint owns membership). Never rendered in UPC
+        mapping mode: the hook returns flat results there (exact-SKU rule).
+      */}
+      {search.groups.length > 0 ? (
+        <ul className="scanhm-results">
+          {search.groups.map((g) => {
+            const rep = g.representative;
+            const singleSize =
+              rep.bottle_size_label ?? `${rep.bottle_size_ml ?? ""} ML`;
+            const meta =
+              g.sizeCount > 1
+                ? `${g.sizeCount} sizes${g.mixedContainers ? " · glass & plastic" : ""}`
+                : singleSize;
+            const price =
+              g.minPrice != null && g.maxPrice != null && g.maxPrice > g.minPrice
+                ? `${money(g.minPrice)}–${money(g.maxPrice)}`
+                : money(g.minPrice ?? g.maxPrice ?? rep.licensee_price);
+            return (
+              <li key={`${g.familyKey || rep.code}|${g.category ?? ""}|${rep.code}`}>
+                <button
+                  type="button"
+                  className="scanhm-result-row"
+                  onClick={() => void openFamily(rep)}
+                >
+                  <ScanResultThumb product={rep} />
+                  <div className="scanhm-result-row__main">
+                    <span className="scanhm-result-row__name">{g.baseName}</span>
+                    <span className="scanhm-result-row__meta">{meta}</span>
+                  </div>
+                  <span className="scanhm-result-row__price">{price}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       ) : null}
 
       {search.results.length > 0 ? (

@@ -6,7 +6,7 @@
  *
  * Server-side counterparts (documented on API): LK_CONFIDENT_MIN, LK_ADMIN_TOKEN, etc.
  */
-import type { MlccProduct, ProductFamily, UpcCandidateScore, UpcLookupResponse } from "../types";
+import type { FamilyGroup, MlccProduct, ProductFamily, UpcCandidateScore, UpcLookupResponse } from "../types";
 import { getAuthBearer } from "../lib/supabase";
 
 const BASE = "/price-book";
@@ -131,11 +131,71 @@ function mapRow(row: Record<string, unknown>): MlccProduct {
     licensee_price: num(row.licensee_price),
     min_shelf_price: num(row.min_shelf_price),
     base_price: num(row.base_price),
+    // Container material from the family engine (2026-07-11). null when
+    // the endpoint doesn't select the column — UI shows no label then.
+    container: str(row.container),
     is_new_item: Boolean(row.is_new_item),
     imageUrl,
     last_price_book_date: lastPriceBookDate,
     is_active: isActive,
   };
+}
+
+/**
+ * Grouped search (2026-07-11): one family card per product line.
+ * Returns [] on ANY miss/error — the caller falls back to flat
+ * searchProducts, which keeps the fuzzy typo path working unchanged.
+ */
+export async function searchProductsGrouped(
+  query: string,
+  options?: { adaNumber?: string; limit?: number },
+): Promise<FamilyGroup[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const params = new URLSearchParams();
+  params.set("search", q);
+  params.set("limit", String(options?.limit ?? 30));
+  if (options?.adaNumber) params.set("adaNumber", options.adaNumber);
+  const res = await fetchWithRetry(`${BASE}/items/grouped?${params.toString()}`, {
+    credentials: "same-origin",
+  });
+  const data = (await res.json()) as { ok?: boolean; groups?: unknown[] };
+  if (!res.ok || !data.ok || !Array.isArray(data.groups)) return [];
+  const out: FamilyGroup[] = [];
+  for (const raw of data.groups) {
+    if (!raw || typeof raw !== "object") continue;
+    const g = raw as Record<string, unknown>;
+    if (!g.representative || typeof g.representative !== "object") continue;
+    const representative = mapRow(g.representative as Record<string, unknown>);
+    if (!representative.code) continue;
+    out.push({
+      familyKey: String(g.familyKey ?? ""),
+      category: g.category != null ? String(g.category) : null,
+      baseName:
+        typeof g.baseName === "string" && g.baseName.trim() !== ""
+          ? g.baseName.trim()
+          : representative.name,
+      // Strict typeof checks — Number(null) coerces to 0, which would
+      // render a missing price as "$0.00" (same class as the server-side
+      // bug the unit suite caught 2026-07-11). null stays null.
+      sizeCount:
+        typeof g.sizeCount === "number" && Number.isFinite(g.sizeCount)
+          ? Math.max(1, Math.round(g.sizeCount))
+          : 1,
+      minPrice:
+        typeof g.minPrice === "number" && Number.isFinite(g.minPrice)
+          ? g.minPrice
+          : null,
+      maxPrice:
+        typeof g.maxPrice === "number" && Number.isFinite(g.maxPrice)
+          ? g.maxPrice
+          : null,
+      mixedContainers: g.mixedContainers === true,
+      isCombo: g.isCombo === true,
+      representative,
+    });
+  }
+  return out;
 }
 
 export async function searchProducts(
@@ -349,6 +409,8 @@ export async function getProductFamily(mlccCode: string): Promise<ProductFamily 
     ok?: boolean;
     baseName?: unknown;
     sizes?: unknown[];
+    /** family_key fast path (2026-07-11): family spans glass+plastic. */
+    mixedContainers?: unknown;
     error?: string;
   };
   if (!res.ok || !data.ok || !Array.isArray(data.sizes)) {
@@ -359,7 +421,7 @@ export async function getProductFamily(mlccCode: string): Promise<ProductFamily 
     typeof data.baseName === "string" && data.baseName.trim() !== ""
       ? data.baseName.trim()
       : sizes[0]?.name ?? "";
-  return { baseName, sizes };
+  return { baseName, sizes, mixedContainers: data.mixedContainers === true };
 }
 
 export type PriceBookStatusResponse = {

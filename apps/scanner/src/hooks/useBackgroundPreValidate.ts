@@ -73,6 +73,16 @@ const POLL_BACKOFF_INTERVAL_MS = 10_000;
 const MAX_POLL_MS = 16 * 60 * 1000;
 
 /*
+  Freshness bound on the cached result (2026-07-11). A cached green check
+  reflects MILO stock at the moment it ran; consuming a stale one would
+  show the user "checks out clean" from data that could be minutes old on
+  a shifting shelf (the 7/2 pre-holiday OOS churn). 5 minutes is well
+  inside the "Place trusts a fresh check <10 min" bar Tony set 2026-07-01
+  for the two-step flow. Older than this → cache miss → fresh run.
+*/
+const CACHE_FRESH_MS = 5 * 60 * 1000;
+
+/*
   Kill switch (2026-06-02 evening). Was set to false when a validate
   flake hit prod and I incorrectly suspected the background pre-
   validate. Real cause turned out to be the rule engine table (18 ×
@@ -91,6 +101,14 @@ const PRE_VALIDATE_ENABLED = true;
 type CachedResult = {
   cartHash: string;
   cartId: string;
+  /**
+   * The real execution run id behind this result (2026-07-11). Lets
+   * consumers hand the run to the app-level order tracker (pill) instead
+   * of the old "background-prevalidate" placeholder — the pill then
+   * shows the REAL run's live summary. Always known here: a result only
+   * caches after its trigger succeeded.
+   */
+  runId: string;
   validateResult: ValidateResult | null;
   finalStatus: "succeeded";
   completedAt: number;
@@ -112,6 +130,8 @@ export type BackgroundPreValidate = {
    * Return the cached result IFF it matches the items passed in.
    * Caller hashes its current cart, the hook compares against the
    * cached hash, returns the result on match or null on miss.
+   * Freshness-bounded (CACHE_FRESH_MS): a result older than 5 minutes
+   * is a miss — stale stock truth must not be re-served.
    */
   getCachedResult: (currentItems: CartItem[]) => ConsumableResult | null;
   /**
@@ -126,6 +146,19 @@ export type BackgroundPreValidate = {
   getInFlight: (
     currentItems: CartItem[],
   ) => Promise<ConsumableResult | null> | null;
+  /**
+   * Like getInFlight, but exposes the in-flight RUN itself (2026-07-11):
+   * { runId, promise } for the exact current cart, or null. runId is
+   * null during the brief sync window before the server assigns one.
+   * This is what fireOrder (the one-tap Check path) latches onto — it
+   * hands the runId straight to the order-tracker pill and returns,
+   * instead of creating a duplicate run. The server dedupes identical
+   * validates too (defense in depth); this latch just makes the reuse
+   * instant and saves the round trip.
+   */
+  getInFlightRun: (
+    currentItems: CartItem[],
+  ) => { runId: string | null; promise: Promise<ConsumableResult | null> } | null;
   /**
    * Wipe the cache. Called when useSubmission consumes the cached
    * result so the same pre-validate isn't reused for a second click.
@@ -159,6 +192,12 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
   const inFlightRef = useRef<{
     hash: string;
     promise: Promise<ConsumableResult | null>;
+    /**
+     * Set by runPreValidate the moment the server assigns a run id
+     * (after sync+trigger, ~1s in). Null during that window. Lets
+     * fireOrder latch onto the LIVE run for pill tracking (2026-07-11).
+     */
+    runId: string | null;
   } | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
@@ -182,8 +221,12 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
       if (!cached) return null;
       const currentHash = hashCart(currentItems);
       if (currentHash !== cached.cartHash) return null;
+      // Freshness bound (2026-07-11): stock truth ages. Older than
+      // CACHE_FRESH_MS → treat as a miss so the caller runs fresh.
+      if (Date.now() - cached.completedAt > CACHE_FRESH_MS) return null;
       return {
         cartId: cached.cartId,
+        runId: cached.runId,
         validateResult: cached.validateResult,
         finalStatus: cached.finalStatus,
       };
@@ -196,7 +239,16 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
    * number; bails on completion if a newer generation has started.
    */
   const runPreValidate = useCallback(
-    async (validatingItems: CartItem[]): Promise<ConsumableResult | null> => {
+    async (
+      validatingItems: CartItem[],
+      /**
+       * The inFlightRef entry this run belongs to (2026-07-11). The run
+       * stamps its server-assigned runId onto it the moment the trigger
+       * returns, so getInFlightRun can expose the LIVE run id to
+       * fireOrder. Optional: harness/legacy callers may omit it.
+       */
+      inFlightEntry?: { runId: string | null },
+    ): Promise<ConsumableResult | null> => {
       const myGeneration = generationRef.current;
       const cartHashAtStart = hashCart(validatingItems);
       if (validatingItems.length === 0) return null;
@@ -229,6 +281,10 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
         return null;
       }
       const runId = triggerResult.runId;
+      // Publish the live run id for getInFlightRun consumers. Safe even
+      // if this generation is already stale — the entry itself is
+      // removed by the .finally() in the scheduling effect.
+      if (inFlightEntry) inFlightEntry.runId = runId;
 
       setStatus("polling");
       // Step 3: poll until terminal. Same shape as useSubmission's
@@ -270,6 +326,7 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
         cacheRef.current = {
           cartHash: cartHashAtStart,
           cartId,
+          runId,
           validateResult: terminalSummary.validateResult,
           finalStatus: "succeeded",
           completedAt: Date.now(),
@@ -277,6 +334,7 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
         setStatus("success");
         return {
           cartId,
+          runId,
           validateResult: terminalSummary.validateResult,
           finalStatus: "succeeded",
         };
@@ -327,11 +385,19 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
       debounceTimerRef.current = null;
       const itemsNow = itemsRef.current;
       const hash = hashCart(itemsNow);
-      // Track this run so a foreground tap can latch onto it via getInFlight.
-      const promise = runPreValidate(itemsNow);
-      inFlightRef.current = { hash, promise };
-      void promise.finally(() => {
-        if (inFlightRef.current?.promise === promise) {
+      // Track this run so a foreground tap can latch onto it via
+      // getInFlight/getInFlightRun. The entry is created first and handed
+      // into runPreValidate, which stamps the server-assigned runId onto
+      // it as soon as the trigger returns (2026-07-11).
+      const entry: {
+        hash: string;
+        promise: Promise<ConsumableResult | null>;
+        runId: string | null;
+      } = { hash, promise: Promise.resolve(null), runId: null };
+      entry.promise = runPreValidate(itemsNow, entry);
+      inFlightRef.current = entry;
+      void entry.promise.finally(() => {
+        if (inFlightRef.current === entry) {
           inFlightRef.current = null;
         }
       });
@@ -352,10 +418,18 @@ export function useBackgroundPreValidate(items: CartItem[]): BackgroundPreValida
     return inf.promise;
   }, []);
 
+  const getInFlightRun = useCallback((currentItems: CartItem[]) => {
+    const inf = inFlightRef.current;
+    if (!inf) return null;
+    if (hashCart(currentItems) !== inf.hash) return null;
+    return { runId: inf.runId, promise: inf.promise };
+  }, []);
+
   return {
     status,
     getCachedResult,
     getInFlight,
+    getInFlightRun,
     invalidateCache,
   };
 }

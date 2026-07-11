@@ -1,4 +1,5 @@
 import { parseMlccPriceBookExcel, deriveAdaName } from "./mlcc-price-book-parser.js";
+import { computeFamilyIdentity } from "./family-key.js";
 
 const MLCC_PRICE_BOOK_INFO_URL =
   "https://www.michigan.gov/lara/bureau-list/lcc/spirits-price-book-info";
@@ -410,11 +411,27 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
       const mlccItemNo =
         existing?.mlcc_item_no ?? (adaNumber != null ? `${code}-${adaNumber}` : code);
 
+      /*
+        Family identity on EVERY upsert (2026-07-11, family-tree plan
+        follow-up #4). Same engine the 7/1 full-catalog backfill used
+        (src/mlcc/family-key.js) — one engine, one truth. Before this,
+        only the backfill script wrote these columns, so a brand-new SKU
+        from a fresh price book landed with NULL family_key and silently
+        fell back to the legacy name-pool grouping until someone re-ran
+        the backfill by hand. Computed from the same string that becomes
+        `name` below, so key and name can never drift apart.
+      */
+      const familyIdentity = computeFamilyIdentity(item.brandName || code);
+
       upsertByKey.set(rowKey, {
         code,
         ada_number: adaNumber,
         name: item.brandName || code,
         mlcc_item_no: mlccItemNo,
+        family_key: familyIdentity.familyKey,
+        container: familyIdentity.container,
+        pack_count: familyIdentity.packCount,
+        is_combo: familyIdentity.isCombo,
         size_ml: item.bottleSizeMl ?? existing?.size_ml ?? null,
         category: item.category ?? existing?.category ?? null,
         subcategory: existing?.subcategory ?? null,

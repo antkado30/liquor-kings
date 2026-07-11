@@ -20,6 +20,7 @@ import {
 import { isUuid } from "../utils/validation.js";
 import { resolveFromCartRunMode } from "../lib/resolve-run-mode.js";
 import { notifyRunFinal } from "../lib/push-notify.js";
+import { computeCartLinesHash } from "../lib/cart-lines-hash.js";
 
 const ACTIVE_STATUSES = ["queued", "running"];
 
@@ -818,6 +819,59 @@ export const createExecutionRunFromCart = async (
 
   const snapshot = payloadResult.body.payload;
 
+  // ── Run dedupe by cart CONTENT (2026-07-11) ──────────────────────────
+  // Two triggers with identical lines for the same store are the SAME
+  // check. Order day 7/9 proved the failure: the background pre-validate
+  // and the foreground "Check Order" tap raced into duplicate
+  // validate_only runs (4 in 66s) → duplicate MILO work + double push
+  // banners. The per-cart guard below can't see it because every trigger
+  // flips its cart active→submitted, so each duplicate rides a FRESH
+  // cart_id. Content is the identity, not the cart row.
+  //
+  // The canonical lines hash is stamped into metadata for every mode
+  // (audit value), but dedupe applies to validate_only ONLY — an
+  // rpa_run/submit is a deliberate act every time and has its own
+  // worker-side armor (one-running-run lock, duplicate-submit tripwire).
+  //
+  // Fail direction: if the hash can't be computed or the lookup errors,
+  // we CREATE the run and log why. An extra check is waste; a blocked
+  // check is a failed order; a wrongly-merged check would be a lie.
+  const cartLinesHash = computeCartLinesHash(snapshot.items);
+  if (cartLinesHash === null) {
+    console.warn(
+      `[run] cart_lines_hash could not be computed for cart ${cartId} (store ${storeId}) — run will not be deduplicated`,
+    );
+  } else if (snapshot.metadata !== undefined) {
+    snapshot.metadata.cart_lines_hash = cartLinesHash;
+  }
+
+  if (mode === "validate_only" && cartLinesHash !== null) {
+    const { data: duplicateRun, error: duplicateLookupError } = await supabase
+      .from("execution_runs")
+      .select("*")
+      .eq("store_id", storeId)
+      .in("status", ACTIVE_STATUSES)
+      .eq("payload_snapshot->metadata->>run_type", "validate_only")
+      .eq("payload_snapshot->metadata->>cart_lines_hash", cartLinesHash)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (duplicateLookupError) {
+      console.warn(
+        `[run] dedupe lookup failed (creating a fresh run): ${duplicateLookupError.message}`,
+      );
+    } else if (duplicateRun) {
+      console.log(
+        `[run] deduped validate_only for store ${storeId} → existing run ${duplicateRun.id} (identical cart already in flight)`,
+      );
+      return {
+        statusCode: 200,
+        body: { success: true, data: duplicateRun, deduped: true },
+      };
+    }
+  }
+
   const { data: existing, error: existingError } = await supabase
     .from("execution_runs")
     .select("id")
@@ -859,6 +913,43 @@ export const createExecutionRunFromCart = async (
     .single();
 
   if (insertError) {
+    // Atomic dedupe backstop: a simultaneous identical validate_only
+    // insert lost the race against the partial unique index
+    // (execution_runs_validate_dedupe_idx, migration 20260711210000).
+    // The read-check above closes the seconds-wide window; the index
+    // closes the milliseconds-wide one. Return the winner — same
+    // contract as the read-path dedupe. (Before the migration is
+    // applied this branch simply never fires.)
+    if (
+      insertError.code === "23505" &&
+      String(insertError.message || "").includes(
+        "execution_runs_validate_dedupe_idx",
+      ) &&
+      cartLinesHash !== null
+    ) {
+      const { data: winnerRun, error: winnerLookupError } = await supabase
+        .from("execution_runs")
+        .select("*")
+        .eq("store_id", storeId)
+        .in("status", ACTIVE_STATUSES)
+        .eq("payload_snapshot->metadata->>run_type", "validate_only")
+        .eq("payload_snapshot->metadata->>cart_lines_hash", cartLinesHash)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!winnerLookupError && winnerRun) {
+        console.log(
+          `[run] deduped validate_only for store ${storeId} at insert (unique index) → existing run ${winnerRun.id}`,
+        );
+        return {
+          statusCode: 200,
+          body: { success: true, data: winnerRun, deduped: true },
+        };
+      }
+      // Winner vanished (finished/reaped between violation and lookup) —
+      // fall through to the loud failure below rather than guessing.
+      return serverError(insertError.message);
+    }
     // Compatibility fallback for DBs that haven't applied reliability columns yet.
     if (
       isMissingColumnError(insertError, "queued_at") ||

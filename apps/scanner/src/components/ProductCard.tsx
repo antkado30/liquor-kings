@@ -461,6 +461,7 @@ export function ProductCard({
             sizes={family.sizes}
             selected={selectedProduct}
             onSelect={handleSelectSize}
+            mixedContainers={family.mixedContainers}
           />
         </div>
 

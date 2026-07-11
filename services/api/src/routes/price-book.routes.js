@@ -37,6 +37,14 @@ import {
   sanitizeIlikeForFamily,
 } from "../mlcc/mlcc-product-family.js";
 import { getLatestPriceBookRun, ingestMlccPriceBook } from "../mlcc/mlcc-price-book-ingestor.js";
+import {
+  escapeLikePattern,
+  pickComboPrefixFallbackKey,
+  familyMembersFromRows,
+  familyHasMixedContainers,
+  groupRowsIntoFamilies,
+  COMBO_PREFIX_FALLBACK_MIN_LEN,
+} from "../mlcc/family-tree-query.js";
 import { runUpcEnrichment } from "../mlcc/mlcc-price-book-upc-enrichment.js";
 import { checkAndIngestIfPriceBookChanged } from "../mlcc/mlcc-price-book-scheduler.js";
 import { normalizeUpc } from "../lib/upc-normalize.js";
@@ -1498,6 +1506,133 @@ router.get("/items/:code/family", async (req, res) => {
       return res.json({ ok: false, error: "mlcc_code_not_found" });
     }
 
+    /* ── family_key FAST PATH (2026-07-11, catalog-family-tree-plan wiring) ──
+     *
+     * The 7/1 engine (family-key.js) precomputed family_key / container /
+     * pack_count / is_combo for every active row (13,828/13,828 backfilled,
+     * audit-validated: 644 orphans healed, 0 over-merges) and the ingestor
+     * now recomputes them on every price-book upsert. When the anchor has a
+     * key, the family is ONE indexed equality query — no ILIKE pool, no
+     * 500-row cap, no ADA split (root causes #3/#4/#5), and Tony's exact
+     * plastic-pint-of-Jack bug is dead (PL is stripped into `container`
+     * data instead of poisoning the name base).
+     *
+     * Category still filters alongside the key: ~20 keys legitimately span
+     * 2 categories (plan follow-up #3).
+     *
+     * The legacy name-pool path below is UNCHANGED and still serves rows
+     * whose family_key is NULL (a brand-new SKU ingested by a pre-2026-07-11
+     * deploy) — fallback, not dead code, per the plan's safety rails.
+     */
+    const anchorFamilyKey = String(anchor.family_key ?? "").trim();
+    if (anchorFamilyKey) {
+      const fetchFamilyRows = async (familyKey) => {
+        let fq = supabase
+          .from("mlcc_items")
+          .select("*")
+          .eq("is_active", true)
+          .eq("family_key", familyKey);
+        const anchorCat = String(anchor.category ?? "").trim();
+        if (anchorCat) {
+          fq = fq.eq("category", anchorCat);
+        }
+        return fq
+          .order("code", { ascending: true })
+          .order("ada_number", { ascending: true })
+          .limit(200);
+      };
+
+      let adoptedKey = anchorFamilyKey;
+      const { data: keyRows, error: kErr } = await fetchFamilyRows(adoptedKey);
+      if (kErr) {
+        return res.status(500).json({ ok: false, error: kErr.message });
+      }
+      let members = familyMembersFromRows(anchor, keyRows ?? []);
+
+      /*
+        Truncated-combo fallback (plan follow-up #1): MLCC truncates long
+        combo names, so the combo's key is a PREFIX of its real family key
+        ("TITO'S HANDMADE VODK" → "TITO'S HANDMADE VODKA"). Only fires when
+        the combo anchor is ALONE in its key, and only adopts a candidate
+        when exactly ONE distinct non-combo key matches — an ambiguous
+        guess risks a false merge, the one failure worse than a split.
+        Any error here just keeps the singleton (honest beats guessed).
+      */
+      const anchorIsCombo = anchor.is_combo === true;
+      const hasNonAnchorMembers = members.some(
+        (m) => String(m.code) !== String(anchor.code),
+      );
+      if (
+        anchorIsCombo &&
+        !hasNonAnchorMembers &&
+        anchorFamilyKey.length >= COMBO_PREFIX_FALLBACK_MIN_LEN
+      ) {
+        const { data: candRows, error: candErr } = await supabase
+          .from("mlcc_items")
+          .select("family_key, is_combo")
+          .eq("is_active", true)
+          .like("family_key", `${escapeLikePattern(anchorFamilyKey)}%`)
+          .limit(200);
+        if (!candErr) {
+          const candidateKeys = (candRows ?? [])
+            .filter((r) => r.is_combo !== true)
+            .map((r) => r.family_key);
+          const fallbackKey = pickComboPrefixFallbackKey(
+            anchorFamilyKey,
+            candidateKeys,
+          );
+          if (fallbackKey) {
+            const { data: fbRows, error: fbErr } = await fetchFamilyRows(fallbackKey);
+            if (!fbErr) {
+              adoptedKey = fallbackKey;
+              members = familyMembersFromRows(anchor, fbRows ?? []);
+            }
+          }
+        }
+      }
+
+      const sizesOut = members.map((row) => {
+        // Combo chip labeling parity with the legacy path (Casamigos twin-chip
+        // bug, 2026-06-10) — is_combo is the engine's own verdict for this row.
+        if (row.is_combo === true) {
+          const baseLabel =
+            String(row.bottle_size_label ?? "").trim() ||
+            (row.bottle_size_ml ? `${row.bottle_size_ml} ML` : "PACK");
+          return { ...row, bottle_size_label: `${baseLabel} · GIFT PACK` };
+        }
+        return row;
+      });
+
+      if (process.env.DEBUG_UPC_FILTER === "1") {
+        console.log(
+          "[price-book][DEBUG_UPC_FILTER][family]",
+          JSON.stringify({
+            requestedCode: code,
+            grouping: "family_key",
+            anchorKey: anchorFamilyKey,
+            adoptedKey,
+            familyCount: sizesOut.length,
+            familyNames: sizesOut.map((r) => r.name),
+          }),
+        );
+      }
+
+      return res.json({
+        ok: true,
+        /*
+          Combo anchors display the clean family name as the card title —
+          the adopted key IS the normalized base (and after the prefix
+          fallback it's the full untruncated one). The combo's own row is
+          still in `sizes` with its real name/price.
+        */
+        baseName: anchorIsCombo ? adoptedKey : anchor.name,
+        sizes: sizesOut,
+        grouping: "family_key",
+        familyKey: adoptedKey,
+        mixedContainers: familyHasMixedContainers(members),
+      });
+    }
+
     let q = supabase.from("mlcc_items").select("*").eq("is_active", true);
     const cat = String(anchor.category ?? "").trim();
     if (cat) {
@@ -1693,6 +1828,91 @@ async function tryLevenshteinNameTokenSearch(supabase, search, adaNumber, isNewI
   const items = sortedHits.slice(from, from + limit);
   return { ok: true, items, total, page, fuzzy_match: true };
 }
+
+/**
+ * GET /items/grouped?search=…&limit=… — grouped search (plan §C, 2026-07-11).
+ *
+ * Same matching pipeline as /items (applyItemsOrSearchToQuery = brand
+ * aliases + suffix aliases + auto-prefix, then relevance re-rank), but the
+ * OUTPUT collapses to family cards: one row per product line with size
+ * count, price range, mixed-container flag, and a representative row for
+ * the thumbnail + tap-through (client opens the ProductCard tree at the
+ * representative's code — the tree endpoint owns membership from there).
+ *
+ * ADDITIVE route: /items itself is byte-untouched (the AI resolver and
+ * other consumers keep their exact contract), and the client keeps flat
+ * search one flag-flip away (plan §safety). No pagination by design —
+ * top N family cards answer a human query; "page 2 of families" is not a
+ * real need (YAGNI, scope hardened).
+ *
+ * Typo fallback lives CLIENT-side: zero groups → the scanner re-runs the
+ * flat /items search, which has the fuzzy RPC — so misspellings keep
+ * working exactly as before, just ungrouped.
+ */
+router.get("/items/grouped", async (req, res) => {
+  try {
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    if (!search) {
+      return res.status(400).json({ ok: false, error: "search_required" });
+    }
+    let limitGroups = Number.parseInt(String(req.query.limit || "30"), 10);
+    if (!Number.isFinite(limitGroups) || limitGroups < 1) limitGroups = 30;
+    limitGroups = Math.min(limitGroups, 60);
+    const adaNumber = typeof req.query.adaNumber === "string" ? req.query.adaNumber.trim() : "";
+
+    // Numeric query = exact code lookup, same convention as /items. The
+    // single hit's WHOLE family becomes the one card (fetch by its key so
+    // sizeCount/price-range reflect the real family, not just the hit).
+    if (/^\d+$/.test(search)) {
+      let qExact = supabase.from("mlcc_items").select("*").eq("code", search);
+      qExact = applyMlccItemsFilters(qExact, adaNumber, undefined);
+      const { data: hits, error: exErr } = await orderMlccItemsByScanThenName(qExact).limit(5);
+      if (exErr) {
+        return res.status(500).json({ ok: false, error: exErr.message });
+      }
+      const hit = hits?.[0];
+      if (!hit) return res.json({ ok: true, groups: [] });
+      const hitKey = String(hit.family_key ?? "").trim();
+      let familyRows = [hit];
+      if (hitKey) {
+        let fq = supabase
+          .from("mlcc_items")
+          .select("*")
+          .eq("is_active", true)
+          .eq("family_key", hitKey);
+        const hitCat = String(hit.category ?? "").trim();
+        if (hitCat) fq = fq.eq("category", hitCat);
+        const { data: famRows, error: famErr } = await fq.limit(200);
+        // On error keep the single hit — a thinner card beats a 500.
+        if (!famErr && Array.isArray(famRows) && famRows.length > 0) {
+          familyRows = [hit, ...famRows.filter((r) => r.id !== hit.id)];
+        }
+      }
+      return res.json({ ok: true, groups: groupRowsIntoFamilies(familyRows).slice(0, limitGroups) });
+    }
+
+    // Text query: precise token match, relevance-ranked, pooled wide so
+    // sibling sizes land in the same response (a family's sizes share the
+    // base name, so they match the same tokens). 300 caps the payload;
+    // a clipped pool only under-counts sizeCount on gigantic result sets —
+    // the tap-through tree is always complete regardless.
+    let q = supabase.from("mlcc_items").select("*");
+    q = applyItemsOrSearchToQuery(q, search);
+    q = applyMlccItemsFilters(q, adaNumber, undefined);
+    const { data: pool, error: pErr } = await orderMlccItemsByScanThenName(q).limit(300);
+    if (pErr) {
+      return res.status(500).json({ ok: false, error: pErr.message });
+    }
+    const ranked = sortByRelevance(pool ?? [], new Set(extractSearchTokens(search)));
+    return res.json({
+      ok: true,
+      groups: groupRowsIntoFamilies(ranked).slice(0, limitGroups),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return res.status(500).json({ ok: false, error: msg });
+  }
+});
 
 router.get("/items", async (req, res) => {
   try {

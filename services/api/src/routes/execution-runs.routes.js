@@ -50,23 +50,42 @@ router.post("/recover/:storeId", async (req, res) => {
   return res.json(result);
 });
 
+/*
+  Reap throttle (2026-07-11, claim-latency dig). The reaper used to run
+  inline on EVERY claim-next — with the worker polling every few seconds,
+  that's an extra DB round trip on every poll, and on days with stale runs
+  (deploy/crash days — exactly 7/5, when the 20s claim timeouts clustered)
+  the reap did per-run UPDATEs + web-push HTTP calls synchronously INSIDE
+  the claim request, stalling it for seconds. Self-healing stays, at most
+  once a minute: the shortest reap threshold is 3 MINUTES of stale
+  heartbeat, so a 60s sweep cadence delays recovery by at most a third of
+  the threshold while taking the reap off the hot path the rest of the
+  time. Module-scope is per-process (2 API machines = 2 independent
+  throttles) — fine, the reap is idempotent and guarded by its own WHERE.
+*/
+const REAP_MIN_INTERVAL_MS = 60_000;
+let lastReapAtMs = 0;
+
 router.post("/claim-next", requireServiceRole, async (req, res) => {
   const { workerId, workerNotes } = req.body ?? {};
 
-  // Self-healing: before claiming, sweep up runs whose worker died mid-run
-  // (stuck "running" with a cold heartbeat). Best-effort — a reap failure must
-  // never block claiming the next run.
-  try {
-    const reap = await reapStaleExecutionRuns(supabase);
-    if (reap.ok && reap.reapedCount > 0) {
-      console.warn(
-        `[execution-runs] reaped ${reap.reapedCount} orphaned run(s): ${reap.reapedRunIds.join(", ")}`,
-      );
-    } else if (!reap.ok) {
-      console.error(`[execution-runs] stale-run reap failed: ${reap.error}`);
+  // Self-healing: sweep up runs whose worker died mid-run (stuck "running"
+  // with a cold heartbeat). Best-effort — a reap failure must never block
+  // claiming the next run — and throttled (see REAP_MIN_INTERVAL_MS above).
+  if (Date.now() - lastReapAtMs >= REAP_MIN_INTERVAL_MS) {
+    lastReapAtMs = Date.now();
+    try {
+      const reap = await reapStaleExecutionRuns(supabase);
+      if (reap.ok && reap.reapedCount > 0) {
+        console.warn(
+          `[execution-runs] reaped ${reap.reapedCount} orphaned run(s): ${reap.reapedRunIds.join(", ")}`,
+        );
+      } else if (!reap.ok) {
+        console.error(`[execution-runs] stale-run reap failed: ${reap.error}`);
+      }
+    } catch (err) {
+      console.error(`[execution-runs] stale-run reap threw: ${err?.message || err}`);
     }
-  } catch (err) {
-    console.error(`[execution-runs] stale-run reap threw: ${err?.message || err}`);
   }
 
   const { statusCode, body } = await claimNextQueuedExecutionRun(
