@@ -2,6 +2,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
+import { makeBoundedFetch, resolveDbFetchTimeoutMs } from "../lib/bounded-fetch.js";
 
 import { buildMlccPreflightReport } from "./mlcc-adapter.js";
 import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
@@ -842,7 +843,12 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       reason: "missing_supabase_env",
     };
   }
-  const workerSupabase = createClient(supabaseUrl, supabaseServiceKey);
+  // Bounded DB calls (2026-07-11): same wedge-class protection as the API's
+  // shared client — a hung socket to Supabase fails loud in ≤15s instead of
+  // stalling the run. Failures here already fall back to live resolve.
+  const workerSupabase = createClient(supabaseUrl, supabaseServiceKey, {
+    global: { fetch: makeBoundedFetch(resolveDbFetchTimeoutMs(process.env.LK_DB_FETCH_TIMEOUT_MS)) },
+  });
 
   // Resolve MLCC credentials with DB-first priority and env fallback.
   // Production: DB has encrypted creds (saved + verified via API endpoints)
