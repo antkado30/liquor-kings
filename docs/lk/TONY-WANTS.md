@@ -578,7 +578,12 @@ internally re-validates on MILO and Stage 5 physically refuses checkout on
 any OOS / rule failure / cart mismatch — it can't send a cart MILO didn't
 bless. The want is about *seeing before committing*, not about safety.
 
-Status: ⏳ NEXT UI BUILD after the submit-endpoint capture.
+Status: ✅ **BUILT 2026-07-11** (undeployed; first real use = Thu 7/16 armed
+run). Pure place-gate (`lib/place-gate.ts`, 12 adversarial tests incl.
+NaN-fail-closed) + green-check recording in the app-level tracker
+(persisted per store, 10-min window) + two-button armed footer; checks
+fire direct, the line-by-line confirm modal is reserved for Place.
+Device proof pending deploy.
 **Design DECIDED by Tony 2026-07-01 (asked, he answered):**
 1. **Place trusts a fresh check** — if the last check is recent (<~10 min)
    and the cart is byte-identical since, Place sends immediately, no
@@ -629,7 +634,12 @@ groups into family cards like the competitor. Sequencing: engine submit
 FIRST, then this. Audit loop grades all ~14k bottles for splits + false
 merges before any UI ships.
 
-Status: ⏳ planned + root-caused; build starts after engine-submit wiring.
+Status: ✅ **WIRED 2026-07-11** (undeployed): endpoint flipped to
+family_key (+category, combo prefix-fallback only-when-unambiguous, one
+chip per code), ingestor computes identity on every price-book upsert,
+container labels travel chip → cart → confirm modal, grouped search live
+behind `GROUPED_SEARCH_ENABLED` (flat/fuzzy fallback kept; UPC-mapping
+mode always exact-SKU flat). Device proof pending deploy.
 
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
 
