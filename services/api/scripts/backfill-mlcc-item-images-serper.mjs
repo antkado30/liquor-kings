@@ -218,6 +218,35 @@ const CONCURRENCY = Math.min(
 const MIN_SIDE = Number.parseInt(argv["min-side"] ?? "300", 10) || 300;
 const VISION = argv["skip-vision"] !== "true";
 const FORCE = argv.force === "true" && SINGLE_CODE !== null; // re-check one code
+
+/*
+  PARALLEL SHARDING (2026-07-12) — `--shard=i/n` lets N terminals split the
+  catalog into DISJOINT slices so they never process the same bottle. The
+  slice is chosen by a stable hash of the CODE (not the row's position in a
+  live-changing NULL-image list), so it's robust even when the terminals
+  start at different times or fill rows mid-run: a code always belongs to
+  exactly one shard, and the N shards together cover every code with zero
+  overlap. Run e.g. `--shard=0/4` … `--shard=3/4` in four terminals.
+*/
+let SHARD_I = 0;
+let SHARD_N = 1;
+if (typeof argv.shard === "string" && /^\d+\/\d+$/.test(argv.shard)) {
+  const [i, n] = argv.shard.split("/").map((x) => Number.parseInt(x, 10));
+  if (n >= 1 && i >= 0 && i < n) {
+    SHARD_I = i;
+    SHARD_N = n;
+  } else {
+    console.error(`--shard=i/n needs 0 <= i < n; got "${argv.shard}"`);
+    process.exit(1);
+  }
+}
+/** Stable per-code shard: same code → same shard forever, regardless of state. */
+function shardOfCode(code) {
+  const s = String(code ?? "");
+  let h = 0;
+  for (let k = 0; k < s.length; k++) h = (h * 31 + s.charCodeAt(k)) >>> 0;
+  return h % SHARD_N;
+}
 /*
   STRICT BACKGROUND POLICY — the default (2026-07-11, photo-truth mandate).
   Tony's verdict on the corpus that busy-background fallbacks produced:
@@ -313,7 +342,12 @@ async function loadCandidates() {
   */
   const PAGE_SIZE = 1000;
   const byCode = new Map();
-  for (let from = 0; byCode.size < LIMIT; from += PAGE_SIZE) {
+  /*
+    When sharding, we must page the ENTIRE remaining NULL-image set (not
+    stop at LIMIT) so this shard sees all of its own codes — the shard
+    filter is applied after loading. Un-sharded, stop once we have LIMIT.
+  */
+  for (let from = 0; SHARD_N > 1 || byCode.size < LIMIT; from += PAGE_SIZE) {
     const { data, error } = await supabase
       .from("mlcc_items")
       .select("code, name, category, bottle_size_ml, bottle_size_label, scan_count")
@@ -327,7 +361,11 @@ async function loadCandidates() {
     for (const it of data ?? []) if (!byCode.has(it.code)) byCode.set(it.code, it);
     if (!data || data.length < PAGE_SIZE) break; // catalog exhausted
   }
-  return [...byCode.values()].slice(0, LIMIT);
+  let ordered = [...byCode.values()];
+  if (SHARD_N > 1) {
+    ordered = ordered.filter((c) => shardOfCode(c.code) === SHARD_I);
+  }
+  return ordered.slice(0, LIMIT);
 }
 
 // ── Serper Google Images query ─────────────────────────────────────────────
@@ -619,6 +657,7 @@ async function main() {
     `[serper-img] mode=${DRY_RUN ? "DRY-RUN (no writes; queries still count)" : "WRITE"} ` +
       `limit=${LIMIT} concurrency=${CONCURRENCY} minSide=${MIN_SIDE} ` +
       `vision=${VISION ? "on" : "OFF"}${FORCE ? " FORCE" : ""}` +
+      (SHARD_N > 1 ? ` shard=${SHARD_I}/${SHARD_N}` : "") +
       (SINGLE_CODE ? ` code=${SINGLE_CODE}` : ""),
   );
   const candidates = await loadCandidates();
