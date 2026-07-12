@@ -479,12 +479,12 @@ carts. Revisit only if a real order with a big cart actually blows past
 
 - ✅ Premium dark "Command Deck" redesign shipped 2026-06-07 (sign-in, shell,
   founder console + health strip). Tony loved the look.
-- ⏳ **Replace the token-paste sign-in.** It requires extracting a short-lived
-  (~1hr) Supabase access token via browser console — Tony hit "Invalid or
-  expired token" and it's bad UX. Build a real sign-in: email+password
-  (Supabase signInWithPassword in the admin app) OR a long-lived Command Deck
-  key. Goal: sign in once on the phone, add to home screen, stay in. Also
-  verify his account has operator access for /operator-review/session.
+- ✅ **Real sign-in — VERIFIED BUILT (was built 2026-06-07; doc stale
+  until the 2026-07-12 audit).** Email+password is the PRIMARY path
+  (supabaseAuth.ts signInWithPassword → operator session cookie, "add to
+  home screen and stay signed in"); the token-paste box survives only as
+  a hidden power-user/debug fallback toggle. Remaining 2-min check for
+  Tony: sign in once on the phone and confirm operator access.
 
 ---
 
@@ -726,22 +726,24 @@ Two distinct diseases, named:
 - ✅ **Scan page camera resized.** Aspect ratio 5:6 (was 4:3),
   max-height 62vh (was 52vh). Camera fills the screen, dead zone
   below shrinks. (#93, 2026-06-07)
-- ⏳ **Templates: edit items inside a template.** Currently edit only
-  changes name + schedule. Need to add/remove bottles, adjust qty
-  per-line. Effectively make the template editable like a cart.
-- ⏳ **Search → continuous dropdown of bottles.** When user types in
-  the scan-page search bar, show a scrollable result list with "Load
-  more" at bottom. Amazon-style typeahead.
-- ⏳ **AI Assistant broader scope.** Currently the prompt is store-
-  centric. Tony wants it to answer ANY liquor question (general
-  knowledge, pairing, history, regulations across states, brand
-  trivia) AND anything store-specific (orders, inventory, MLCC).
-  Backend prompt + tool-use update.
-- ⏳ **AI Assistant accepts images.** Send the assistant a photo for
-  deeper conversation about what's in the picture. Vision API wiring.
-- ⏳ **AI Assistant becomes a real page route.** Currently overlay; long
-  term should be its own destination, not a modal. Then the AI tab
-  highlights properly when active.
+- ✅ **Templates: edit items inside a template.** VERIFIED BUILT
+  (2026-07-12 code audit): EditTemplateModal does full item editing —
+  add via search, remove, per-line qty — and saves the items array
+  (TemplatesPage.tsx:369-585). The doc had gone stale.
+- ✅ **Search → continuous dropdown of bottles.** VERIFIED BUILT:
+  useCatalogSearch + scan-page results list with "Load more"
+  (ScannerPage.tsx:591-655) — and since 2026-07-11 it groups into
+  family cards.
+- ✅ **AI Assistant broader scope.** VERIFIED BUILT: system prompt
+  grants general liquor/spirits/bartending knowledge with no tools
+  (assistant.js:56, :80) alongside the store-data tools.
+- ✅ **AI Assistant accepts images.** VERIFIED BUILT: gallery + live
+  camera inputs with downscale (AssistantChat.tsx:533-576), sent via
+  imageDataUri and decoded server-side (assistant.js:712-742). This is
+  the exact pipeline that carried mom's handwritten list on 7/9.
+- ✅ **AI Assistant is a real page route.** VERIFIED BUILT: /assistant
+  route → full-screen AssistantPage; the tab, home hero, and More page
+  all navigate to it. The old overlay component no longer exists.
 - ⏳ **Real product photos for all 13,000+ bottles in catalog.** No
   more placeholder bottle silhouettes. Strategy options: Google
   Custom Search Image API (~$65 for full catalog), distributor
@@ -777,8 +779,12 @@ Two distinct diseases, named:
   amber "Verify your MLCC connection" banner when null — one-tap
   probe via `cart_reset_only` clears it. Survives refresh, device
   switch, account-skip-of-activation. (#88, 2026-06-06)
-- ⏳ **Real Sentry DSN setup** (replace placeholder).
-- ⏳ **Daily cron setup** for price-book freshness + template scheduler.
+- ✅ **Real Sentry DSN** — live in prod (census corrected 7/3; release
+  tagging finished + proven 7/11, boot log reads `release <sha>`).
+- ✅ **Daily cron** — fixed 2026-07-04 (secret re-keyed both sides after
+  36 silent failures; scheduled runs green since; endpoint + workflow
+  verified consistent in the 7/12 audit).
+- ~~⏳ Daily cron setup~~ (superseded by the line above; original notes:)
   Code-side DONE (2026-06-14): `.github/workflows/lk-daily-cron.yml`
   added — GitHub Actions hits `/order-templates/run-scheduler` (~5am ET)
   and `/price-book/check-updates` (~6am ET) daily, no cron-job.org

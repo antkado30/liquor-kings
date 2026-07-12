@@ -102,7 +102,11 @@ wait"). They outrank every feature below.
   family-tree UI is unwired).
 - ✅ `mlcc_price_book_runs` — price-book ingest audit
 - ✅ `mlcc_brand_aliases` — brand alias matching
-- ❓ `mlcc_code_map` / `mlcc_item_codes` — code mapping (6/13). VERIFY still used.
+- ✅ `mlcc_code_map` / `mlcc_item_codes` — **RESOLVED 2026-07-12 (code
+  audit): LIVE ON THE MONEY PATH.** Read by bottle-identity.service.js,
+  which cart.routes.js and execution-run.service.js call as
+  verifyCartItemsBeforeExecution — the wrong-code guard before every
+  run. DO NOT DROP.
 - ✅ `bottles` — legacy per-store bottle table (name_searchable added 6/10)
 
 ### UPC / matching (✅ mostly live — corrected 7/3)
@@ -114,9 +118,11 @@ wait"). They outrank every feature below.
   for UPC→size/candidate lookup at price-book.routes.js:1315 — so the
   `UPCITEMDB_API_KEY` is still doing real work. **Do NOT cancel it** without
   first replacing that call path.)
-- ❓ `nrs_ambiguous_review` — NRS import review queue (1,329 rows built
-   5/12). VERIFY: was this ever worked through, or abandoned mid-review? (This
-   one is a genuine ❓ — data table, need to check if any UI reads it.)
+- ✅ `nrs_ambiguous_review` — **RESOLVED 2026-07-12 (code audit): LIVE,
+   not abandoned.** Wired end to end: nrs-review.routes.js mounted in
+   app.js (pending/resolve/skip), NrsReviewPage routed + nav-linked in
+   the admin, client calls the matching endpoints. Whether Tony ever
+   finishes reviewing the 1,329 rows is a workflow choice, not dead code.
 
 ### Pilot ops (✅ LIVE — census guess was WRONG, verified 7/3)
 - ✅ `pilot_ops_workflow_states`
@@ -203,7 +209,11 @@ one-time loaders to archive. A `scripts/archive/` folder solves most of it.
   missing from the catalog (scanner/search can't see them) until the next full
   book. Small, real. Decide: ingest new-item lists too, or accept the lag.
 - 💀 `UPCITEMDB_API_KEY` — UPCitemdb abandoned 6/4. Remove.
-- ❓ `SUPABASE_JWT_SECRET` — replaced by ES256/JWKS 6/10; may be vestigial
+- ✅ `SUPABASE_JWT_SECRET` — **RESOLVED 2026-07-12 (code audit): dormant
+  legacy, not load-bearing.** Still read (access-token.js:32) but only
+  fires for HS256 tokens; the project signs ES256, so the live path is
+  JWKS. Safe to delete the branch + var in a cleanup pass — nothing
+  breaks meanwhile.
 - ❓ `DEBUG_UPC_FILTER`, `MILO_TEST_*`, `*_HEADFUL` — dev-only, confirm not set in prod
 
 ---
@@ -255,17 +265,7 @@ Likely 2-3 subscriptions to cancel today for real money back.
 
 ## 5. FEATURE SURFACES
 
-### Scanner app pages (apps/scanner/src/pages) — ✅ mostly live
-Scan, Cart, Browse, Inventory, Orders, OrderDetail, Assistant, Templates,
-Settings, More — all active. 🟡 open items: template item-editing (add/remove
-bottles) never built; AI-as-full-page + AI-accepts-images partial.
-
-### Admin app — ❓ mixed
-Founder Console (✅), Operator Review (✅), Image Curation (🟡 depends on the
-image backfill decision), Diagnostics (✅), 🟡 **Pilot Ops pages** (tie to the
-4 suspect tables — likely 💀), NRS Review (❓ abandoned queue?).
-🟡 **Command Deck sign-in is still the token-paste hack** — you can barely log
-into your own admin.
+### Scanner app p
 
 ### API routes (services/api/src/routes) — ✅ core solid
 21 route files, 100+ endpoints. Core (auth, cart, execution-runs, browse,
