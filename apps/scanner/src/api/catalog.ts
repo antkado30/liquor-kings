@@ -148,7 +148,16 @@ function mapRow(row: Record<string, unknown>): MlccProduct {
  */
 export async function searchProductsGrouped(
   query: string,
-  options?: { adaNumber?: string; limit?: number },
+  options?: {
+    adaNumber?: string;
+    limit?: number;
+    /** Browse-tab filters (2026-07-11 pt.2) — gate which rows match. */
+    category?: string;
+    minPrice?: number;
+    maxPrice?: number;
+    minProof?: number;
+    maxProof?: number;
+  },
 ): Promise<FamilyGroup[]> {
   const q = query.trim();
   if (!q) return [];
@@ -156,6 +165,11 @@ export async function searchProductsGrouped(
   params.set("search", q);
   params.set("limit", String(options?.limit ?? 30));
   if (options?.adaNumber) params.set("adaNumber", options.adaNumber);
+  if (options?.category) params.set("category", options.category);
+  if (options?.minPrice != null) params.set("minPrice", String(options.minPrice));
+  if (options?.maxPrice != null) params.set("maxPrice", String(options.maxPrice));
+  if (options?.minProof != null) params.set("minProof", String(options.minProof));
+  if (options?.maxProof != null) params.set("maxProof", String(options.maxProof));
   const res = await fetchWithRetry(`${BASE}/items/grouped?${params.toString()}`, {
     credentials: "same-origin",
   });

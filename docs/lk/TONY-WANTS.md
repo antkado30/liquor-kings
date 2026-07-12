@@ -642,12 +642,27 @@ groups into family cards like the competitor. Sequencing: engine submit
 FIRST, then this. Audit loop grades all ~14k bottles for splits + false
 merges before any UI ships.
 
-Status: ✅ **WIRED 2026-07-11** (undeployed): endpoint flipped to
+Status: ✅ **WIRED 2026-07-11** (deployed same night): endpoint flipped to
 family_key (+category, combo prefix-fallback only-when-unambiguous, one
 chip per code), ingestor computes identity on every price-book upsert,
 container labels travel chip → cart → confirm modal, grouped search live
 behind `GROUPED_SEARCH_ENABLED` (flat/fuzzy fallback kept; UPC-mapping
-mode always exact-SKU flat). Device proof pending deploy.
+mode always exact-SKU flat). **Scope note: grouped cards live in the
+SCAN-page search only in this pass — Browse/Catalog kept its flat grid.**
+
+**⏳ NEW 2026-07-11 (Tony's first live look — he searched from the
+Catalog tab and got the flat grid):** grouped family cards must cover
+EVERYWHERE search happens — **Browse/Catalog included**, same family_key
+truth, same tap-through to the size tree. Next build on this thread.
+
+**⏳ NEW 2026-07-11 (same look):** "we gotta do a redesign for the
+pictures and make sure everything is 100% accurate" — the catalog/Browse
+card presentation needs a design pass, and photo coverage+accuracy is
+front of mind again (the combo card showed placeholder art next to three
+real photos). Ties directly to the parked decision: run the Serper
+backfill once (vision-gated, ~$4-14 full catalog) or cancel it — plus
+the in-store photo truth layer already built. The accuracy bar stands:
+a wrong photo is worse than no photo.
 
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
 

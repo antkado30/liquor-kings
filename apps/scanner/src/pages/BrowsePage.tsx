@@ -23,7 +23,7 @@ import {
   type BrowseFilters,
   type BrowseSort,
 } from "../api/browse";
-import { getProductFamily } from "../api/catalog";
+import { getProductFamily, searchProductsGrouped } from "../api/catalog";
 import { ProductCard } from "../components/ProductCard";
 import { PlaceholderBottle, tintForCategory } from "../components/BottleArt";
 import { IconCheck, IconChevronRight } from "../components/Icons";
@@ -31,7 +31,7 @@ import { useCart } from "../hooks/useCart";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import { useCachedResource } from "../lib/swr";
 import { getCurrentStoreId } from "../lib/currentStore";
-import type { MlccProduct, ProductFamily } from "../types";
+import type { FamilyGroup, MlccProduct, ProductFamily } from "../types";
 
 function money(n: number | null | undefined): string {
   if (n == null || Number.isNaN(Number(n))) return "—";
@@ -77,9 +77,53 @@ export function BrowsePage() {
   );
   const facets = facetsRes.data ?? null;
 
+  /*
+    Grouped search in Browse (2026-07-11 pt.2 — Tony: family cards
+    "should be everywhere", after finding the flat grid here on his first
+    live look). When a SEARCH TERM is typed (and no size filter — asking
+    for one size means asking for specific bottles), results collapse to
+    one family card per product line, same truth as the scan-page search.
+    Pure scrolling and filtered browsing keep the flat grid + cursor
+    pagination. Zero groups (typo → fuzzy-only match) re-enables the flat
+    list below, which owns the fuzzy fallback — so misspellings behave
+    exactly as before. useCachedResource treats a null key as disabled.
+  */
+  const groupedMode = query.trim().length >= 2 && filters.bottle_size_ml == null;
+  const groupsKey = groupedMode
+    ? `browse:groups:${storeId}:${JSON.stringify({ filters, query: query.trim() })}`
+    : null;
+  const groupsRes = useCachedResource<{ groups: FamilyGroup[] }>(
+    groupsKey,
+    async () => {
+      const groups = await searchProductsGrouped(query.trim(), {
+        limit: 30,
+        adaNumber: filters.ada_number ?? undefined,
+        category: filters.category ?? undefined,
+        minPrice: filters.min_price ?? undefined,
+        maxPrice: filters.max_price ?? undefined,
+        minProof: filters.min_proof ?? undefined,
+        maxProof: filters.max_proof ?? undefined,
+      });
+      return { groups };
+    },
+  );
+  const groups = groupedMode ? (groupsRes.data?.groups ?? []) : [];
+  const showGroups = groupedMode && groups.length > 0;
+
   // Product list — cached per (filters + sort + query) combo so flipping
   // filters back and forth, or returning to the Catalog tab, is instant.
-  const listKey = `browse:list:${storeId}:${JSON.stringify({ filters, sort, query })}`;
+  // DISABLED (null key) while family cards are showing or still loading —
+  // it only fetches flat results when grouping is off, or as the fuzzy
+  // fallback once a grouped search comes back empty.
+  // Fail toward FLAT: a grouped-fetch error must never leave the search
+  // dead — the flat list (with its fuzzy fallback) takes over.
+  const flatListActive =
+    !groupedMode ||
+    groupsRes.error != null ||
+    (groupsRes.data != null && groupsRes.data.groups.length === 0);
+  const listKey = flatListActive
+    ? `browse:list:${storeId}:${JSON.stringify({ filters, sort, query })}`
+    : null;
   const listRes = useCachedResource<{ products: MlccProduct[]; cursor: string | null }>(
     listKey,
     async () => {
@@ -92,9 +136,12 @@ export function BrowsePage() {
       return { products: r.products, cursor: r.nextCursor };
     },
   );
-  const products = listRes.data?.products ?? [];
-  const cursor = listRes.data?.cursor ?? null;
-  const loading = listRes.loading;
+
+  const products = flatListActive ? (listRes.data?.products ?? []) : [];
+  const cursor = flatListActive ? (listRes.data?.cursor ?? null) : null;
+  const loading = groupedMode
+    ? groupsRes.loading || (flatListActive && listRes.loading)
+    : listRes.loading;
   const error = listRes.error
     ? listRes.error instanceof Error
       ? listRes.error.message
@@ -337,11 +384,52 @@ export function BrowsePage() {
         </p>
       ) : null}
 
-      {!loading && products.length === 0 && !error ? (
+      {!loading && !showGroups && products.length === 0 && !error ? (
         <p className="muted small" style={{ padding: 24, textAlign: "center" }}>
           No bottles match these filters. Clear filters or try a different
           search.
         </p>
+      ) : null}
+
+      {/*
+        Family cards (2026-07-11 pt.2): one card per product line when a
+        search is typed — same family_key truth as the scan-page search.
+        Tap opens the ProductCard tree at the representative's code.
+      */}
+      {showGroups ? (
+        <div className="browse-grid">
+          {groups.map((g) => {
+            const rep = g.representative;
+            const singleSize =
+              rep.bottle_size_label ?? `${rep.bottle_size_ml ?? "?"} mL`;
+            const meta =
+              g.sizeCount > 1
+                ? `${g.sizeCount} sizes${g.mixedContainers ? " · glass & plastic" : ""}`
+                : `${singleSize}${rep.ada_name ? ` · ${rep.ada_name}` : ""}`;
+            const price =
+              g.minPrice != null && g.maxPrice != null && g.maxPrice > g.minPrice
+                ? `${money(g.minPrice)}–${money(g.maxPrice)}`
+                : money(g.minPrice ?? g.maxPrice ?? rep.licensee_price);
+            return (
+              <button
+                key={`${g.familyKey || rep.code}|${g.category ?? ""}|${rep.code}`}
+                type="button"
+                className="browse-card"
+                onClick={() => void openProduct(rep)}
+              >
+                <BrowseCardImage product={rep} />
+                <div className="browse-card__name">{g.baseName}</div>
+                <div className="browse-card__meta muted small">{meta}</div>
+                <div className="browse-card__bottom">
+                  <span className="browse-card__price">{price}</span>
+                  {rep.is_new_item ? (
+                    <span className="browse-card__new">NEW</span>
+                  ) : null}
+                </div>
+              </button>
+            );
+          })}
+        </div>
       ) : null}
 
       <div className="browse-grid">

@@ -1860,12 +1860,37 @@ router.get("/items/grouped", async (req, res) => {
     limitGroups = Math.min(limitGroups, 60);
     const adaNumber = typeof req.query.adaNumber === "string" ? req.query.adaNumber.trim() : "";
 
+    /*
+      Browse filters (2026-07-11 pt.2 — Tony: grouped search "should be
+      everywhere"): the Catalog tab passes its active filters so its
+      grouped results respect them. Filters gate WHICH rows match the
+      search; a numeric-code hit's family tree itself stays unfiltered —
+      the tree is the tree. Size filter deliberately absent: filtering to
+      one size means the user wants specific bottles, so the client stays
+      flat in that case.
+    */
+    const category = typeof req.query.category === "string" ? req.query.category.trim() : "";
+    const minPrice = Number.parseFloat(String(req.query.minPrice ?? ""));
+    const maxPrice = Number.parseFloat(String(req.query.maxPrice ?? ""));
+    const minProof = Number.parseFloat(String(req.query.minProof ?? ""));
+    const maxProof = Number.parseFloat(String(req.query.maxProof ?? ""));
+    const applyGroupedBrowseFilters = (q) => {
+      let out = q;
+      if (category) out = out.eq("category", category);
+      if (Number.isFinite(minPrice)) out = out.gte("licensee_price", minPrice);
+      if (Number.isFinite(maxPrice)) out = out.lte("licensee_price", maxPrice);
+      if (Number.isFinite(minProof)) out = out.gte("proof", minProof);
+      if (Number.isFinite(maxProof)) out = out.lte("proof", maxProof);
+      return out;
+    };
+
     // Numeric query = exact code lookup, same convention as /items. The
     // single hit's WHOLE family becomes the one card (fetch by its key so
     // sizeCount/price-range reflect the real family, not just the hit).
     if (/^\d+$/.test(search)) {
       let qExact = supabase.from("mlcc_items").select("*").eq("code", search);
       qExact = applyMlccItemsFilters(qExact, adaNumber, undefined);
+      qExact = applyGroupedBrowseFilters(qExact);
       const { data: hits, error: exErr } = await orderMlccItemsByScanThenName(qExact).limit(5);
       if (exErr) {
         return res.status(500).json({ ok: false, error: exErr.message });
@@ -1899,6 +1924,7 @@ router.get("/items/grouped", async (req, res) => {
     let q = supabase.from("mlcc_items").select("*");
     q = applyItemsOrSearchToQuery(q, search);
     q = applyMlccItemsFilters(q, adaNumber, undefined);
+    q = applyGroupedBrowseFilters(q);
     const { data: pool, error: pErr } = await orderMlccItemsByScanThenName(q).limit(300);
     if (pErr) {
       return res.status(500).json({ ok: false, error: pErr.message });
