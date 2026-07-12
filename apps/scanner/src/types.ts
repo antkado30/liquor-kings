@@ -47,6 +47,15 @@ export interface MlccProduct {
    * then shows no label rather than guessing.
    */
   container?: string | null;
+  /**
+   * Bottles per orderable unit from the family engine (e.g. 12 for a
+   * "12PK" sleeve of minis), null/1 for a single bottle. The reason two
+   * chips can share a size AND material yet be different products with
+   * different prices and case rules — so the label must say it
+   * ("50 mL · Glass · 12-pack"). Found the hard way 2026-07-12: Tito's
+   * 50 mL rendered three identical chips and read as data corruption.
+   */
+  pack_count?: number | null;
 }
 
 export interface ProductFamily {

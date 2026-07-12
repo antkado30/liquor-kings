@@ -37,6 +37,10 @@
  *   --force              With --code only: re-check a SKU that already has
  *                        an image (iterating on quality for one bottle).
  *   --skip-vision        Skip the Claude vision pixel-check (NOT recommended).
+ *   --regate             Re-judge ALREADY-WRITTEN serper photos with the
+ *                        current gate; clear failures to the placeholder
+ *                        (they become refill candidates). No Serper calls.
+ *                        Combine with --dry-run=true to preview verdicts.
  *   --allow-busy-fallback=true  Accept correct-but-busy-background photos when
  *                        no clean studio shot survives. OFF by default since
  *                        2026-07-11 (photo-truth mandate): clean shot or
@@ -208,7 +212,24 @@ const argv = Object.fromEntries(
   }),
 );
 const DRY_RUN = argv["dry-run"] === "true";
-const LIMIT = Number.parseInt(argv.limit ?? "25", 10) || 25;
+/*
+  --regate (2026-07-12 night): re-judge ALREADY-WRITTEN serper photos
+  against the CURRENT vision gate and clear the ones that no longer pass.
+  Born the night the strict run's first ~6,200 photos were audited on
+  device and ad creatives (bottle + slogan tiles on white/colored
+  backdrops) turned out to sail through the old prompt — the gate policed
+  the SCENE (shelves/hands/rooms) but never named MARKETING GRAPHICS.
+  The prompt now rejects ad tiles; this mode applies that standard
+  retroactively so one gate governs every photo, whenever it was written.
+  No Serper searches, no uploads — just vision checks (~$0.002-0.01/photo)
+  + row clears. Cleared rows go back to the premium placeholder and become
+  refill candidates for the next backfill run (image_source='regate_cleared'
+  keeps provenance and stays eligible — only 'reported_wrong' is quarantined).
+  DRY-RUN by default-ish: pass --dry-run=true to preview verdicts; a real
+  run needs no extra flag but every clear is logged with the vision reason.
+*/
+const REGATE = argv.regate === "true";
+const LIMIT = Number.parseInt(argv.limit ?? (REGATE ? "20000" : "25"), 10) || 25;
 const SINGLE_CODE =
   typeof argv.code === "string" && argv.code !== "true" ? argv.code : null;
 const CONCURRENCY = Math.min(
@@ -284,12 +305,16 @@ if (/127\.0\.0\.1|localhost/.test(SUPABASE_URL)) {
   );
   process.exit(1);
 }
-if (!SERPER_API_KEY) {
+if (!SERPER_API_KEY && !REGATE) {
   console.error(
     "Missing SERPER_API_KEY. Sign up at https://serper.dev (2,500 free " +
       "searches), copy the API key from the dashboard, add a line\n" +
       "  SERPER_API_KEY=\nwith the key after the = to services/api/.env.",
   );
+  process.exit(1);
+}
+if (REGATE && !VISION) {
+  console.error("--regate IS the vision check — it cannot run with --skip-vision.");
   process.exit(1);
 }
 if (VISION && !ANTHROPIC_API_KEY) {
@@ -445,7 +470,12 @@ async function visionCheck(item, buf, mediaType) {
       await sleep(backoff);
     }
   }
-  return { pass: false, cleanBackground: false, reason: "vision rate-limited after retries" };
+  return {
+    pass: false,
+    cleanBackground: false,
+    apiError: true,
+    reason: "vision rate-limited after retries",
+  };
 }
 
 async function visionCheckOnce(item, buf, mediaType) {
@@ -469,7 +499,12 @@ async function visionCheckOnce(item, buf, mediaType) {
     `Oaked when target is the standard expression); the label READABLY shows ` +
     `a proof or age statement that CONTRADICTS one in the target name; a ` +
     `multi-bottle pack or gift set when the target is a single bottle; not a ` +
-    `product photo (logo, person, store shelf, meme). ` +
+    `product photo (logo, person, store shelf, meme); an ADVERTISEMENT or ` +
+    `marketing creative — any added slogan, tagline, campaign text, price ` +
+    `badge, or promotional graphic overlaid on or placed beside the product ` +
+    `(text printed on the physical bottle label itself is fine; text added ` +
+    `AROUND the bottle is an ad, not a product photo — FAIL it even on a ` +
+    `white background). ` +
     `PACK RULE: if the target name contains a pack count like "4PK", "10PK", ` +
     `"15PK", "20PK", the product IS a multi-bottle pack — pack/display/bucket ` +
     `shots are CORRECT for those and a single-bottle shot is also acceptable. ` +
@@ -480,8 +515,12 @@ async function visionCheckOnce(item, buf, mediaType) {
     `Photo angle, lighting, and glass-vs-plastic are all fine. ` +
     `ALSO assess the background: "clean_background" is true ONLY for a ` +
     `professional product shot on a white, light, or plain studio ` +
-    `background. It is false if you can see store shelves, a room, a hand, ` +
-    `a table setting, other products, or any busy scene behind the bottle. ` +
+    `background showing the product and NOTHING else. It is false if you ` +
+    `can see store shelves, a room, a hand, a table setting, other ` +
+    `products, or any busy scene behind the bottle — or ANY added ` +
+    `graphics, text, borders, or color-block panels that are not part of ` +
+    `the physical product (a plain colored backdrop with a slogan next to ` +
+    `the bottle is an ad tile, NOT a clean product shot). ` +
     `Respond ONLY with raw JSON (no code fence) and keep "reason" UNDER 15 ` +
     `words: {"pass": true|false, "clean_background": true|false, "reason": "<short>"}.`;
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -517,7 +556,20 @@ async function visionCheckOnce(item, buf, mediaType) {
   }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    return { pass: false, cleanBackground: false, reason: `vision api http_${res.status} ${body.slice(0, 100)}` };
+    /*
+      apiError marks this as a FAILURE TO JUDGE, not a judgment (2026-07-12
+      night — the regate dry-run printed 60 "WOULD CLEAR" lines that were
+      actually 60 out-of-credits errors; a live run would have wiped
+      photos on them). Consumers must treat apiError as "no verdict":
+      the backfill skips the candidate, the regate KEEPS the photo.
+    */
+    return {
+      pass: false,
+      cleanBackground: false,
+      apiError: true,
+      creditsExhausted: /credit balance is too low/i.test(body),
+      reason: `vision api http_${res.status} ${body.slice(0, 100)}`,
+    };
   }
   const json = await res.json();
   const text = (json?.content ?? [])
@@ -525,7 +577,10 @@ async function visionCheckOnce(item, buf, mediaType) {
     .map((b) => b.text)
     .join("");
   const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return { pass: false, reason: `unparseable: ${text.slice(0, 100)}` };
+  // Unparseable model output is also "no verdict" — never a clear signal.
+  if (!match) {
+    return { pass: false, apiError: true, reason: `unparseable: ${text.slice(0, 100)}` };
+  }
   try {
     const parsed = JSON.parse(match[0]);
     return {
@@ -534,7 +589,12 @@ async function visionCheckOnce(item, buf, mediaType) {
       reason: typeof parsed.reason === "string" ? parsed.reason : "",
     };
   } catch {
-    return { pass: false, cleanBackground: false, reason: `bad JSON: ${text.slice(0, 100)}` };
+    return {
+      pass: false,
+      cleanBackground: false,
+      apiError: true,
+      reason: `bad JSON: ${text.slice(0, 100)}`,
+    };
   }
 }
 
@@ -652,7 +712,157 @@ async function updateAllCodeRows(code, imageUrl, thumbUrl) {
   return true;
 }
 
+// ── --regate: apply the CURRENT gate to already-written serper photos ──────
+async function loadRegateTargets() {
+  // Same exact-pagination pattern as loadCandidates (1000-row cap scar,
+  // stable code tiebreak) — but selecting rows that HAVE a serper photo.
+  const PAGE_SIZE = 1000;
+  const byCode = new Map();
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("mlcc_items")
+      .select("code, name, category, bottle_size_ml, bottle_size_label, scan_count, image_url")
+      .eq("is_active", true)
+      .not("image_url", "is", null)
+      .eq("image_source", "serper_google_images")
+      .order("scan_count", { ascending: false, nullsFirst: false })
+      .order("code", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const it of data ?? []) if (!byCode.has(it.code)) byCode.set(it.code, it);
+    if (!data || data.length < PAGE_SIZE) break;
+  }
+  let ordered = [...byCode.values()];
+  if (SHARD_N > 1) ordered = ordered.filter((c) => shardOfCode(c.code) === SHARD_I);
+  if (SINGLE_CODE) ordered = ordered.filter((c) => c.code === SINGLE_CODE);
+  return ordered.slice(0, LIMIT);
+}
+
+/**
+ * Clear a failed photo back to the premium placeholder. Scoped to
+ * image_source='serper_google_images' so an in-store photo snapped
+ * between load and write can NEVER be cleared by this pass (in_store
+ * outranks backfill — photo-truth precedence). Storage objects are left
+ * in place on purpose: refills upsert the same path, and an orphaned
+ * webp is harmless while a wrongly-deleted one is not.
+ */
+async function clearCodeRows(code) {
+  const { error } = await supabase
+    .from("mlcc_items")
+    .update({
+      image_url: null,
+      image_thumb_url: null,
+      image_source: "regate_cleared",
+      image_updated_at: new Date().toISOString(),
+    })
+    .eq("code", code)
+    .eq("image_source", "serper_google_images");
+  if (error) {
+    console.warn(`[regate] ${code} clear failed: ${error.message}`);
+    return false;
+  }
+  return true;
+}
+
+async function mainRegate() {
+  console.log(
+    `[regate] mode=${DRY_RUN ? "DRY-RUN (verdicts only, no writes)" : "WRITE (failures cleared to placeholder)"} ` +
+      `limit=${LIMIT} concurrency=${CONCURRENCY}` +
+      (SHARD_N > 1 ? ` shard=${SHARD_I}/${SHARD_N}` : "") +
+      (SINGLE_CODE ? ` code=${SINGLE_CODE}` : ""),
+  );
+  const targets = await loadRegateTargets();
+  console.log(
+    `[regate] ${targets.length} photo(s) to re-judge — est. vision cost ` +
+      `$${(targets.length * 0.002).toFixed(2)}-$${(targets.length * 0.01).toFixed(2)}`,
+  );
+  if (targets.length === 0) return;
+
+  const stats = { kept: 0, cleared: 0, retry: 0, done: 0 };
+  const total = targets.length;
+  let abort = false;
+  let apiErrorStreak = 0;
+
+  async function regateItem(item) {
+    const tag = `[${++stats.done}/${total}] ${item.code} "${item.name}"`;
+    const dl = await downloadImage(item.image_url);
+    if (!dl.ok) {
+      // Fail CLOSED for deletion: uncertainty never destroys a photo.
+      stats.retry += 1;
+      console.log(`${tag} — download failed (${dl.reason}) — kept, re-run to retry`);
+      return;
+    }
+    const check = await visionCheck(item, dl.buf, dl.mediaType);
+    /*
+      NO VERDICT ≠ FAIL (the 2026-07-12 out-of-credits lesson: the first
+      dry-run printed 60 "WOULD CLEAR" lines that were 60 http_400s — a
+      live run would have wiped photos on API errors). An apiError KEEPS
+      the photo, and credit exhaustion / persistent errors stop the whole
+      pass instead of spending hours judging nothing.
+    */
+    if (check.apiError) {
+      stats.retry += 1;
+      apiErrorStreak += 1;
+      if (check.creditsExhausted || apiErrorStreak >= 8) {
+        abort = true;
+        console.log(
+          `${tag} — ${check.creditsExhausted ? "ANTHROPIC CREDITS EXHAUSTED" : "vision API failing repeatedly"} ` +
+            `— stopping. Nothing is cleared on errors; add credits and re-run.`,
+        );
+        return;
+      }
+      console.log(`${tag} — vision unavailable (${check.reason}) — kept, re-run to retry`);
+      return;
+    }
+    apiErrorStreak = 0;
+    if (check.pass && check.cleanBackground) {
+      stats.kept += 1;
+      return;
+    }
+    const verdict = !check.pass ? `rejected: ${check.reason}` : "busy/ad background";
+    if (DRY_RUN) {
+      stats.cleared += 1;
+      console.log(`${tag} — WOULD CLEAR (${verdict})`);
+      return;
+    }
+    if (await clearCodeRows(item.code)) {
+      stats.cleared += 1;
+      console.log(`${tag} — ✗ cleared (${verdict})`);
+    } else {
+      stats.retry += 1;
+    }
+  }
+
+  const queue = [...targets];
+  const workers = Array.from({ length: CONCURRENCY }, async () => {
+    for (;;) {
+      if (abort) return;
+      const item = queue.shift();
+      if (!item) return;
+      try {
+        await regateItem(item);
+      } catch (e) {
+        stats.retry += 1;
+        console.log(`  ${item.code} — worker error: ${e?.message ?? e}`);
+      }
+      await sleep(150);
+    }
+  });
+  await Promise.all(workers);
+
+  console.log(
+    `[regate] done. kept=${stats.kept} cleared=${stats.cleared} retry=${stats.retry}`,
+  );
+  if (stats.cleared > 0 && !DRY_RUN) {
+    console.log(
+      `[regate] ${stats.cleared} code(s) back on the premium placeholder — ` +
+        `the next backfill run re-searches them through the tightened gate.`,
+    );
+  }
+}
+
 async function main() {
+  if (REGATE) return mainRegate();
   console.log(
     `[serper-img] mode=${DRY_RUN ? "DRY-RUN (no writes; queries still count)" : "WRITE"} ` +
       `limit=${LIMIT} concurrency=${CONCURRENCY} minSide=${MIN_SIDE} ` +
@@ -731,6 +941,26 @@ async function main() {
 
       if (VISION) {
         const check = await visionCheck(item, dl.buf, dl.mediaType);
+        /*
+          apiError = the gate couldn't judge (out of credits, 5xx, bad
+          key) — NOT a quality verdict. Credit exhaustion stops the whole
+          run: without a working gate every candidate "fails", so the
+          run would spend real Serper searches producing only noMatch
+          placeholders (exactly what the tail of the 7/12 evening run
+          did once the balance hit zero).
+        */
+        if (check.apiError) {
+          if (check.creditsExhausted) {
+            console.log(
+              `${tag} — ANTHROPIC CREDITS EXHAUSTED — stopping all workers ` +
+                `(searches without a gate are money for nothing; add credits and re-run).`,
+            );
+            abort = true;
+            return;
+          }
+          console.log(`${tag} — vision error (${check.reason}), trying next`);
+          continue;
+        }
         if (!check.pass) {
           console.log(`${tag} — vision rejected (${check.reason}), trying next`);
           continue;

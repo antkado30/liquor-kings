@@ -67,7 +67,7 @@ import {
   getOrderingRuleDisplay,
 } from "../lib/mlcc-ordering-rules";
 import { humanizeRunFailure } from "../lib/run-failure-human";
-import { nonGlassContainerSuffix } from "../lib/container-label";
+import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 import { REAL_SUBMISSION_WIRED } from "../config/submission";
 
 function money(n: number): string {
@@ -1045,7 +1045,8 @@ export function CartDrawer({
                                     the chip and the confirm modal.
                                   */}
                                   {size}
-                                  {nonGlassContainerSuffix(line.product.container)} · #
+                                  {nonGlassContainerSuffix(line.product.container)}
+                                  {packCountSuffix(line.product.pack_count)} · #
                                   {line.product.code}
                                 </div>
                                 <div className="drawer-line-controls">
@@ -2177,7 +2178,7 @@ function ValidateResultPanel({
                 {line.product.name}
                 {line.quantity ? ` × ${line.quantity}` : ""}
                 {line.product.bottle_size_label
-                  ? ` (${line.product.bottle_size_label}${nonGlassContainerSuffix(line.product.container)})`
+                  ? ` (${line.product.bottle_size_label}${nonGlassContainerSuffix(line.product.container)}${packCountSuffix(line.product.pack_count)})`
                   : ""}
               </li>
             ))}

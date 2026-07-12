@@ -36,3 +36,20 @@ export function nonGlassContainerSuffix(container: string | null | undefined): s
   if (!display || display === "Glass") return "";
   return ` · ${display}`;
 }
+
+/**
+ * Suffix for multi-bottle pack SKUs: " · 12-pack" when pack_count ≥ 2,
+ * else "" (a single bottle is the default — labeling it would be noise).
+ * Same contract as the container suffix: travels chip → cart line →
+ * confirm modal, because a 12-pack of minis and a single mini share a
+ * size and a material but are DIFFERENT orderable products with
+ * different prices and case rules. Unlabeled, they render as identical
+ * chips — which is exactly how Tito's 50 mL read as "the whole catalog
+ * is corrupted" on 2026-07-12. The data was right; the label under-told.
+ */
+export function packCountSuffix(packCount: number | null | undefined): string {
+  if (typeof packCount !== "number" || !Number.isFinite(packCount) || packCount < 2) {
+    return "";
+  }
+  return ` · ${packCount}-pack`;
+}

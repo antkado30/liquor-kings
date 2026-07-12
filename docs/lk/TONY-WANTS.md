@@ -701,6 +701,42 @@ Two distinct diseases, named:
    runbook). End state: consistent, size-exact, beautiful photos or the
    premium placeholder — nothing in between.
 
+**⏳ 2026-07-12 night — the strict gate had a HOLE, found on device at
+6,224 photos in.** Tony's Tito's walkthrough: ad tiles (bottle + slogan
+on white/colored backdrops — "GLUTEN-FREE VODKA", "GOES DOWN SMOOTH")
+passed the strict gate because the prompt policed the SCENE
+(shelves/hands/rooms) but never named MARKETING GRAPHICS. Shards paused
+mid-run (Ctrl+C ×4 — resume-safe by design). FIXED same night: (a) gate
+prompt now FAILS ad creatives outright (added text/slogans/promo
+graphics around the product ≠ product photo, even on white) and
+clean_background requires the product and NOTHING else; (b) new
+`--regate` mode re-judges every already-written serper photo against
+the current gate (~$0.002-0.01 each, no serper cost) and clears
+failures to the placeholder (`image_source='regate_cleared'`, refill-
+eligible, in_store rows untouchable). Sequence: spot dry-run regate →
+full regate → relaunch the 4 shards through the tightened gate.
+**Dry-run #1 (same night) caught two more:** (a) the Anthropic key ran
+OUT OF CREDITS — mid-evening the shards had been buying Serper searches
+that a dead gate auto-failed into placeholders; (b) a Fable bug: vision
+API errors printed as "WOULD CLEAR" — a live regate would have wiped
+photos on errors. Both fixed: `apiError` = no verdict (regate KEEPS the
+photo, backfill skips the candidate), and BOTH modes hard-stop on
+credit exhaustion or an 8-error streak. Law restated: **an error is
+never a verdict; uncertainty never deletes.** Blocked on: Tony topping
+up Anthropic credits, then re-running the dry-run.
+
+**✅ SAME NIGHT — the "corrupted multiples" weren't corruption: packs
+were unlabeled.** Tito's 50 mL showed three identical "50 ML · Glass"
+chips = single vs 4PK vs 12PK sleeves (different codes, prices, case
+rules) with pack_count extracted since 7/1 but never rendered. BUILT:
+`packCountSuffix` in container-label.ts rides the whole order path —
+size chip → cart line → confirm modal ("50 ML · Glass · 12-pack") —
+plus a last-resort `· #code` tiebreak when two chips still read
+identical (an ambiguous order control is a lie). types.ts documents
+pack_count. 6 new unit tests (54/54 green, tsc clean). Undeployed —
+rides the next batch. Polish-pass note: family-card "N sizes" badge
+counts pack variants as sizes; revisit with the nudge pass.
+
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
 
 - ✅ **CartDrawer premium overhaul** — the LAST core screen, built

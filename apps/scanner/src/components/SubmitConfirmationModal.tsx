@@ -30,7 +30,7 @@
  */
 import type { CartItem } from "../types";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
-import { nonGlassContainerSuffix } from "../lib/container-label";
+import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 
 type Props = {
   /** Cart lines the user is about to submit. */
@@ -167,7 +167,8 @@ export function SubmitConfirmationModal({
                         the user's own language.
                       */}
                       {line.product.bottle_size_label ?? "—"}
-                      {nonGlassContainerSuffix(line.product.container)} · Code{" "}
+                      {nonGlassContainerSuffix(line.product.container)}
+                      {packCountSuffix(line.product.pack_count)} · Code{" "}
                       {line.product.code} · ADA {line.product.ada_number}
                     </div>
                   </div>
