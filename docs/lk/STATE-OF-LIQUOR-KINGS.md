@@ -65,10 +65,16 @@ dinner. Postmortem complete 2026-07-03 from fly logs — ROOT CAUSE FOUND:
    at payload_snapshot.metadata, not a column — silent skip until 2026-07-08
    fix `edd5454`.) Known cosmetic: the duplicate pre-validate run pushes a
    second banner — dies when the run-dedupe want ships.
-8. ℹ️ **Census correction:** Sentry is NOT a placeholder — logs show it
-   initializes in prod (real DSN). But it's not instrumenting express + release
-   is "unknown". Partially wired; finish it. Still wouldn't have caught the
-   white-screen (that's what #6 is for).
+8. ✅ **Sentry — FINISHED 2026-07-11.** Census note was half-stale: express
+   error capture was ALREADY wired (`Sentry.setupExpressErrorHandler(app)`
+   at the tail of app.js) and index.js inits Sentry BEFORE dynamically
+   importing the app (v8 auto-instrumentation load order correct). The
+   real gap was release="unknown": fixed — both Dockerfiles take a
+   `GIT_SHA` build arg → `SENTRY_RELEASE`, and both deploy scripts pass
+   `$(git rev-parse --short HEAD)`. Every API + worker error is now
+   attributable to the exact commit that shipped it. Proof = next
+   deploy's boot log reads `release <sha>`. (Still wouldn't catch a dead
+   machine — that's #6 UptimeRobot's job, live since 7/5.)
 
 These ARE the product's core promise ("never silent, never a mystery, never a
 wait"). They outrank every feature below.

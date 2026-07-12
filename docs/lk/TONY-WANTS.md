@@ -127,8 +127,16 @@ scale/onboarding lever.
 — a CLI that bulk-resolves an order list against prod (runs on Tony's Mac).
 Proves the matching logic; becomes the core of the `resolve_order_list` tool.
 
-Status: ⏳ bugs #1 + #2 are freeze-compatible hardening; the verify + add-to-cart
-UI is a feature — sequencing vs the 3-order mandate is Tony's call.
+Status: ✅ **BUILT (confirmed in code 2026-07-11 — this doc had gone stale):**
+bug #1 fixed (conversation history threaded via sanitizeHistory), bug #2
+fixed (`resolve_bottles` assistant tool — up to 60 lines in ONE call
+through the deterministic resolver, size-aware + flavor-penalized), PLUS
+the verify/add-to-cart UI exists (BulkAddSheet + ResolvedOrderCard +
+POST /assistant/resolve-order) and the system prompt routes photographed
+lists into the bulk tool. **PROVEN IN THE WILD 7/9** (photo of mom's
+handwritten list → "mostly everything correct"). Remaining work is
+resolver-scoring tuning, gated on real evidence: collect the exact
+miss-list on the next order day before touching scoring.
 
 **⭐ PROVEN IN THE WILD 2026-07-09 (order day):** Tony photographed his mom's
 handwritten weekly order → sent the picture to the assistant → it resolved

@@ -42,6 +42,14 @@ RUN VITE_SENTRY_DSN="$VITE_SENTRY_DSN_SCANNER" npm run build:scanner
 # ─── Stage 2: slim production runtime (NO Chromium) ───────────────────────
 FROM node:22-bookworm-slim AS production
 
+# Sentry release tag (2026-07-11, census #8): the deploy script passes the
+# git short SHA as a build arg; sentry.js prefers SENTRY_RELEASE over its
+# git-shell fallback (which can't work in the image — no git). Errors are
+# now attributable to the exact commit that shipped them. Default "" keeps
+# manual `fly deploy` runs working (release falls back to "unknown").
+ARG GIT_SHA=""
+ENV SENTRY_RELEASE=$GIT_SHA
+
 ENV NODE_ENV=production
 ENV PORT=8080
 # The API never launches a browser; skip Playwright's browser download so the
