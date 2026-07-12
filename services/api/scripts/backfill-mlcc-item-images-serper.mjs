@@ -281,22 +281,52 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── Candidate loading: missing image, active, most-scanned first ────────────
 async function loadCandidates() {
-  let q = supabase
-    .from("mlcc_items")
-    .select("code, name, category, bottle_size_ml, bottle_size_label, scan_count")
-    .eq("is_active", true);
-  // --force (single-code only) re-checks a SKU that already has an image —
-  // used when iterating on quality for one bottle.
-  if (!FORCE) q = q.is("image_url", null);
-  // Never re-fill a code a store user reported as wrong ("wrong photo?"
-  // flag, 2026-06-10) — those wait for in-store capture or manual curation.
-  if (!FORCE) q = q.or("image_source.is.null,image_source.neq.reported_wrong");
-  if (SINGLE_CODE) q = q.eq("code", SINGLE_CODE);
-  q = q.order("scan_count", { ascending: false, nullsFirst: false }).limit(LIMIT * 3);
-  const { data, error } = await q;
-  if (error) throw error;
+  // Single-code path (spot-checks / --force quality iteration): one row,
+  // no paging needed — behavior identical to the original.
+  if (SINGLE_CODE) {
+    let q = supabase
+      .from("mlcc_items")
+      .select("code, name, category, bottle_size_ml, bottle_size_label, scan_count")
+      .eq("is_active", true)
+      .eq("code", SINGLE_CODE);
+    if (!FORCE) q = q.is("image_url", null);
+    if (!FORCE) q = q.or("image_source.is.null,image_source.neq.reported_wrong");
+    const { data, error } = await q.limit(10);
+    if (error) throw error;
+    const byCode = new Map();
+    for (const it of data ?? []) if (!byCode.has(it.code)) byCode.set(it.code, it);
+    return [...byCode.values()].slice(0, LIMIT);
+  }
+
+  /*
+    PAGE past PostgREST's silent 1000-row response cap (2026-07-12 —
+    the THIRD encounter with this scar: the 7/4 productId backfill, the
+    7/11 census one-liner, and this script's first strict run, which was
+    asked for 14,000 candidates and silently got exactly 1,000). Same
+    fix as backfill-milo-product-ids.mjs: walk fixed .range() windows
+    until a short page or enough distinct codes.
+
+    The secondary .order("code") is load-bearing: scan_count is 0 for
+    most of the catalog, and paging windows over a non-deterministic
+    tie order can skip or duplicate rows between pages. The tiebreak
+    makes pagination exact.
+  */
+  const PAGE_SIZE = 1000;
   const byCode = new Map();
-  for (const it of data ?? []) if (!byCode.has(it.code)) byCode.set(it.code, it);
+  for (let from = 0; byCode.size < LIMIT; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("mlcc_items")
+      .select("code, name, category, bottle_size_ml, bottle_size_label, scan_count")
+      .eq("is_active", true)
+      .is("image_url", null)
+      .or("image_source.is.null,image_source.neq.reported_wrong")
+      .order("scan_count", { ascending: false, nullsFirst: false })
+      .order("code", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const it of data ?? []) if (!byCode.has(it.code)) byCode.set(it.code, it);
+    if (!data || data.length < PAGE_SIZE) break; // catalog exhausted
+  }
   return [...byCode.values()].slice(0, LIMIT);
 }
 

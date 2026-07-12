@@ -61,6 +61,16 @@ if broken, cost real money, real trust, or a real order.
    PLAIN — he is not technical.
 10. **One small thing at a time when he's overwhelmed.** Take the decision-weight
     off him — deciding what's next is Fable's job, not his.
+11. **ONE WRITER IN THE REPO AT A TIME (learned 7/11 the spooky way).** Exactly
+    one agent session holds write access to the Liquor Kings folder/repo at
+    once. Tony's kado automation Claude had the folder connected and made
+    unattributed edits at 11:05pm — competent and benign, but unattributed
+    writes triggered a full zero-trust quarantine (evidence file, tree
+    restore, near key-rotation) before the writer was identified. Other
+    agents/projects get READ access at most. Any unexplained diff in the
+    tree = quarantine first (save the diff outside the repo, `git checkout
+    --` the files), identify the writer second, and only rotate keys if the
+    writer can't be placed inside Tony's own trust domain.
 
 ## 3. QUALITY BAR — the product standard (the moat is trust)
 
