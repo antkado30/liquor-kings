@@ -12,5 +12,8 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     include: ["src/**/*.test.{ts,tsx}"],
+    // Stubs jsdom's not-implemented window APIs (scrollTo) so unmount
+    // cleanups don't spew stderr noise — see src/test/setup.ts.
+    setupFiles: ["src/test/setup.ts"],
   },
 });
