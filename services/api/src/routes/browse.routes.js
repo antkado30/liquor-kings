@@ -47,6 +47,107 @@ const MAX_LIMIT = 60;
  * Response:
  *   { ok, products: MlccProduct[], nextCursor: string | null, total: number | null }
  */
+/**
+ * GET /catalog/browse/families — family-first catalog scrolling
+ * (2026-07-12, Tony: family cards "should be everywhere").
+ *
+ * One card per product line via the browse_families RPC (migration
+ * 20260712170000): same filters as /browse (minus q and bottle_size_ml —
+ * search uses /items/grouped, and a size filter means the user wants
+ * specific bottles, so the client stays flat for both), same sort names
+ * mapped to family-level aggregates, offset pagination over a
+ * deterministic order.
+ *
+ * FALLBACK CONTRACT: if the RPC doesn't exist yet (migration not applied
+ * — valid deploy order), this returns ok:false error:"rpc_missing" and
+ * the client silently keeps the flat grid. Never a dead Catalog tab.
+ *
+ * Response: { ok, groups: [...], hasMore: boolean }
+ */
+router.get("/browse/families", async (req, res) => {
+  const storeId = req.store_id;
+  if (!storeId) {
+    return res
+      .status(403)
+      .json({ ok: false, error: "Store context not resolved" });
+  }
+  const supabase = supabaseDefault;
+
+  const rawLimit = Number.parseInt(String(req.query.limit ?? ""), 10);
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(MAX_LIMIT, rawLimit)
+      : DEFAULT_LIMIT;
+  const rawOffset = Number.parseInt(String(req.query.offset ?? ""), 10);
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+
+  const category =
+    typeof req.query.category === "string" && req.query.category.trim()
+      ? req.query.category.trim()
+      : null;
+  const adaNumber =
+    typeof req.query.ada_number === "string" && req.query.ada_number.trim()
+      ? req.query.ada_number.trim()
+      : null;
+  const minPrice = Number.parseFloat(String(req.query.min_price ?? ""));
+  const maxPrice = Number.parseFloat(String(req.query.max_price ?? ""));
+  const minProof = Number.parseFloat(String(req.query.min_proof ?? ""));
+  const maxProof = Number.parseFloat(String(req.query.max_proof ?? ""));
+  const newOnly = req.query.new_only === "1" || req.query.new_only === "true";
+  const sortRaw = String(req.query.sort ?? "name");
+  const SORTS = new Set(["price_asc", "price_desc", "newest", "proof_asc", "proof_desc"]);
+  // "name" (the client's default) maps to the RPC's featured ordering —
+  // same photographed-first behavior the flat grid's default has.
+  const sort = SORTS.has(sortRaw) ? sortRaw : "featured";
+
+  // Ask for one extra card — its presence answers hasMore without a
+  // count scan (the same reason /browse dropped count:"exact").
+  const { data, error } = await supabase.rpc("browse_families", {
+    p_category: category,
+    p_ada_number: adaNumber,
+    p_min_price: Number.isFinite(minPrice) ? minPrice : null,
+    p_max_price: Number.isFinite(maxPrice) ? maxPrice : null,
+    p_min_proof: Number.isFinite(minProof) ? minProof : null,
+    p_max_proof: Number.isFinite(maxProof) ? maxProof : null,
+    p_new_only: newOnly,
+    p_sort: sort,
+    p_limit: limit + 1,
+    p_offset: offset,
+  });
+
+  if (error) {
+    // Function missing = migration not applied yet. Honest signal, quiet
+    // client fallback to the flat grid — never a dead tab.
+    const missing =
+      error.code === "42883" ||
+      error.code === "PGRST202" ||
+      /could not find the function|does not exist/i.test(error.message ?? "");
+    if (missing) {
+      return res.json({ ok: false, error: "rpc_missing" });
+    }
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+
+  const all = Array.isArray(data) ? data : [];
+  const hasMore = all.length > limit;
+  /*
+    Same snake_case → camelCase image aliasing the flat /browse response
+    does — the scanner's MlccProduct type and BrowseCardImage read
+    imageUrl/imageThumbUrl.
+  */
+  const groups = all.slice(0, limit).map((g) => ({
+    ...g,
+    representative: g?.representative
+      ? {
+          ...g.representative,
+          imageUrl: g.representative.image_url ?? null,
+          imageThumbUrl: g.representative.image_thumb_url ?? null,
+        }
+      : null,
+  }));
+  return res.json({ ok: true, groups, hasMore });
+});
+
 router.get("/browse", async (req, res) => {
   const storeId = req.store_id;
   if (!storeId) {

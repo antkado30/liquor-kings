@@ -650,10 +650,15 @@ behind `GROUPED_SEARCH_ENABLED` (flat/fuzzy fallback kept; UPC-mapping
 mode always exact-SKU flat). **Scope note: grouped cards live in the
 SCAN-page search only in this pass — Browse/Catalog kept its flat grid.**
 
-**⏳ NEW 2026-07-11 (Tony's first live look — he searched from the
-Catalog tab and got the flat grid):** grouped family cards must cover
-EVERYWHERE search happens — **Browse/Catalog included**, same family_key
-truth, same tap-through to the size tree. Next build on this thread.
+**✅ BUILT 2026-07-11 (Catalog search) + 2026-07-12 (full family-first
+SCROLLING):** grouped family cards now cover everywhere — Catalog search
+groups like Scan search, AND pure Catalog scrolling browses the whole
+~9.8k-family catalog as one card per product line (browse_families RPC,
+migration `20260712170000`; filters + sorts mapped to family aggregates;
+offset pagination; flat grid remains the silent fallback if the RPC is
+missing and behind the `FAMILY_BROWSE_ENABLED` flag). Size filter and
+UPC-mapping stay flat by design (exact-bottle intents). Device proof
+pending deploy.
 
 **⏳ NEW 2026-07-11 (same look):** "we gotta do a redesign for the
 pictures and make sure everything is 100% accurate" — the catalog/Browse

@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  browseFamilies,
   browseProducts,
   getBrowseFacets,
   type BrowseFacets,
@@ -40,6 +41,15 @@ function money(n: number | null | undefined): string {
     currency: "USD",
   }).format(Number(n));
 }
+
+/*
+  Family-first scrolling kill switch (2026-07-12, plan §safety). ON: the
+  Catalog tab with no search and no size filter browses the whole catalog
+  as one card per product line (browse_families RPC). Flip to false to
+  restore flat scrolling everywhere with zero other changes — the flat
+  grid also takes over automatically if the RPC/migration is missing.
+*/
+const FAMILY_BROWSE_ENABLED = true;
 
 const SORT_OPTIONS: Array<{ value: BrowseSort; sheet: string; chip: string }> = [
   { value: "name", sheet: "Featured", chip: "Sort" },
@@ -110,17 +120,70 @@ export function BrowsePage() {
   const groups = groupedMode ? (groupsRes.data?.groups ?? []) : [];
   const showGroups = groupedMode && groups.length > 0;
 
+  /*
+    Family-first SCROLLING (2026-07-12 — Tony: family cards "should be
+    everywhere"). With NO search typed and NO size filter, the Catalog
+    tab now browses the whole catalog as one card per product line,
+    served by the browse_families RPC with the active filters + sort
+    mapped to family-level aggregates, offset-paginated.
+
+    Fallbacks, all silent: RPC missing (migration not applied — valid
+    deploy order), fetch error, or zero results → the flat grid takes
+    over. Never a dead tab. Flip FAMILY_BROWSE_ENABLED to false to
+    restore flat scrolling everywhere with zero other changes.
+  */
+  const familyScrollMode =
+    FAMILY_BROWSE_ENABLED && !groupedMode && filters.bottle_size_ml == null;
+  const famKey = familyScrollMode
+    ? `browse:families:${storeId}:${JSON.stringify({ filters, sort })}`
+    : null;
+  const famRes = useCachedResource<{
+    groups: FamilyGroup[];
+    hasMore: boolean;
+    nextOffset: number;
+    unavailable?: boolean;
+  }>(famKey, async () => {
+    const r = await browseFamilies({
+      filters: {
+        category: filters.category ?? null,
+        ada_number: filters.ada_number ?? null,
+        min_price: filters.min_price ?? null,
+        max_price: filters.max_price ?? null,
+        min_proof: filters.min_proof ?? null,
+        max_proof: filters.max_proof ?? null,
+      },
+      sort,
+      limit: 30,
+      offset: 0,
+    });
+    if (!r.ok) {
+      if (r.error === "rpc_missing") {
+        // Migration not applied yet — mark unavailable so the flat grid
+        // takes over quietly (cached, so we don't re-ask every render).
+        return { groups: [], hasMore: false, nextOffset: 0, unavailable: true };
+      }
+      throw new Error(r.error);
+    }
+    return { groups: r.groups, hasMore: r.hasMore, nextOffset: 30 };
+  });
+  const famGroups = familyScrollMode ? (famRes.data?.groups ?? []) : [];
+  const showFamilyScroll =
+    familyScrollMode && famRes.data != null && !famRes.data.unavailable && famGroups.length > 0;
+  const [famLoadingMore, setFamLoadingMore] = useState(false);
+
   // Product list — cached per (filters + sort + query) combo so flipping
   // filters back and forth, or returning to the Catalog tab, is instant.
   // DISABLED (null key) while family cards are showing or still loading —
-  // it only fetches flat results when grouping is off, or as the fuzzy
-  // fallback once a grouped search comes back empty.
-  // Fail toward FLAT: a grouped-fetch error must never leave the search
-  // dead — the flat list (with its fuzzy fallback) takes over.
-  const flatListActive =
-    !groupedMode ||
-    groupsRes.error != null ||
-    (groupsRes.data != null && groupsRes.data.groups.length === 0);
+  // it only fetches flat results when grouping is off, or as the
+  // fallback once a grouped search / family scroll comes back empty,
+  // errored, or unavailable. Fail toward FLAT: never a dead tab.
+  const flatListActive = groupedMode
+    ? groupsRes.error != null ||
+      (groupsRes.data != null && groupsRes.data.groups.length === 0)
+    : familyScrollMode
+      ? famRes.error != null ||
+        (famRes.data != null && (famRes.data.unavailable === true || famRes.data.groups.length === 0))
+      : true;
   const listKey = flatListActive
     ? `browse:list:${storeId}:${JSON.stringify({ filters, sort, query })}`
     : null;
@@ -141,7 +204,46 @@ export function BrowsePage() {
   const cursor = flatListActive ? (listRes.data?.cursor ?? null) : null;
   const loading = groupedMode
     ? groupsRes.loading || (flatListActive && listRes.loading)
-    : listRes.loading;
+    : familyScrollMode
+      ? famRes.loading || (flatListActive && listRes.loading)
+      : listRes.loading;
+
+  /*
+    "Load more" for family scrolling: fetch the next offset window and
+    append into the cached blob so the longer list survives a tab switch
+    (same pattern as the flat loadMore below).
+  */
+  const famLoadMore = useCallback(async () => {
+    const cur = famRes.data;
+    if (!cur || famLoadingMore || !cur.hasMore) return;
+    setFamLoadingMore(true);
+    try {
+      const r = await browseFamilies({
+        filters: {
+          category: filters.category ?? null,
+          ada_number: filters.ada_number ?? null,
+          min_price: filters.min_price ?? null,
+          max_price: filters.max_price ?? null,
+          min_proof: filters.min_proof ?? null,
+          max_proof: filters.max_proof ?? null,
+        },
+        sort,
+        limit: 30,
+        offset: cur.nextOffset,
+      });
+      if (r.ok) {
+        famRes.mutate({
+          groups: [...cur.groups, ...r.groups],
+          hasMore: r.hasMore,
+          nextOffset: cur.nextOffset + 30,
+        });
+      } else {
+        setToast("Couldn't load more families. Check your connection and try again.");
+      }
+    } finally {
+      setFamLoadingMore(false);
+    }
+  }, [famRes, famLoadingMore, filters, sort]);
   const error = listRes.error
     ? listRes.error instanceof Error
       ? listRes.error.message
@@ -384,7 +486,7 @@ export function BrowsePage() {
         </p>
       ) : null}
 
-      {!loading && !showGroups && products.length === 0 && !error ? (
+      {!loading && !showGroups && !showFamilyScroll && products.length === 0 && !error ? (
         <p className="muted small" style={{ padding: 24, textAlign: "center" }}>
           No bottles match these filters. Clear filters or try a different
           search.
@@ -392,13 +494,14 @@ export function BrowsePage() {
       ) : null}
 
       {/*
-        Family cards (2026-07-11 pt.2): one card per product line when a
-        search is typed — same family_key truth as the scan-page search.
-        Tap opens the ProductCard tree at the representative's code.
+        Family cards — one card per product line, two sources:
+        search results grouped by family (2026-07-11) and full-catalog
+        family SCROLLING (2026-07-12). Same markup, same truth; tap
+        opens the ProductCard tree at the representative's code.
       */}
-      {showGroups ? (
+      {showGroups || showFamilyScroll ? (
         <div className="browse-grid">
-          {groups.map((g) => {
+          {(showGroups ? groups : famGroups).map((g) => {
             const rep = g.representative;
             const singleSize =
               rep.bottle_size_label ?? `${rep.bottle_size_ml ?? "?"} mL`;
@@ -430,6 +533,18 @@ export function BrowsePage() {
             );
           })}
         </div>
+      ) : null}
+
+      {showFamilyScroll && famRes.data?.hasMore ? (
+        <button
+          type="button"
+          className="btn secondary btn-block"
+          onClick={() => void famLoadMore()}
+          disabled={famLoadingMore}
+          style={{ marginTop: 12 }}
+        >
+          {famLoadingMore ? "Loading…" : "Load more"}
+        </button>
       ) : null}
 
       <div className="browse-grid">
