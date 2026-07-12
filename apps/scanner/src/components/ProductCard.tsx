@@ -74,23 +74,37 @@ export function ProductCard({
         canonical image for this code (image_source='in_store').
       - "Wrong photo?": clears a lying image NOW (placeholder renders)
         and quarantines the code from backfill re-fills.
-    localPhotoUrl overrides the catalog image after a successful upload;
-    photoCleared forces the placeholder after a successful report.
+
+    KEYED BY CODE (2026-07-11, photo-truth mandate): these are per-CODE
+    facts, but they used to be single values — snap the pint, switch to
+    the liter, and the pint's fresh photo (or a cleared state) leaked
+    onto the liter. Keying by code kills the leak AND the mid-upload
+    race: an upload that finishes after the user switched sizes stamps
+    the code it was taken FOR, never whatever is selected when it lands.
   */
-  const [localPhotoUrl, setLocalPhotoUrl] = useState<string | null>(null);
-  const [photoCleared, setPhotoCleared] = useState(false);
+  const [localPhotoByCode, setLocalPhotoByCode] = useState<Record<string, string>>({});
+  const [photoClearedCodes, setPhotoClearedCodes] = useState<Set<string>>(new Set());
   const [photoBusy, setPhotoBusy] = useState<"upload" | "report" | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   const handlePhotoFile = async (file: File | null) => {
     if (!file || photoBusy) return;
+    // Capture the code NOW — the user can switch sizes while the upload
+    // runs; the result must apply to the bottle it was taken FOR.
+    const codeAtCapture = selectedProduct.code;
     setPhotoBusy("upload");
     try {
       const dataUri = await downscaleImageFile(file, 1024, 0.85);
-      const r = await uploadBottlePhoto(selectedProduct.code, dataUri);
+      const r = await uploadBottlePhoto(codeAtCapture, dataUri);
       if (r.ok) {
-        setLocalPhotoUrl(`${r.imageUrl}?v=${Date.now()}`);
-        setPhotoCleared(false);
+        const url = `${r.imageUrl}?v=${Date.now()}`;
+        setLocalPhotoByCode((prev) => ({ ...prev, [codeAtCapture]: url }));
+        setPhotoClearedCodes((prev) => {
+          if (!prev.has(codeAtCapture)) return prev;
+          const next = new Set(prev);
+          next.delete(codeAtCapture);
+          return next;
+        });
         setImageFailed(false);
         onToast?.("Photo saved — this is now the real bottle for this code.");
       } else {
@@ -108,12 +122,18 @@ export function ProductCard({
 
   const handleReportWrongPhoto = async () => {
     if (photoBusy) return;
+    const codeAtReport = selectedProduct.code;
     setPhotoBusy("report");
-    const r = await reportWrongPhoto(selectedProduct.code);
+    const r = await reportWrongPhoto(codeAtReport);
     setPhotoBusy(null);
     if (r.ok) {
-      setPhotoCleared(true);
-      setLocalPhotoUrl(null);
+      setPhotoClearedCodes((prev) => new Set(prev).add(codeAtReport));
+      setLocalPhotoByCode((prev) => {
+        if (!(codeAtReport in prev)) return prev;
+        const next = { ...prev };
+        delete next[codeAtReport];
+        return next;
+      });
       onToast?.("Photo removed. Snap the real bottle when you have it.");
     } else {
       onToast?.(`Couldn't report the photo (${r.error}). Try again.`);
@@ -325,12 +345,24 @@ export function ProductCard({
       latestPriceBookDate,
     ],
   );
+  /*
+    PHOTO TRUTH (2026-07-11, Tony's mandate — "if I press a litre it'll
+    be a pint picture… this goes against everything we stand for"):
+    the image shown is the SELECTED size's OWN photo, or the honest
+    placeholder. The previous code borrowed the first photo found
+    anywhere in the family — so whichever sibling had a photo silently
+    represented every size. A photo is an assertion about THIS exact
+    bottle; a sibling's photo is a lie about it. Switching size chips
+    now switches the image with them (or drops to the placeholder when
+    that size has no photo yet — which is the truth).
+  */
+  const selectedImageUrl =
+    typeof selectedProduct.imageUrl === "string" && selectedProduct.imageUrl.trim() !== ""
+      ? selectedProduct.imageUrl
+      : null;
   const cardImageUrl =
-    localPhotoUrl ??
-    ((!imageFailed &&
-      !photoCleared &&
-      (family.sizes.map((s) => s.imageUrl).find((u) => u && String(u).trim()) ??
-        selectedProduct.imageUrl)) ||
+    localPhotoByCode[selectedProduct.code] ??
+    ((!imageFailed && !photoClearedCodes.has(selectedProduct.code) && selectedImageUrl) ||
       null);
 
   return (
@@ -392,7 +424,7 @@ export function ProductCard({
                   : "Snap the real bottle"}
             </span>
           </button>
-          {cardImageUrl && !localPhotoUrl ? (
+          {cardImageUrl && !localPhotoByCode[selectedProduct.code] ? (
             <button
               type="button"
               className="pc-photo-action pc-photo-action--danger"

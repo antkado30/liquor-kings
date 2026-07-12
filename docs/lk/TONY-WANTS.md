@@ -674,6 +674,28 @@ MLCC names like "TITO'S HANDMADE VODK/50ML TIT0 W/" read ugly — prettify
 without lying), typography/spacing to the premium bar. Function first
 (done), then make it beautiful. Sequencing: after Thu 7/16 order day.
 
+## 🔥🔥🔥 PHOTO TRUTH MANDATE — sharpened (Tony, 2026-07-11 night, angry and right)
+
+> "If I press a litre it'll be a pint picture… when I'm switching between
+> bottles I want the pictures to switch as well… literally every single
+> picture in the database is inconsistent, wrong, ugly, incorrect, or just
+> mediocre. This goes against everything we stand for."
+
+Two distinct diseases, named:
+1. **THE STRUCTURAL LIE (P0, code):** the ProductCard image does not
+   track the SELECTED size. Selecting the liter can show the pint's
+   photo. RULE: the photo shown is the selected code's OWN photo, or the
+   honest placeholder — a photo is NEVER borrowed from a sibling size.
+   Size chips switching must switch the image with them, instantly.
+2. **THE CORPUS (data):** the existing photo set (~2,700 pre-serper +
+   tonight's 31) is inconsistent in quality, some size-wrong, mixed
+   backgrounds, mediocre. Verdict pending a source-by-source audit
+   (image_source distribution → decide per source: keep / wipe / re-gate).
+   **The full Serper run ($33–122) is ON HOLD until the standard is
+   nailed** — spot-batch of 40 stays (rollback one-liner ready in the
+   runbook). End state: consistent, size-exact, beautiful photos or the
+   premium placeholder — nothing in between.
+
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
 
 - ✅ **CartDrawer premium overhaul** — the LAST core screen, built
