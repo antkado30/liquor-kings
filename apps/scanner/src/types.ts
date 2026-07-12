@@ -73,6 +73,12 @@ export interface FamilyGroup {
   baseName: string;
   /** Distinct codes in the family = number of size chips the tree will show. */
   sizeCount: number;
+  /**
+   * Distinct size labels ordered small→large (e.g. ["375 mL","750 mL",…])
+   * for the catalog card's size chips (2026-07-12 design pass). Optional:
+   * older payloads omit it; the card falls back to the sizeCount badge.
+   */
+  sizes?: string[];
   minPrice: number | null;
   maxPrice: number | null;
   /** Family spans glass + plastic — the card hints it, the chips prove it. */

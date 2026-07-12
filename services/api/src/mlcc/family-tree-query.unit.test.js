@@ -230,6 +230,28 @@ describe("groupRowsIntoFamilies (grouped search, plan §C)", () => {
     expect(g.isCombo).toBe(false);
   });
 
+  it("emits distinct size labels ordered small→large for the card chips (2026-07-12)", () => {
+    const rows = [
+      makeRow({ code: "1", family_key: "K", bottle_size_ml: 1750, bottle_size_label: "1.75 L" }),
+      makeRow({ code: "2", family_key: "K", bottle_size_ml: 375, bottle_size_label: "375 mL" }),
+      makeRow({ code: "3", family_key: "K", bottle_size_ml: 750, bottle_size_label: "750 mL" }),
+      // duplicate 750 under a second ADA — must collapse to one chip
+      makeRow({ code: "4", family_key: "K", bottle_size_ml: 750, bottle_size_label: "750 mL", ada_number: "321" }),
+    ];
+    const g = groupRowsIntoFamilies(rows)[0];
+    expect(g.sizes).toEqual(["375 mL", "750 mL", "1.75 L"]);
+    expect(g.sizeCount).toBe(4); // distinct CODES, not distinct sizes
+  });
+
+  it("a combo card carries no size chips (its size is the pack, shown as the name)", () => {
+    const rows = [
+      makeRow({ code: "900", family_key: "X", is_combo: true, name: "X W/50ML", bottle_size_ml: 750 }),
+    ];
+    const g = groupRowsIntoFamilies(rows)[0];
+    expect(g.isCombo).toBe(true);
+    expect(g.sizes).toEqual([]);
+  });
+
   it("keeps relevance order between groups (first-seen order)", () => {
     const rows = [
       makeRow({ code: "1", family_key: "JACK DANIELS OLD 7" }),

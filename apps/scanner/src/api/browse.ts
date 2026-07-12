@@ -184,6 +184,9 @@ export async function browseFamilies(args: {
         typeof g.sizeCount === "number" && Number.isFinite(g.sizeCount)
           ? Math.max(1, Math.round(g.sizeCount))
           : 1,
+      sizes: Array.isArray(g.sizes)
+        ? (g.sizes.filter((s) => typeof s === "string" && s.trim() !== "") as string[])
+        : undefined,
       minPrice: typeof g.minPrice === "number" && Number.isFinite(g.minPrice) ? g.minPrice : null,
       maxPrice: typeof g.maxPrice === "number" && Number.isFinite(g.maxPrice) ? g.maxPrice : null,
       mixedContainers: g.mixedContainers === true,

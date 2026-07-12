@@ -494,21 +494,22 @@ export function BrowsePage() {
       ) : null}
 
       {/*
-        Family cards — one card per product line, two sources:
-        search results grouped by family (2026-07-11) and full-catalog
-        family SCROLLING (2026-07-12). Same markup, same truth; tap
-        opens the ProductCard tree at the representative's code.
+        Premium family cards (2026-07-12 design pass) — stacked full-width
+        rows with photo, size-count badge, real size chips, price range,
+        and glass/plastic signal. Two sources, same markup: search results
+        grouped by family (2026-07-11) and full-catalog family SCROLLING
+        (2026-07-12). Tap opens the ProductCard tree at the representative.
       */}
       {showGroups || showFamilyScroll ? (
-        <div className="browse-grid">
+        <div className="fam-list">
           {(showGroups ? groups : famGroups).map((g) => {
             const rep = g.representative;
-            const singleSize =
-              rep.bottle_size_label ?? `${rep.bottle_size_ml ?? "?"} mL`;
-            const meta =
-              g.sizeCount > 1
-                ? `${g.sizeCount} sizes${g.mixedContainers ? " · glass & plastic" : ""}`
-                : `${singleSize}${rep.ada_name ? ` · ${rep.ada_name}` : ""}`;
+            const multi = g.sizeCount > 1;
+            // Real size chips: first 3 labels + a "+N" overflow (Tony's
+            // 2026-07-12 pick). Falls back to nothing when the payload
+            // predates the sizes field — the badge still carries the count.
+            const sizeChips = (g.sizes ?? []).slice(0, 3);
+            const overflow = (g.sizes?.length ?? 0) - sizeChips.length;
             const price =
               g.minPrice != null && g.maxPrice != null && g.maxPrice > g.minPrice
                 ? `${money(g.minPrice)}–${money(g.maxPrice)}`
@@ -517,17 +518,47 @@ export function BrowsePage() {
               <button
                 key={`${g.familyKey || rep.code}|${g.category ?? ""}|${rep.code}`}
                 type="button"
-                className="browse-card"
+                className="fam-card"
                 onClick={() => void openProduct(rep)}
               >
-                <BrowseCardImage product={rep} />
-                <div className="browse-card__name">{g.baseName}</div>
-                <div className="browse-card__meta muted small">{meta}</div>
-                <div className="browse-card__bottom">
-                  <span className="browse-card__price">{price}</span>
-                  {rep.is_new_item ? (
-                    <span className="browse-card__new">NEW</span>
-                  ) : null}
+                <div className="fam-card__photo">
+                  <FamCardImage product={rep} />
+                  <span
+                    className={`fam-card__badge${multi ? "" : " fam-card__badge--single"}`}
+                  >
+                    {multi ? `${g.sizeCount} sizes` : "1 size"}
+                  </span>
+                </div>
+                <div className="fam-card__body">
+                  <div className="fam-card__name">{g.baseName}</div>
+                  <div className="fam-card__chips">
+                    {sizeChips.length > 0 ? (
+                      sizeChips.map((s) => (
+                        <span key={s} className="fam-chip">
+                          {s}
+                        </span>
+                      ))
+                    ) : g.category ? (
+                      <span className="fam-chip fam-chip--cat">{g.category}</span>
+                    ) : null}
+                    {overflow > 0 ? (
+                      <span className="fam-chip fam-chip--more">+{overflow}</span>
+                    ) : null}
+                    {sizeChips.length > 0 && !multi && g.category ? (
+                      <span className="fam-chip fam-chip--cat">{g.category}</span>
+                    ) : null}
+                  </div>
+                  <div className="fam-card__footer">
+                    <span className="fam-card__price">{price}</span>
+                    {g.mixedContainers ? (
+                      <span className="fam-card__material">
+                        <span className="fam-card__dot" aria-hidden />
+                        glass &amp; plastic
+                      </span>
+                    ) : rep.is_new_item ? (
+                      <span className="browse-card__new">NEW</span>
+                    ) : null}
+                  </div>
                 </div>
               </button>
             );
@@ -1036,5 +1067,34 @@ function BrowseCardImage({ product }: { product: MlccProduct }) {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Lean image for the premium family card (2026-07-12) — just the <img>
+ * or placeholder, no wrapper/gradient (the .fam-card__photo frame owns
+ * the surface). Same thumb-first + error-fallback logic as
+ * BrowseCardImage so behavior and the phone-overheating guard match.
+ */
+function FamCardImage({ product }: { product: MlccProduct }) {
+  const [errored, setErrored] = useState(false);
+  const url = product.imageThumbUrl ?? product.imageUrl;
+  if (url && !errored) {
+    return (
+      <img
+        src={url}
+        alt={product.name}
+        loading="lazy"
+        decoding="async"
+        onError={() => setErrored(true)}
+      />
+    );
+  }
+  return (
+    <PlaceholderBottle
+      tint={tintForCategory(product.category)}
+      name={product.name}
+      seed={product.id}
+    />
   );
 }

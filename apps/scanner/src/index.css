@@ -544,15 +544,19 @@ select {
     Full bottle visible (Tony, 2026-06-10): object-fit cover CROPPED tall
     bottles. contain letterboxes the whole bottle inside a white tile —
     matches the on-white catalog photo standard.
+    Premium framing (2026-07-12 design pass): larger, rounded 14px, on a
+    hairline-bordered white tile so the real photo reads as framed art,
+    consistent with the family card's photo frame.
   */
-  width: 150px;
-  height: 170px;
-  border-radius: 10px;
+  width: 168px;
+  height: 190px;
+  border-radius: 14px;
   object-fit: contain;
   background: #fff;
-  padding: 6px;
-  margin: 0 auto 12px;
+  padding: 8px;
+  margin: 4px auto 14px;
   display: block;
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
 }
 
 .product-card-flag-row {
@@ -772,17 +776,20 @@ select {
 .size-chip {
   flex: 0 0 auto;
   min-height: var(--touch);
-  padding: 0 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: var(--bg);
+  padding: 0 16px;
+  border-radius: 12px;
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-weight: 500;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
 .size-chip.active {
   border-color: var(--accent);
-  background: rgba(108, 99, 255, 0.2);
+  background: rgba(108, 99, 255, 0.22);
+  color: #ffffff;
 }
 
 .size-chip:active {
@@ -811,6 +818,9 @@ select {
 
 .price-accent {
   color: #c4b5fd;
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 /*
@@ -3115,6 +3125,138 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   border-radius: 4px;
   background: rgba(34, 197, 94, 0.18);
   color: #bbf7d0;
+}
+
+/* ─── Premium family cards (2026-07-12 design pass) ─────────────────────
+   Stacked full-width rows (C's layout), full information (B), premium
+   spacing + photo-forward feel (A). Used for family SEARCH results and
+   full-catalog family SCROLLING; the flat grid keeps .browse-grid. */
+.fam-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fam-card {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 13px;
+  border-radius: 14px;
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.fam-card:active {
+  background: rgba(108, 99, 255, 0.08);
+  border-color: rgba(108, 99, 255, 0.32);
+}
+
+.fam-card__photo {
+  position: relative;
+  width: 92px;
+  height: 104px;
+  flex-shrink: 0;
+  border-radius: 11px;
+  overflow: hidden;
+  background: #12121f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fam-card__photo img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.fam-card__badge {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: var(--accent);
+  color: #fff;
+  letter-spacing: 0.01em;
+}
+/* Singleton (1 size) badge is quieter — no purple shout for a lone bottle. */
+.fam-card__badge--single {
+  background: rgba(108, 99, 255, 0.18);
+  color: #c4b5fd;
+}
+
+.fam-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.fam-card__name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.fam-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 9px;
+}
+.fam-chip {
+  font-size: 0.68rem;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #c9c9e0;
+  white-space: nowrap;
+}
+.fam-chip--more {
+  color: var(--text-muted);
+}
+.fam-chip--cat {
+  background: rgba(124, 92, 255, 0.14);
+  color: #c9a5ff;
+}
+
+.fam-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 11px;
+}
+.fam-card__price {
+  font-weight: 700;
+  font-size: 1rem;
+  color: #c4b5fd;
+  font-variant-numeric: tabular-nums;
+}
+.fam-card__material {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.fam-card__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7fd1c0;
+  flex-shrink: 0;
 }
 
 /* Bottom-sheet picker for chip values + sort. */

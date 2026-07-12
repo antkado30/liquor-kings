@@ -196,6 +196,9 @@ export async function searchProductsGrouped(
         typeof g.sizeCount === "number" && Number.isFinite(g.sizeCount)
           ? Math.max(1, Math.round(g.sizeCount))
           : 1,
+      sizes: Array.isArray(g.sizes)
+        ? (g.sizes.filter((s) => typeof s === "string" && s.trim() !== "") as string[])
+        : undefined,
       minPrice:
         typeof g.minPrice === "number" && Number.isFinite(g.minPrice)
           ? g.minPrice

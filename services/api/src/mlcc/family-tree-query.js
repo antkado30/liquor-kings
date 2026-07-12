@@ -212,8 +212,19 @@ export function groupRowsIntoFamilies(rows) {
     const codes = new Set();
     let minPrice = null;
     let maxPrice = null;
+    // Distinct size labels, kept with their ml so we can order small→large
+    // for the catalog card chips (2026-07-12 design pass). Combos are
+    // singletons whose "size" is really the pack — no chips for them.
+    const sizeByLabel = new Map(); // label -> ml (for sort)
     for (const m of g.members) {
       codes.add(String(m?.code ?? "").trim());
+      if (!g.combo) {
+        const ml = typeof m?.bottle_size_ml === "number" ? m.bottle_size_ml : null;
+        const label =
+          (typeof m?.bottle_size_label === "string" && m.bottle_size_label.trim()) ||
+          (ml != null ? `${ml} ML` : "");
+        if (label && !sizeByLabel.has(label)) sizeByLabel.set(label, ml ?? Infinity);
+      }
       // Strict number check — Number(null) is 0 and 0 is "finite", so a
       // loose coercion would quietly turn a missing price into "$0.00"
       // on the card (caught by the unit suite 2026-07-11). A null price
@@ -224,6 +235,9 @@ export function groupRowsIntoFamilies(rows) {
         if (maxPrice === null || p > maxPrice) maxPrice = p;
       }
     }
+    const sizes = [...sizeByLabel.entries()]
+      .sort((a, b) => a[1] - b[1])
+      .map(([label]) => label);
     out.push({
       familyKey: g.key,
       category: String(rep?.category ?? "").trim() || null,
@@ -233,6 +247,7 @@ export function groupRowsIntoFamilies(rows) {
         ? String(rep?.name ?? "")
         : g.key || String(rep?.name ?? ""),
       sizeCount: codes.size,
+      sizes,
       minPrice,
       maxPrice,
       mixedContainers: g.combo ? false : familyHasMixedContainers(g.members),
