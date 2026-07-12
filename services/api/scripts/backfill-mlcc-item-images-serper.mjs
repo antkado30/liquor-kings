@@ -37,6 +37,10 @@
  *   --force              With --code only: re-check a SKU that already has
  *                        an image (iterating on quality for one bottle).
  *   --skip-vision        Skip the Claude vision pixel-check (NOT recommended).
+ *   --allow-busy-fallback=true  Accept correct-but-busy-background photos when
+ *                        no clean studio shot survives. OFF by default since
+ *                        2026-07-11 (photo-truth mandate): clean shot or
+ *                        premium placeholder, nothing in between.
  *
  * THE VISION GATE (added 2026-06-10 after the FRIS 80-vs-100-proof miss):
  *   Text matching can't see the photo. Claude (Haiku) inspects every
@@ -214,6 +218,23 @@ const CONCURRENCY = Math.min(
 const MIN_SIDE = Number.parseInt(argv["min-side"] ?? "300", 10) || 300;
 const VISION = argv["skip-vision"] !== "true";
 const FORCE = argv.force === "true" && SINGLE_CODE !== null; // re-check one code
+/*
+  STRICT BACKGROUND POLICY — the default (2026-07-11, photo-truth mandate).
+  Tony's verdict on the corpus that busy-background fallbacks produced:
+  "inconsistent, wrong, ugly, incorrect, or mediocre — this goes against
+  everything we stand for." From now on a photo is written ONLY when the
+  vision gate confirms a clean studio background; a correct bottle on a
+  busy background (shelves, hands, rooms, table scenes) is REJECTED and
+  the SKU keeps the premium placeholder. `--allow-busy-fallback=true`
+  restores the old coverage-over-beauty behavior deliberately — not
+  recommended, kept for experiments only.
+
+  (Attribution note: an equivalent change appeared in the tree tonight
+  from an unattributed writer and was quarantined per zero-trust —
+  evidence in UNATTRIBUTED-EDIT-2026-07-11.diff. THIS implementation is
+  mine, written and audited in-session.)
+*/
+const ALLOW_BUSY_FALLBACK = argv["allow-busy-fallback"] === "true";
 
 const SUPABASE_URL =
   process.env.LK_PROD_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -646,8 +667,15 @@ async function main() {
           continue;
         }
         if (!check.cleanBackground) {
-          if (!fallback) fallback = dl;
-          console.log(`${tag} — correct bottle but busy background, holding as fallback`);
+          if (ALLOW_BUSY_FALLBACK) {
+            if (!fallback) fallback = dl;
+            console.log(`${tag} — correct bottle but busy background, holding as fallback`);
+          } else {
+            // STRICT default (2026-07-11): clean studio shot or premium
+            // placeholder — a correct bottle on a messy background is
+            // still not good enough to represent the catalog.
+            console.log(`${tag} — correct bottle but busy background — strict mode, rejected`);
+          }
           continue;
         }
       }
@@ -657,7 +685,7 @@ async function main() {
       return;
     }
 
-    if (fallback) {
+    if (fallback && ALLOW_BUSY_FALLBACK) {
       const written = await writeImage(item, fallback, tag, " (busy-bg fallback)");
       if (written) stats.written += 1;
       return;

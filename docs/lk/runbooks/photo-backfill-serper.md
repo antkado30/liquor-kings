@@ -5,6 +5,23 @@ paste-ready; the only open item is the money decision. If the answer is
 "not now," cancel the Serper subscription instead — paying monthly for an
 unused key is the worst of both.
 
+**2026-07-11 late-night updates (census + mandate):**
+- **Exact source census: ALL 2,766 existing photos are
+  `serper_google_images`** — zero in-store, zero curated, zero from the
+  old UPC flows. A ~2,700-SKU Serper run happened in June that never made
+  the journal. One source means one clean decision: step 4's rollback
+  clears the entire corpus in one paste.
+- **STRICT BACKGROUND is now the script DEFAULT:** a correct bottle on a
+  busy background (shelves, hands, rooms) is REJECTED instead of written
+  as a fallback — clean studio shot or the premium placeholder, nothing
+  in between. Old behavior only via `--allow-busy-fallback=true` (not
+  recommended). Driven by Tony's photo-truth mandate: the busy-bg
+  fallbacks were most of the "ugly and inconsistent."
+- **Decision path (pending Tony's re-look on the fixed UI):** likely wipe
+  all 2,766 (step 4) → re-run everything under the strict gate →
+  placeholders stay wherever no clean shot exists → in-store captures
+  fill the rest with ground truth over time.
+
 **What it does:** fills `mlcc_items.image_url` with REAL bottle photos —
 Google Images via Serper.dev, pin-point text-verified (name tokens +
 size), then pixel-checked by Claude vision (wrong brand / wrong variant /
