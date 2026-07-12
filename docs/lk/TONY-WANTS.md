@@ -664,6 +664,16 @@ backfill once (vision-gated, ~$4-14 full catalog) or cancel it — plus
 the in-store photo truth layer already built. The accuracy bar stands:
 a wrong photo is worse than no photo.
 
+**⏳ NEW 2026-07-11 (after confirming grouped cards + labeled chips live
+on device):** Tony's verdict on the whole catalog surface — **"it works
+but it's not pretty. Everything has to be advanced and amazing in the
+end. For the time being we are on the right track."** → A dedicated
+CATALOG POLISH PASS goes on the books: family cards, Browse grid,
+ProductCard sheet, photo presentation, combo card titles (raw truncated
+MLCC names like "TITO'S HANDMADE VODK/50ML TIT0 W/" read ugly — prettify
+without lying), typography/spacing to the premium bar. Function first
+(done), then make it beautiful. Sequencing: after Thu 7/16 order day.
+
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
 
 - ✅ **CartDrawer premium overhaul** — the LAST core screen, built
