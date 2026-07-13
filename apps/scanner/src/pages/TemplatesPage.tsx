@@ -21,6 +21,7 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 import {
   archiveOrderTemplate,
   listOrderTemplates,
@@ -570,8 +571,13 @@ function EditTemplateModal({
                     <span className="tplpg-search-result__main">
                       <span className="tplpg-search-result__name">{p.name}</span>
                       <span className="tplpg-search-result__size">
+                        {/* material + pack (2026-07-12 class sweep): a
+                            template line becomes a future order line —
+                            same identity truth as the cart. */}
                         {p.bottle_size_label ??
                           (p.bottle_size_ml ? `${p.bottle_size_ml} mL` : "")}
+                        {nonGlassContainerSuffix(p.container)}
+                        {packCountSuffix(p.pack_count)}
                       </span>
                     </span>
                     <span className="tplpg-search-result__add" aria-hidden>

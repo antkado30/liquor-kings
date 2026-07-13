@@ -165,8 +165,11 @@ export function scoreCandidate(name, terms, prefer) {
 
 // Enough columns to build a valid cart line client-side (id/code/name/ada_number
 // are required by the cart; size/case/price drive liters, stepper, and cost).
+// container + pack_count (2026-07-12): identity truth for the verify card —
+// a 12-pack of minis and a single mini share size+material but are different
+// orderable products; the AI's verify screen must say which one it matched.
 const SELECT_COLS =
-  "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price";
+  "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price,container,pack_count";
 
 /**
  * Resolve one parsed order line to MLCC candidates.

@@ -24,6 +24,7 @@ import { SmartCards } from "../components/SmartCards";
 import { VerifyMlccBanner } from "../components/VerifyMlccBanner";
 import type { StoreVerificationMeta } from "../api/home";
 import { PlaceholderBottle, tintForCategory } from "../components/BottleArt";
+import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 import {
   IconCart,
   IconChevronRight,
@@ -560,9 +561,14 @@ export function ScannerPage() {
             const rep = g.representative;
             const singleSize =
               rep.bottle_size_label ?? `${rep.bottle_size_ml ?? ""} ML`;
+            // Distinct size LABELS when the payload has them — sizeCount is
+            // distinct codes and counts pack variants as "sizes" (the
+            // 2026-07-12 Tito's "12 sizes" lie). Same rule as the Catalog
+            // family cards.
+            const sizeN = g.sizes?.length || g.sizeCount;
             const meta =
-              g.sizeCount > 1
-                ? `${g.sizeCount} sizes${g.mixedContainers ? " · glass & plastic" : ""}`
+              sizeN > 1
+                ? `${sizeN} sizes${g.mixedContainers ? " · glass & plastic" : ""}`
                 : singleSize;
             const price =
               g.minPrice != null && g.maxPrice != null && g.maxPrice > g.minPrice
@@ -591,7 +597,9 @@ export function ScannerPage() {
       {search.results.length > 0 ? (
         <ul className="scanhm-results">
           {search.results.map((p) => {
-            const size = p.bottle_size_label ?? `${p.bottle_size_ml ?? ""} ML`;
+            // material + pack (2026-07-12 class sweep): three Tito's 50 mL
+            // rows must not read identical in the flat search list.
+            const size = `${p.bottle_size_label ?? `${p.bottle_size_ml ?? ""} ML`}${nonGlassContainerSuffix(p.container)}${packCountSuffix(p.pack_count)}`;
             return (
               <li key={p.id}>
                 <button
@@ -678,8 +686,7 @@ export function ScannerPage() {
             // and resets quantity to 1 internally. Dismissal is now
             // ONLY via the "Done" button (formerly ×) — gives the user
             // explicit control of when to move on to the next scan.
-            const sizeLabel =
-              product.bottle_size_label ?? `${product.bottle_size_ml ?? ""} mL`;
+            const sizeLabel = `${product.bottle_size_label ?? `${product.bottle_size_ml ?? ""} mL`}${nonGlassContainerSuffix(product.container)}${packCountSuffix(product.pack_count)}`;
             setToast(`Added ${quantity} × ${sizeLabel}`);
           }}
         />

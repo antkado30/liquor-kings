@@ -33,6 +33,7 @@ import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import { useCachedResource } from "../lib/swr";
 import { getCurrentStoreId } from "../lib/currentStore";
 import type { FamilyGroup, MlccProduct, ProductFamily } from "../types";
+import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 
 function money(n: number | null | undefined): string {
   if (n == null || Number.isNaN(Number(n))) return "—";
@@ -504,7 +505,16 @@ export function BrowsePage() {
         <div className="fam-list">
           {(showGroups ? groups : famGroups).map((g) => {
             const rep = g.representative;
-            const multi = g.sizeCount > 1;
+            /*
+              Badge truth (2026-07-12 Tito's audit): sizeCount is DISTINCT
+              CODES, which counts pack variants — Tito's read "12 sizes"
+              when it has ~4 actual sizes across 12 orderable variants.
+              The sizes[] list is already deduped by label, so its length
+              IS the size count; sizeCount stays as the fallback for
+              payloads that predate the field.
+            */
+            const sizeN = g.sizes?.length || g.sizeCount;
+            const multi = sizeN > 1;
             // Real size chips: first 3 labels + a "+N" overflow (Tony's
             // 2026-07-12 pick). Falls back to nothing when the payload
             // predates the sizes field — the badge still carries the count.
@@ -526,7 +536,7 @@ export function BrowsePage() {
                   <span
                     className={`fam-card__badge${multi ? "" : " fam-card__badge--single"}`}
                   >
-                    {multi ? `${g.sizeCount} sizes` : "1 size"}
+                    {multi ? `${sizeN} sizes` : "1 size"}
                   </span>
                 </div>
                 <div className="fam-card__body">
@@ -589,7 +599,11 @@ export function BrowsePage() {
             <BrowseCardImage product={p} />
             <div className="browse-card__name">{p.name}</div>
             <div className="browse-card__meta muted small">
+              {/* material + pack (2026-07-12 class sweep): flat cards must
+                  distinguish pack variants like the chips do. */}
               {p.bottle_size_label ?? `${p.bottle_size_ml ?? "?"} mL`}
+              {nonGlassContainerSuffix(p.container)}
+              {packCountSuffix(p.pack_count)}
               {p.ada_name ? ` · ${p.ada_name}` : ""}
             </div>
             <div className="browse-card__bottom">
@@ -929,8 +943,7 @@ export function BrowsePage() {
           }}
           onAddToCart={(product, quantity) => {
             cart.addItem(product, quantity);
-            const sizeLabel =
-              product.bottle_size_label ?? `${product.bottle_size_ml ?? ""} mL`;
+            const sizeLabel = `${product.bottle_size_label ?? `${product.bottle_size_ml ?? ""} mL`}${nonGlassContainerSuffix(product.container)}${packCountSuffix(product.pack_count)}`;
             setToast(`Added ${quantity} × ${sizeLabel}`);
           }}
           onToast={(msg) => setToast(msg)}

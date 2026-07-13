@@ -134,6 +134,10 @@ function mapRow(row: Record<string, unknown>): MlccProduct {
     // Container material from the family engine (2026-07-11). null when
     // the endpoint doesn't select the column — UI shows no label then.
     container: str(row.container),
+    // Pack count from the family engine (2026-07-12): distinguishes a
+    // 12PK sleeve from a single of the same size — different orderable
+    // products. Same null-when-not-selected contract as container.
+    pack_count: num(row.pack_count) != null ? Math.round(Number(row.pack_count)) : null,
     is_new_item: Boolean(row.is_new_item),
     imageUrl,
     last_price_book_date: lastPriceBookDate,

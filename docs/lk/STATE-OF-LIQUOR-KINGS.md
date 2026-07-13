@@ -163,12 +163,17 @@ retire out of 26. Not chaos — a short list.
 - ✅ `rls-verification.mjs` — the RLS attack suite
 - ✅ `resolve-order-codes.mjs` / `audit-resolver.mjs` / `lookup-codes.mjs` — matcher tools
 
-### Image backfill — 5 scripts, only 1 alive (🟡/💀)
-- 🟡 `backfill-mlcc-item-images-serper.mjs` — the LIVE path (never fully run)
+### Image backfill — 5 scripts, only 1 alive (✅/💀)
+- ✅ `backfill-mlcc-item-images-serper.mjs` — THE live path, running for real
+  since 2026-07-12: old corpus wiped, strict clean-background gate (ad
+  creatives rejected since the same-night hole fix), 4-shard parallel runs
+  (`--shard=i/n`), and a `--regate` retro-pass that re-judges written
+  photos with the current gate (errors never clear — no-verdict law).
+  The 7/3 "decision needed" is DECIDED: wipe + strict rerun, most-scanned
+  first.
 - 💀 `backfill-mlcc-item-images-google.mjs` — Google CSE dead-ended 6/8
 - 💀 `backfill-mlcc-item-images-ai.mjs` — AI-gen dead-ended 6/10
 - ❓ `backfill-mlcc-item-images.mjs` / `build-image-thumbs.mjs` — VERIFY which is current
-  → **Decision needed: run Serper once for real, or accept placeholders for V1.**
 
 ### Data-load — one-time, likely retired (❓)
 - ❓ `load-nrs-import.mjs` / `check-nrs-import.mjs` — NRS one-time loads
@@ -230,9 +235,10 @@ one-time loaders to archive. A `scripts/archive/` folder solves most of it.
 - ✅ **Michigan LARA / MILO** — the thing we automate (not a subscription).
 
 ### Paid but MAYBE unused — CHECK (💀/❓) — CORRECTED 7/3
-- ❓ **Serper.dev** — Google Images API for bottle photos. Signed up, **never
-  ran the full backfill.** If you're paying monthly, either run it once and
-  keep, or cancel until you need it. (Genuinely optional — safe to cancel.)
+- ✅ **Serper.dev** — Google Images API for bottle photos. **IN ACTIVE USE
+  since 2026-07-12** (the strict full-catalog rerun, ~$40-130 in searches).
+  KEEP while the photo corpus is being built; revisit after coverage
+  plateaus (refills after that are cheap one-offs).
 - ⚠️ **UPCitemdb** — dropped as an IMAGE source 6/4, BUT verified 7/3 it's
   STILL wired into the UPC scan path (`lookupUpcFromUpcitemdb`,
   price-book.routes.js:1315). **DO NOT cancel yet** — it's doing real work on

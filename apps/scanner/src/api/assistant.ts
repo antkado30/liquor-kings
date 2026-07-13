@@ -126,6 +126,10 @@ export interface ResolvedCandidate {
   proof: number | null;
   base_price: number | null;
   min_shelf_price: number | null;
+  /** Identity truth (2026-07-12): the verify card must distinguish a
+      12-pack from a single and plastic from glass BEFORE add-to-cart. */
+  container?: string | null;
+  pack_count?: number | null;
 }
 
 /** One line from the chat's resolve_bottles tool (in-chat add-to-cart card). */

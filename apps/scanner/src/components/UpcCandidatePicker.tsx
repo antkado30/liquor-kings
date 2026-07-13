@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { confirmUpcMapping } from "../api/catalog";
 import type { MlccProduct } from "../types";
+import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 
 function money(n: number | null | undefined): string {
@@ -59,7 +60,10 @@ export function UpcCandidatePicker({
 
         <ul className="upc-candidate-list">
           {candidates.map((c) => {
-            const size = c.bottle_size_label ?? `${c.bottle_size_ml ?? ""} ML`;
+            // Size + material + pack (2026-07-12 class sweep): this picker
+            // puts a code straight in the cart — the row must distinguish
+            // a plastic pint and a 12-pack from their siblings.
+            const size = `${c.bottle_size_label ?? `${c.bottle_size_ml ?? ""} ML`}${nonGlassContainerSuffix(c.container)}${packCountSuffix(c.pack_count)}`;
             const brandLine = `${c.brand_family ?? c.name} · ${size}`;
             const cat = c.category ?? "—";
             return (

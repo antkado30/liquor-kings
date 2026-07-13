@@ -603,7 +603,26 @@ select {
   align-items: flex-start;
   gap: 10px;
   position: relative;
-  padding-right: 36px;
+  /*
+    No reserved right padding anymore: the old `padding-right: 36px` was
+    sized for the original square × and never grew when it became the
+    ~72-90px labeled Done pill (task #58) — so long titles like "TITO'S
+    HANDMADE VODKA" ran UNDERNEATH the button (seen in every screenshot
+    of the 2026-07-12 Tito's audit). The pill is a flex child in this
+    header now (rule below) — the row lays itself out and can't drift
+    out of sync with the button's width again.
+  */
+}
+
+/*
+  Scoped to THIS header only: TagPrintPreview and the Browse filter
+  sheet also use the labeled pill but in their own containers with the
+  absolute default — untouched.
+*/
+.product-card-header > .product-card-close--labeled {
+  position: static;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .product-card-brand {

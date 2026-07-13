@@ -734,8 +734,25 @@ size chip → cart line → confirm modal ("50 ML · Glass · 12-pack") —
 plus a last-resort `· #code` tiebreak when two chips still read
 identical (an ambiguous order control is a lie). types.ts documents
 pack_count. 6 new unit tests (54/54 green, tsc clean). Undeployed —
-rides the next batch. Polish-pass note: family-card "N sizes" badge
-counts pack variants as sizes; revisit with the nudge pass.
+rides the next batch.
+**Same night, two screenshot-evidenced nudges (also in the batch):**
+(1) ProductCard title ran UNDERNEATH the Done pill — the header's
+`padding-right: 36px` was sized for the old square × and never grew
+with the labeled pill; pill is now a flex child in that header (scoped
+— TagPrintPreview/Browse-sheet usages untouched). (2) The "N sizes"
+badge counted pack VARIANTS as sizes ("12 sizes" Tito's); Catalog +
+Scan cards now count distinct size labels (sizes[].length, sizeCount
+fallback). tsc + 54/54 + vite build green.
+**Then the CLASS SWEEP (rule 13 — same night):** every surface where a
+product identity informs an ordering decision now carries the
+container+pack suffixes: AI bulk-verify (ResolvedOrderCard +
+BulkAddSheet — their toProduct also forwards container/pack_count into
+the CART LINE now; before, an AI-resolved 12-pack rode to the confirm
+modal as a bare "50 ML"), vision picker, UPC picker, flat search rows,
+Browse flat cards, template item search, both added-toasts. Server:
+resolver SELECT_COLS + BROWSE_COLUMNS now include container/pack_count
+(price-book routes were already select("*")); client toMlccProduct
+maps pack_count. All sandbox-audited: node --check, tsc, 54/54, build.
 
 **🔥 Active queue (from 2026-06-07 design feedback after tab bar shipped):**
 

@@ -15,6 +15,7 @@ import { useState } from "react";
 import type { CartContextValue } from "../hooks/useCart";
 import type { MlccProduct } from "../types";
 import { resolveOrder, type ResolvedCandidate } from "../api/assistant";
+import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 
 type Phase = "input" | "resolving" | "review" | "done";
 
@@ -44,12 +45,19 @@ function toProduct(c: ResolvedCandidate): MlccProduct {
     min_shelf_price: c.min_shelf_price ?? null,
     base_price: c.base_price ?? null,
     is_new_item: false,
+    // Identity truth rides into the cart line (2026-07-12): without
+    // these, an AI-resolved 12-pack showed as a plain "50 ML" from the
+    // cart line all the way to the pre-submit confirm.
+    container: c.container ?? null,
+    pack_count: c.pack_count ?? null,
   };
 }
 
 const money = (c: number | null) => (c == null ? "" : `$${c.toFixed(2)}`);
+// Size + material + pack — same truth chain as the size chips; this
+// verify list is the LAST look before "Add all to cart".
 const sizeLabel = (c: ResolvedCandidate) =>
-  c.bottle_size_label || (c.bottle_size_ml ? `${c.bottle_size_ml}ml` : "");
+  `${c.bottle_size_label || (c.bottle_size_ml ? `${c.bottle_size_ml}ml` : "")}${nonGlassContainerSuffix(c.container)}${packCountSuffix(c.pack_count)}`;
 
 const CONF_COPY: Record<ReviewLine["confidence"], { label: string; color: string }> = {
   high: { label: "match", color: "#1f9d55" },

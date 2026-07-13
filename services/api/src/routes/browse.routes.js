@@ -209,6 +209,7 @@ router.get("/browse", async (req, res) => {
   const BROWSE_COLUMNS =
     "id, code, name, category, ada_number, ada_name, " +
     "bottle_size_ml, bottle_size_label, licensee_price, proof, container, " +
+    "pack_count, " + // pack truth on flat cards too (2026-07-12 Tito's audit)
     "is_new_item, last_price_book_date, image_url, image_thumb_url, featured_sort";
   let select = supabase
     .from("mlcc_items")

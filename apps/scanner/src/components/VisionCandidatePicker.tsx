@@ -6,6 +6,7 @@
 import { useMemo } from "react";
 import type { MlccProduct } from "../types";
 import type { VisionExtracted } from "../api/catalog-vision";
+import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 import { useHideTabBar } from "../hooks/useHideTabBar";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import {
@@ -24,7 +25,9 @@ function money(n: number | null | undefined): string {
 }
 
 function formatSize(product: MlccProduct): string {
-  return product.bottle_size_label ?? `${product.bottle_size_ml ?? "?"} mL`;
+  // Size + material + pack (2026-07-12 class sweep): this picker puts a
+  // code straight in the cart — candidates must be distinguishable.
+  return `${product.bottle_size_label ?? `${product.bottle_size_ml ?? "?"} mL`}${nonGlassContainerSuffix(product.container)}${packCountSuffix(product.pack_count)}`;
 }
 
 function normalizeSizeToken(value: string): string {
