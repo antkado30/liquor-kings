@@ -208,11 +208,21 @@ one-time loaders to archive. A `scripts/archive/` folder solves most of it.
   Verified against MLCC's site: May 3 book is still the newest full book →
   **prices were never actually stale — nothing was missed.** Remaining proof:
   tomorrow's ~6-7am scheduled run should go GREEN (check Actions tab once).
-- 🟡 NEW (found 7/4): ingestor deliberately skips MLCC's between-book
-  **"New Item Price List"** (e.g. June 7, 2026 list published; excluded at
-  mlcc-price-book-ingestor.js:116). New SKUs released between full books are
-  missing from the catalog (scanner/search can't see them) until the next full
-  book. Small, real. Decide: ingest new-item lists too, or accept the lag.
+- ✅ **NEW-ITEM LIST INGEST — DECIDED (Option A) + BUILT 2026-07-12 night.**
+  (Found 7/4: ingestor deliberately skipped MLCC's between-book "New Item
+  Price List" — new SKUs invisible to scan/search/AI until the next full
+  book; proven month+ lag, May 3 full book vs June 7 list.) Built as an
+  additive `kind:'new_item_list'` option on the SAME battle-tested
+  `ingestMlccPriceBook` (same parser, same composite-key additive upsert,
+  same family engine; is_new_item forced true; 0-row and >2000-row parses
+  REFUSED so a full book can never sneak in as a list). Runs audited with
+  a `kind` column (migration `20260713013000`); scheduler dedupe +
+  staleness card + getLatestPriceBookRun filter kind='full'. Manual
+  script `scripts/ingest-new-item-list.mjs` (prod-guarded, dry-run
+  default, --apply to write). 11 unit pins. **NOT cron-wired until after
+  7/16 by explicit deal.** Known limit: UPCs ride the full-book TXT
+  enrichment — new SKUs searchable immediately, scannable after the next
+  full book. Follow-ups: new-item TXT for early UPCs?; cron wiring.
 - 💀 `UPCITEMDB_API_KEY` — UPCitemdb abandoned 6/4. Remove.
 - ✅ `SUPABASE_JWT_SECRET` — **RESOLVED 2026-07-12 (code audit): dormant
   legacy, not load-bearing.** Still read (access-token.js:32) but only

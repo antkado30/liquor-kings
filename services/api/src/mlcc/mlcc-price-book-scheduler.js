@@ -49,6 +49,10 @@ async function getLastCompletedIngestUrl(supabase) {
     .from("mlcc_price_book_runs")
     .select("source_url, completed_at")
     .eq("status", "complete")
+    // kind='full' (2026-07-12): New Item Price List runs share this table
+    // now. Comparing the live FULL-book URL against a new-item run's URL
+    // would re-ingest the full book every cron tick. Full compares to full.
+    .eq("kind", "full")
     .order("completed_at", { ascending: false })
     .limit(1)
     .maybeSingle();

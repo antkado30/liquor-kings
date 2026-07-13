@@ -110,7 +110,7 @@ function anchorVisibleText(innerHtml) {
  * Full spirits price book Excel (not new-item list, ADA changes, retail changes, MI manufacturer list).
  * @param {string} hrefPathLower path + filename before query, lowercased
  */
-function isFullPriceBookXlsxHref(hrefPathLower) {
+export function isFullPriceBookXlsxHref(hrefPathLower) {
   if (!hrefPathLower.endsWith(".xlsx")) return false;
   if (!hrefPathLower.includes("price-book")) return false;
   if (
@@ -140,7 +140,14 @@ function isPreferredPriceBookLabel(label) {
  * Discover the latest full MLCC spirits price book .xlsx URL from the public info page.
  * @returns {Promise<{ ok: true, url: string, label: string } | { ok: false, error: string }>}
  */
-export async function discoverLatestPriceBookUrl() {
+/**
+ * Fetch the LCC info page and return EVERY .xlsx anchor on it.
+ * Extracted 2026-07-12 (behavior-identical move) so the full-book and
+ * new-item-list discoveries share one fetch contract with two selection
+ * policies — one page walk, one truth about what MLCC is publishing.
+ * @returns {Promise<{ ok: true, anchors: { hrefRaw: string, hrefPathLower: string, label: string }[] } | { ok: false, error: string }>}
+ */
+async function fetchInfoPageXlsxAnchors() {
   try {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), DISCOVER_TIMEOUT_MS);
@@ -167,33 +174,79 @@ export async function discoverLatestPriceBookUrl() {
 
     const anchorRe = /<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
     /** @type {{ hrefRaw: string, hrefPathLower: string, label: string }[]} */
-    const fullBookCandidates = [];
+    const anchors = [];
     let m;
     while ((m = anchorRe.exec(html)) !== null) {
       const hrefRaw = m[1];
       const hrefPathLower = decodeBasicEntities(hrefRaw).split("?")[0].trim().toLowerCase();
       if (!hrefPathLower.endsWith(".xlsx")) continue;
-      if (!isFullPriceBookXlsxHref(hrefPathLower)) continue;
       const label = anchorVisibleText(m[2]);
-      fullBookCandidates.push({ hrefRaw, hrefPathLower, label });
+      anchors.push({ hrefRaw, hrefPathLower, label });
     }
-
-    if (!fullBookCandidates.length) {
-      return { ok: false, error: "No full price book Excel link found on the info page" };
-    }
-
-    const preferred = fullBookCandidates.filter((c) => isPreferredPriceBookLabel(c.label));
-    const ordered = preferred.length ? preferred : fullBookCandidates;
-    const chosen = ordered[0];
-    const url = absolutizeMlccHref(chosen.hrefRaw);
-    if (!url) {
-      return { ok: false, error: "Could not resolve absolute URL for price book Excel" };
-    }
-    return { ok: true, url, label: chosen.label || url };
+    return { ok: true, anchors };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: msg || "Price book URL discovery failed" };
+    return { ok: false, error: msg || "Info page fetch failed" };
   }
+}
+
+export async function discoverLatestPriceBookUrl() {
+  const page = await fetchInfoPageXlsxAnchors();
+  if (!page.ok) return { ok: false, error: page.error };
+
+  const fullBookCandidates = page.anchors.filter((a) => isFullPriceBookXlsxHref(a.hrefPathLower));
+  if (!fullBookCandidates.length) {
+    return { ok: false, error: "No full price book Excel link found on the info page" };
+  }
+
+  const preferred = fullBookCandidates.filter((c) => isPreferredPriceBookLabel(c.label));
+  const ordered = preferred.length ? preferred : fullBookCandidates;
+  const chosen = ordered[0];
+  const url = absolutizeMlccHref(chosen.hrefRaw);
+  if (!url) {
+    return { ok: false, error: "Could not resolve absolute URL for price book Excel" };
+  }
+  return { ok: true, url, label: chosen.label || url };
+}
+
+/**
+ * Between-book "New Item Price List" Excel matcher (2026-07-12, Option A).
+ * MLCC drops new SKUs in these lists between full books — the full-book
+ * matcher above EXCLUDES them by name; this one wants exactly them.
+ * Deliberately does NOT require "price-book" in the path (the full-book
+ * exclusion list proves MLCC's naming varies) — an .xlsx on the LCC info
+ * page whose path says "new-item" is unambiguous.
+ * @param {string} hrefPathLower path + filename before query, lowercased
+ */
+export function isNewItemListXlsxHref(hrefPathLower) {
+  if (!hrefPathLower.endsWith(".xlsx")) return false;
+  return /new-item/.test(hrefPathLower);
+}
+
+/**
+ * Discover the newest "New Item Price List" .xlsx URL from the LCC info
+ * page. Mirrors discoverLatestPriceBookUrl: page order is newest-first,
+ * labels naming "new item" are preferred. The DRY-RUN of the ingest prints
+ * the chosen URL + label so a mis-grab is caught by eyes before any write.
+ * @returns {Promise<{ ok: true, url: string, label: string } | { ok: false, error: string }>}
+ */
+export async function discoverLatestNewItemListUrl() {
+  const page = await fetchInfoPageXlsxAnchors();
+  if (!page.ok) return { ok: false, error: page.error };
+
+  const candidates = page.anchors.filter((a) => isNewItemListXlsxHref(a.hrefPathLower));
+  if (!candidates.length) {
+    return { ok: false, error: "No New Item Price List Excel link found on the info page" };
+  }
+
+  const preferred = candidates.filter((c) => /new item/i.test(c.label));
+  const ordered = preferred.length ? preferred : candidates;
+  const chosen = ordered[0];
+  const url = absolutizeMlccHref(chosen.hrefRaw);
+  if (!url) {
+    return { ok: false, error: "Could not resolve absolute URL for New Item Price List Excel" };
+  }
+  return { ok: true, url, label: chosen.label || url };
 }
 
 /**
@@ -243,6 +296,9 @@ export async function getLatestPriceBookRun(supabase) {
     const { data, error } = await supabase
       .from("mlcc_price_book_runs")
       .select("*")
+      // kind='full' (2026-07-12): every caller of this util means "the
+      // state of the CATALOG ingest" — new-item list runs don't qualify.
+      .eq("kind", "full")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -266,6 +322,32 @@ async function updateRun(supabase, runId, patch) {
 }
 
 /**
+ * Sanity rails for a New Item Price List parse (2026-07-12). Fail CLOSED
+ * on both edges: zero rows = the parse mis-fired (their layout changed?),
+ * and a full-book-sized row count = the discovery grabbed the wrong file —
+ * ingesting it as a "new item list" would force is_new_item=true across
+ * the entire catalog. Refuse loudly either way.
+ * @param {number} count
+ * @param {number} maxRows
+ * @returns {{ ok: true } | { ok: false, error: string }}
+ */
+export function assertNewItemListRowCount(count, maxRows) {
+  if (count === 0) {
+    return {
+      ok: false,
+      error: "New Item Price List parsed to 0 rows — layout change or wrong file; refusing",
+    };
+  }
+  if (count > maxRows) {
+    return {
+      ok: false,
+      error: `New Item Price List parsed ${count} rows (> ${maxRows}) — this looks like a FULL price book; refusing`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {object} [options]
  * @param {string} [options.url]
@@ -275,14 +357,49 @@ async function updateRun(supabase, runId, patch) {
 export async function ingestMlccPriceBook(supabase, options = {}) {
   const opts = options || {};
   const dryRun = Boolean(opts.dryRun);
+  /*
+    kind (2026-07-12, Option A): 'full' (default — byte-identical to the
+    behavior before this option existed) or 'new_item_list' — MLCC's
+    between-book "New Item Price List". The new kind reuses THIS battle-
+    tested function (same parser, same composite-key additive upsert, same
+    family-identity computation) with three deltas: its own URL discovery,
+    a row-count sanity cap (a "new item list" the size of a full book is a
+    mis-grab — refuse), and is_new_item forced true (rows on that list are
+    new by definition). The runs row records kind so the scheduler's
+    change-detection and the staleness card (both filter kind='full')
+    never mistake a 40-row list for a fresh catalog.
+  */
+  const kind = opts.kind === "new_item_list" ? "new_item_list" : "full";
+  const maxRows =
+    Number.isFinite(opts.maxRows) && opts.maxRows > 0
+      ? opts.maxRows
+      : kind === "new_item_list"
+        ? 2000
+        : Infinity;
   const priceBookDate = opts.priceBookDate instanceof Date && !Number.isNaN(opts.priceBookDate.getTime())
     ? opts.priceBookDate
     : new Date();
   const dateStr = toDateOnly(priceBookDate);
 
+  // Resolve the new-item URL up front (the full path resolves inside
+  // fetchLatestMlccPriceBookExcel, unchanged). Discovery failure here =
+  // no run row — the manual script surfaces it loudly.
+  let sourceUrl = opts.url;
+  if (kind === "new_item_list" && !sourceUrl) {
+    const disc = await discoverLatestNewItemListUrl();
+    if (!disc.ok) {
+      console.log("[price-book-ingestor] new-item list discovery failed:", disc.error);
+      return { ok: false, error: disc.error };
+    }
+    sourceUrl = disc.url;
+    console.log(
+      `[price-book-ingestor] discovered New Item Price List: "${disc.label}" ${disc.url}`,
+    );
+  }
+
   if (dryRun) {
     console.log("[price-book-ingestor] dryRun: skipping DB run record; downloading and parsing only");
-    const dl = await fetchLatestMlccPriceBookExcel(opts.url);
+    const dl = await fetchLatestMlccPriceBookExcel(sourceUrl);
     if (!dl.ok) {
       console.log("[price-book-ingestor] dryRun download failed:", dl.error);
       return { ok: false, error: dl.error };
@@ -295,6 +412,38 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
     }
     const totalItems = parsed.items.length;
     const newItems = parsed.items.filter((i) => i.isNewItem).length;
+    if (kind === "new_item_list") {
+      const capCheck = assertNewItemListRowCount(parsed.items.length, maxRows);
+      if (!capCheck.ok) {
+        console.log("[price-book-ingestor] dryRun:", capCheck.error);
+        return { ok: false, error: capCheck.error };
+      }
+      // The value preview: how many of these codes does the catalog NOT
+      // know yet? Read-only chunked lookups — dry-run stays write-free.
+      const codes = [...new Set(parsed.items.map((i) => i.mlccCode).filter(Boolean))];
+      let known = 0;
+      for (let i = 0; i < codes.length; i += 500) {
+        const chunk = codes.slice(i, i + 500);
+        const { data: rows, error: selErr } = await supabase
+          .from("mlcc_items")
+          .select("code")
+          .in("code", chunk);
+        if (selErr) {
+          console.log("[price-book-ingestor] dryRun known-code lookup failed:", selErr.message);
+          return { ok: false, error: selErr.message };
+        }
+        known += new Set((rows ?? []).map((r) => r.code)).size;
+      }
+      const newToCatalog = codes.length - known;
+      console.log("[price-book-ingestor] dryRun complete:", {
+        kind,
+        totalItems,
+        distinctCodes: codes.length,
+        newToCatalog,
+        url: dl.url,
+      });
+      return { ok: true, dryRun: true, kind, totalItems, newItems: newToCatalog, newToCatalog, updatedItems: 0, url: dl.url };
+    }
     console.log("[price-book-ingestor] dryRun complete:", { totalItems, flaggedNew: newItems });
     return {
       ok: true,
@@ -314,7 +463,8 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
       .insert({
         price_book_date: dateStr,
         status: "processing",
-        source_url: opts.url || null,
+        source_url: sourceUrl || null,
+        kind,
       })
       .select("id")
       .single();
@@ -326,14 +476,14 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
     }
     runId = runRow.id;
 
-    const dl = await fetchLatestMlccPriceBookExcel(opts.url);
+    const dl = await fetchLatestMlccPriceBookExcel(sourceUrl);
     if (!dl.ok) {
       console.log("[price-book-ingestor] download failed:", dl.error);
       await updateRun(supabase, runId, {
         status: "failed",
         error_message: dl.error,
         completed_at: new Date().toISOString(),
-        source_url: dl.url ?? opts.url ?? null,
+        source_url: dl.url ?? sourceUrl ?? null,
       });
       return { ok: false, error: dl.error, runId };
     }
@@ -355,6 +505,19 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
     const effectiveDateStr = parsed.priceBookDate ? toDateOnly(parsed.priceBookDate) : dateStr;
     const items = parsed.items.filter((i) => i.mlccCode);
     console.log("[price-book-ingestor] parsed rows:", items.length);
+
+    if (kind === "new_item_list") {
+      const capCheck = assertNewItemListRowCount(items.length, maxRows);
+      if (!capCheck.ok) {
+        console.log("[price-book-ingestor]", capCheck.error);
+        await updateRun(supabase, runId, {
+          status: "failed",
+          error_message: capCheck.error,
+          completed_at: new Date().toISOString(),
+        });
+        return { ok: false, error: capCheck.error, runId };
+      }
+    }
 
     const codes = [...new Set(items.map((i) => i.mlccCode))];
     /** @type {Map<string, object>} */
@@ -450,7 +613,9 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
         is_active: existing?.is_active ?? true,
         last_price_book_date: effectiveDateStr,
         price_changed_at: priceChangedAt,
-        is_new_item: item.isNewItem,
+        // A row on a New Item Price List is a new item by definition —
+        // the full book's own New/Chng flag still rules the full path.
+        is_new_item: kind === "new_item_list" ? true : item.isNewItem,
         updated_at: nowIso,
       });
     }

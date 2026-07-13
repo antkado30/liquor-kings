@@ -61,6 +61,9 @@ async function buildStalenessCard(supabase) {
       // matched, so this card NEVER fired no matter how stale the price book
       // got. Silent failure of the staleness check itself.
       .in("status", ["complete", "complete_with_errors"])
+      // kind='full' (2026-07-12): a 40-row New Item Price List ingest is
+      // NOT "the catalog is fresh" — staleness measures full books only.
+      .eq("kind", "full")
       .order("completed_at", { ascending: false })
       .limit(1)
       .maybeSingle();
