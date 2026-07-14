@@ -743,6 +743,20 @@ with the labeled pill; pill is now a flex child in that header (scoped
 badge counted pack VARIANTS as sizes ("12 sizes" Tito's); Catalog +
 Scan cards now count distinct size labels (sizes[].length, sizeCount
 fallback). tsc + 54/54 + vite build green.
+**⏳→✅ 2026-07-14 (device walkthrough verdict — "it's better, swear"):**
+two nudges from Tony's own eyes, built same hour: (1) **chip order** —
+"packs came out of nowhere" → singles small→large (biggest far right,
+as he chose), then ALL packs together at the tail (by size, then pack
+count; GIFT PACK combos ride with packs); default selection = smallest
+SINGLE; 6 new pins incl. the exact Tito's lineup. (2) **freshness-banner
+false alarm (found by Tony, caused by Fable's 7/13 new-item ingest):**
+/price-book/status derived "latest book" from MAX(item date) — the 304
+July-5 rows moved the baseline and EVERY other bottle went red "likely
+discontinued 62 days." Fixed: baseline = latest FULL run
+(kind-filtered), item-max only as fresh-install fallback. Lesson filed:
+a new data KIND must be checked against every consumer of the OLD
+invariant — the runs-table readers were swept on day one, the
+item-date reader was found by eyes on device.
 **Then the CLASS SWEEP (rule 13 — same night):** every surface where a
 product identity informs an ordering decision now carries the
 container+pack suffixes: AI bulk-verify (ResolvedOrderCard +

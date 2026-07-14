@@ -161,23 +161,41 @@ async function requireUserOrServiceRole(req, res) {
 router.get("/status", async (req, res) => {
   try {
     const latestRun = await getLatestPriceBookRun(supabase);
-    const { data: newest, error: dErr } = await supabase
-      .from("mlcc_items")
-      .select("last_price_book_date")
-      .not("last_price_book_date", "is", null)
-      .order("last_price_book_date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    /*
+      BASELINE FIX (2026-07-14, found by Tony's own eyes on device): this
+      endpoint used to derive "the latest price book" from
+      MAX(mlcc_items.last_price_book_date). The 7/13 New Item Price List
+      ingest stamped its 304 rows with 2026-07-05 — which silently moved
+      the freshness baseline for the ENTIRE catalog from the May full
+      book to July 5, and every other bottle (Tito's included) turned
+      red: "hasn't appeared in 62 days — likely discontinued." The
+      catalog lying loudly, two days before order day.
 
-    if (dErr) {
-      return res.status(500).json({ ok: false, error: dErr.message });
+      The truthful baseline is the latest FULL book — and
+      getLatestPriceBookRun already returns exactly that (kind='full'
+      filtered since 20260713013000). Item-max survives only as the
+      fallback for a DB with no completed full run (fresh installs),
+      where it equals the old behavior.
+    */
+    let rawDate = latestRun?.price_book_date ?? null;
+    if (rawDate == null || String(rawDate).trim() === "") {
+      const { data: newest, error: dErr } = await supabase
+        .from("mlcc_items")
+        .select("last_price_book_date")
+        .not("last_price_book_date", "is", null)
+        .order("last_price_book_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (dErr) {
+        return res.status(500).json({ ok: false, error: dErr.message });
+      }
+      rawDate = newest?.last_price_book_date ?? null;
     }
 
     let priceBookDate = null;
     let daysSinceUpdate = null;
     /** @type {"fresh"|"aging"|"stale"} */
     let status = "stale";
-    const rawDate = newest?.last_price_book_date;
     if (rawDate != null && String(rawDate).trim() !== "") {
       priceBookDate = String(rawDate);
       const d0 = new Date(`${priceBookDate}T12:00:00.000Z`);
