@@ -4,6 +4,55 @@ Founder's log. Milestone entries — the moments that mattered.
 
 ---
 
+## Entry #4 — The catalog got honest (the 48-hour truth pass)
+
+**July 12–14, 2026 — EOD closeout, written by Fable**
+
+Sunday night the premium catalog shipped — family-first scrolling, stacked
+cards, the redesign Tony drew with Fable over mockups. Then Tony walked
+Tito's on his phone and found the truth gap: "ad-tile" photos sailing
+through the strict gate (it policed scenes, never marketing graphics) and
+pack variants rendering as three identical "50 ML · Glass" clone chips
+that read as corruption. Both were fixed at the CLASS level, and the
+48 hours that followed made the catalog honest end to end.
+
+**Shipped, deployed, device-proven ("everything looks amazing" — Tony):**
+- Photo truth: gate rejects ad creatives; a new `--regate` retro-pass
+  re-judged every written photo (cleared 1,041 = 15.4%, dead on the
+  dry-run projection); 4 shards rebuilt coverage through the tightened
+  gate. Standing: **10,682 of 14,123 photographed (76%)**, 2,624 honest
+  placeholders, 812 retryable flakes.
+- Pack truth everywhere: "50 mL · Glass · 12-pack" rides chip → cart →
+  confirm modal → AI verify card → UPC/vision pickers → search rows.
+  The AI card had been silently stripping pack/container off cart lines.
+- Tony's chip order: singles small→large, biggest far right, ALL packs
+  grouped at the tail (6 unit pins on the real Tito's lineup).
+- **295 new SKUs** from MLCC's July 5 New Item Price List, live in
+  search/browse/AI weeks before competitors see them (Option A built +
+  applied same night; cron wiring deferred past 7/16 by deal).
+
+**Laws learned the cheap way:**
+- *An error is never a verdict; uncertainty never deletes.* Dead API
+  credits printed as "WOULD CLEAR" in a dry-run — one flag away from
+  wiping photos on errors. Both modes now hard-stop on credit death.
+- *A new data kind must be checked against every consumer of the old
+  invariant.* The new-item ingest moved the freshness baseline and turned
+  the whole catalog red "likely discontinued" — Tony's eyes caught it in
+  one walkthrough; baseline now = latest FULL book run.
+
+**Found + fix in flight:** browse_families times out even on a quiet DB —
+the Catalog tab has been silently on its flat fallback since Sunday. The
+function's output is proven CORRECT; it's a speed problem. Fix: page-scoped
+aggregation (build cards only for the 30 on screen).
+
+**Board:** git `174a793` · gates + Colony flag OFF at rest · prod healthy ·
+THU 7/16 = order day (runbook ready, two-button flow's first armed use).
+
+All glory to God — two days of finding out the product we said we had, we
+now actually have.
+
+---
+
 ## Entry #1 — First customer order placed by the RPA
 
 **May 7, 2026 — ~5:57 PM Michigan time**
