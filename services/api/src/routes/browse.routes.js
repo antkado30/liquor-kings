@@ -94,6 +94,22 @@ router.get("/browse/families", async (req, res) => {
   const minProof = Number.parseFloat(String(req.query.min_proof ?? ""));
   const maxProof = Number.parseFloat(String(req.query.max_proof ?? ""));
   const newOnly = req.query.new_only === "1" || req.query.new_only === "true";
+  /*
+    Advanced filters (2026-07-15 spec; RPC v4 = 20260717011000). Strict
+    whitelists — anything else means "no filter". `ordered=1` scopes to
+    codes THIS store has ordered (store_item_order_stats via
+    p_ordered_store) — store identity comes from the resolved request
+    context, never from a client-supplied id.
+  */
+  const container =
+    req.query.container === "glass" || req.query.container === "plastic"
+      ? req.query.container
+      : null;
+  const packs =
+    req.query.packs === "singles" || req.query.packs === "packs"
+      ? req.query.packs
+      : null;
+  const orderedOnly = req.query.ordered === "1" || req.query.ordered === "true";
   const sortRaw = String(req.query.sort ?? "name");
   const SORTS = new Set(["price_asc", "price_desc", "newest", "proof_asc", "proof_desc"]);
   // "name" (the client's default) maps to the RPC's featured ordering —
@@ -113,6 +129,9 @@ router.get("/browse/families", async (req, res) => {
     p_sort: sort,
     p_limit: limit + 1,
     p_offset: offset,
+    p_container: container,
+    p_packs: packs,
+    p_ordered_store: orderedOnly ? storeId : null,
   });
 
   if (error) {
@@ -180,6 +199,17 @@ router.get("/browse", async (req, res) => {
   const minProof = Number.parseFloat(String(req.query.min_proof ?? ""));
   const maxProof = Number.parseFloat(String(req.query.max_proof ?? ""));
   const newOnly = req.query.new_only === "1" || req.query.new_only === "true";
+  // Advanced filters (2026-07-15) — same whitelists as /browse/families,
+  // so the flat grid (fallback + size-filter mode) matches family mode.
+  const container =
+    req.query.container === "glass" || req.query.container === "plastic"
+      ? req.query.container
+      : null;
+  const packs =
+    req.query.packs === "singles" || req.query.packs === "packs"
+      ? req.query.packs
+      : null;
+  const orderedOnly = req.query.ordered === "1" || req.query.ordered === "true";
   const q =
     typeof req.query.q === "string" && req.query.q.trim().length >= 2
       ? req.query.q.trim()
@@ -224,6 +254,44 @@ router.get("/browse", async (req, res) => {
   if (Number.isFinite(minProof)) select = select.gte("proof", minProof);
   if (Number.isFinite(maxProof)) select = select.lte("proof", maxProof);
   if (newOnly) select = select.eq("is_new_item", true);
+  /*
+    Advanced filters (2026-07-15). Container: null/'' means glass (the
+    engine's default) — 'glass' must match those rows too. Packs:
+    singles = pack_count <2/null and not a combo; packs = pack_count ≥2
+    or combo (multi-bottle either way). Ordered: resolve this store's
+    ordered codes from the rollup first; empty history = honest empty
+    result, not an error.
+  */
+  if (container === "glass") {
+    select = select.or("container.is.null,container.eq.glass,container.eq.");
+  } else if (container === "plastic") {
+    select = select.eq("container", "plastic");
+  }
+  if (packs === "singles") {
+    select = select
+      .or("pack_count.is.null,pack_count.lt.2")
+      .not("is_combo", "is", true);
+  } else if (packs === "packs") {
+    select = select.or("pack_count.gte.2,is_combo.is.true");
+  }
+  if (orderedOnly) {
+    const { data: statRows, error: statErr } = await supabase
+      .from("store_item_order_stats")
+      .select("code")
+      .eq("store_id", storeId)
+      .order("last_ordered_at", { ascending: false, nullsFirst: false })
+      .limit(800); // .in() URL-length ceiling; a store's ordered set stays far below this for years
+    if (statErr) {
+      // Includes migration-not-applied: honest error, client shows its
+      // normal error banner (never a silently unfiltered list).
+      return res.status(500).json({ ok: false, error: statErr.message });
+    }
+    const codes = [...new Set((statRows ?? []).map((r) => r.code))];
+    if (codes.length === 0) {
+      return res.json({ ok: true, products: [], nextCursor: null, total: null });
+    }
+    select = select.in("code", codes);
+  }
   /*
     Search matches BOTH raw name AND name_searchable (the generated
     space/punctuation-free column from 20260609230000). Fixes the

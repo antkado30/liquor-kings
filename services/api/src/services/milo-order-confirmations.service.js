@@ -18,6 +18,7 @@ import {
   ADA_MINIMUM_ORDER_LITERS,
   KNOWN_ADAS,
 } from "../mlcc/milo-ordering-rules.js";
+import { bumpOrderStatsForRun } from "./order-stats.service.js";
 
 void ADA_MINIMUM_ORDER_LITERS; // kept for parity with rule-aware callers
 
@@ -217,5 +218,19 @@ export async function persistMiloOrderConfirmations({
     return { persisted: 0, skipped: rows.length, error: error.message };
   }
   const persisted = Array.isArray(data) ? data.length : rows.length;
+
+  /*
+    Order-frequency stats (2026-07-15, relevance v3): a persisted
+    confirmation IS the "this order really happened" moment, so it is
+    the one honest place to count what got ordered. FIRE-AND-FORGET by
+    law — stats are derived data and may NEVER affect the confirmation
+    result. Until the 20260717 migrations apply, the RPC inside logs one
+    warn line and does nothing. Rebuildable any time via
+    scripts/backfill-order-stats.mjs.
+  */
+  if (persisted > 0) {
+    void bumpOrderStatsForRun(supabase, { storeId, executionRunId }).catch(() => {});
+  }
+
   return { persisted, skipped: 0, error: null };
 }

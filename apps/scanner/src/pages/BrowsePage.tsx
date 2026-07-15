@@ -152,6 +152,10 @@ export function BrowsePage() {
         max_price: filters.max_price ?? null,
         min_proof: filters.min_proof ?? null,
         max_proof: filters.max_proof ?? null,
+        new_only: filters.new_only,
+        container: filters.container ?? null,
+        packs: filters.packs ?? null,
+        ordered_only: filters.ordered_only,
       },
       sort,
       limit: 30,
@@ -227,6 +231,10 @@ export function BrowsePage() {
           max_price: filters.max_price ?? null,
           min_proof: filters.min_proof ?? null,
           max_proof: filters.max_proof ?? null,
+          new_only: filters.new_only,
+          container: filters.container ?? null,
+          packs: filters.packs ?? null,
+          ordered_only: filters.ordered_only,
         },
         sort,
         limit: 30,
@@ -337,6 +345,26 @@ export function BrowsePage() {
           ? `≤ ${filters.max_proof} proof`
           : "Proof";
 
+  /*
+    Cycle-chip labels (2026-07-15 advanced filters): tap cycles the value
+    (All → Glass → Plastic → All; All → Singles → Multi-packs → All) —
+    no sheet needed for a 3-state toggle. New/Ordered are plain toggles.
+  */
+  const containerChipLabel =
+    filters.container === "glass" ? "Glass" : filters.container === "plastic" ? "Plastic" : "Material";
+  const packsChipLabel =
+    filters.packs === "singles" ? "Singles" : filters.packs === "packs" ? "Multi-packs" : "Format";
+  const cycleContainer = () =>
+    setFilters((f) => ({
+      ...f,
+      container: f.container == null ? "glass" : f.container === "glass" ? "plastic" : null,
+    }));
+  const cyclePacks = () =>
+    setFilters((f) => ({
+      ...f,
+      packs: f.packs == null ? "singles" : f.packs === "singles" ? "packs" : null,
+    }));
+
   const hasActiveSort = sort !== "name";
   const hasAnyFilter =
     !!filters.category ||
@@ -346,6 +374,10 @@ export function BrowsePage() {
     filters.max_price != null ||
     filters.min_proof != null ||
     filters.max_proof != null ||
+    !!filters.new_only ||
+    !!filters.container ||
+    !!filters.packs ||
+    !!filters.ordered_only ||
     !!query.trim() ||
     hasActiveSort;
 
@@ -465,6 +497,26 @@ export function BrowsePage() {
             setProofMaxInput(filters.max_proof?.toString() ?? "");
             setOpenPicker("proof");
           }}
+        />
+        <BrowseFilterChip
+          label="New items"
+          active={!!filters.new_only}
+          onClick={() => setFilters((f) => ({ ...f, new_only: !f.new_only }))}
+        />
+        <BrowseFilterChip
+          label="Ordered before"
+          active={!!filters.ordered_only}
+          onClick={() => setFilters((f) => ({ ...f, ordered_only: !f.ordered_only }))}
+        />
+        <BrowseFilterChip
+          label={containerChipLabel}
+          active={!!filters.container}
+          onClick={cycleContainer}
+        />
+        <BrowseFilterChip
+          label={packsChipLabel}
+          active={!!filters.packs}
+          onClick={cyclePacks}
         />
         {hasAnyFilter ? (
           <button

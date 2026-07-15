@@ -701,13 +701,32 @@ new definition is better. DECIDED 7/15 with Fable:
    (d) "Ordered before / my history" (per-store filter — order-history
    rollup, most work, most operator value).
 
-Build sketch (Fri 7/17+, AFTER order day — sequencing held on purpose):
-order-frequency rollup (global column for the shared featured_sort v3;
-per-store stats table for the ordered-before filter + future per-store
-ranking) + backfill from confirmations/run history + maintenance on
-order placement → browse_families gains container/pack/new/ordered
-params (+ optional p_store_id, additive defaults) → filter sheet UI.
-Catalog-only; order path untouched.
+**✅ BUILT 2026-07-15 night (repo-only — NOTHING applied/deployed before
+the 7/16 order, by deal). The package:**
+- Migration `20260717010000`: mlcc_items.ordered_count + per-store
+  `store_item_order_stats` (RLS on, service-role only) + featured_sort
+  v3 (photos → most-ORDERED → most-scanned → name) + ATOMIC
+  `bump_order_stats()` (PostgREST can't do relative updates; counter
+  math in one transaction).
+- Migration `20260717011000`: browse_families v4 — p_container /
+  p_packs / p_ordered_store (old 10-arg signature DROPPED first: added
+  params make an OVERLOAD, not a replacement — ambiguity trap).
+- `order-stats.service.js` (line extraction pinned by sandbox asserts) +
+  fail-open fire-and-forget hook in persistMiloOrderConfirmations —
+  stats may NEVER affect an order write; until migrations apply it logs
+  one warn and does nothing.
+- `scripts/backfill-order-stats.mjs` — full rebuild from confirmation
+  history (dry-run default, prod-guarded). Thursday's order bumps
+  nothing live (hook deploys Friday) — the backfill catches it.
+- Client: New items + Ordered before toggle chips, Material +
+  Format cycle chips; filters ride family scroll, flat grid, and
+  load-more. tsc + 60/60 + build green.
+
+**FRIDAY 7/17 FIRE ORDER (strict):** (1) SQL editor: 20260717010000 →
+(2) 20260717011000 → (3) `node scripts/backfill-order-stats.mjs` dry-run
+then `--apply` → (4) `npm run deploy` → (5) device: Pickle Shot dethroned,
+chips live. Known gap for later: typed-SEARCH grouped results don't apply
+the four new filters yet (browse modes do) — wire /items/grouped next.
 
 ## 🔥🔥🔥 PHOTO TRUTH MANDATE — sharpened (Tony, 2026-07-11 night, angry and right)
 

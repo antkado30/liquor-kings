@@ -25,6 +25,11 @@ export type BrowseFilters = {
   min_proof?: number | null;
   max_proof?: number | null;
   new_only?: boolean;
+  /** Advanced filters (2026-07-15 spec — Tony's "very advanced" ask). */
+  container?: "glass" | "plastic" | null;
+  packs?: "singles" | "packs" | null;
+  /** Only bottles THIS store has ordered before (store_item_order_stats). */
+  ordered_only?: boolean;
   q?: string | null;
 };
 
@@ -73,6 +78,9 @@ export async function browseProducts(args: {
   if (f.min_proof != null) params.set("min_proof", String(f.min_proof));
   if (f.max_proof != null) params.set("max_proof", String(f.max_proof));
   if (f.new_only) params.set("new_only", "1");
+  if (f.container) params.set("container", f.container);
+  if (f.packs) params.set("packs", f.packs);
+  if (f.ordered_only) params.set("ordered", "1");
   if (f.q) params.set("q", f.q);
   if (args.sort) params.set("sort", args.sort);
   if (args.limit) params.set("limit", String(args.limit));
@@ -138,6 +146,9 @@ export async function browseFamilies(args: {
   if (f.min_proof != null) params.set("min_proof", String(f.min_proof));
   if (f.max_proof != null) params.set("max_proof", String(f.max_proof));
   if (f.new_only) params.set("new_only", "1");
+  if (f.container) params.set("container", f.container);
+  if (f.packs) params.set("packs", f.packs);
+  if (f.ordered_only) params.set("ordered", "1");
   if (args.sort) params.set("sort", args.sort);
   if (args.limit) params.set("limit", String(args.limit));
   if (args.offset) params.set("offset", String(args.offset));
