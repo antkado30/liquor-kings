@@ -679,6 +679,36 @@ MLCC names like "TITO'S HANDMADE VODK/50ML TIT0 W/" read ugly — prettify
 without lying), typography/spacing to the premium bar. Function first
 (done), then make it beautiful. Sequencing: after Thu 7/16 order day.
 
+## 🔥🔥 CATALOG RELEVANCE v3 + ADVANCED FILTERS (Tony, 2026-07-15 eve — decisions LOCKED via Q&A)
+
+> "Why is there the pickle shots on top? I want the most relevant
+> bottles at the top… we gotta make our search settings advanced as
+> well, like very advanced."
+
+Context: featured v2 (20260611001000, Tony's own 6/10 ask) = photos →
+most-SCANNED → name. Scans measure register curiosity (price checks,
+minis) — Pickle Shot earned #1 honestly under that definition. Tony's
+new definition is better. DECIDED 7/15 with Fable:
+
+1. **Default order ("featured" v3): photos first → most-ORDERED first
+   (real order history) → scans as tiebreak → name.** Ordering is the
+   truth signal in an ordering tool.
+2. **Advanced filters — ALL FOUR groups approved:**
+   (a) price range (server-ready, needs UI);
+   (b) proof range + "New items only" (server-ready, needs UI — new-only
+   showcases the 295 exclusive SKUs);
+   (c) glass/plastic + packs/singles (the identity data wired 7/12-14);
+   (d) "Ordered before / my history" (per-store filter — order-history
+   rollup, most work, most operator value).
+
+Build sketch (Fri 7/17+, AFTER order day — sequencing held on purpose):
+order-frequency rollup (global column for the shared featured_sort v3;
+per-store stats table for the ordered-before filter + future per-store
+ranking) + backfill from confirmations/run history + maintenance on
+order placement → browse_families gains container/pack/new/ordered
+params (+ optional p_store_id, additive defaults) → filter sheet UI.
+Catalog-only; order path untouched.
+
 ## 🔥🔥🔥 PHOTO TRUTH MANDATE — sharpened (Tony, 2026-07-11 night, angry and right)
 
 > "If I press a litre it'll be a pint picture… when I'm switching between
