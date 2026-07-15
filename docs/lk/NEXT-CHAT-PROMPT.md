@@ -1,9 +1,9 @@
 # Liquor Kings — System Review & New-Chat Bootstrap
 
 > **Tony:** paste the COPY-PASTE BLOCK below as your first message in a new
-> chat. Everything after it is the full, current system review — the new
-> Claude can read this whole file to know exactly what LK is and where it
-> stands. Last rewritten **2026-06-10** (prod app version **142**, live + healthy).
+> chat. Everything after it is the system review — the new Claude can read
+> this whole file to know what LK is. Bootstrap block last rewritten
+> **2026-07-14** (by Fable, mid-session, two days before the 7/16 order day).
 
 ---
 
@@ -12,36 +12,57 @@
 ```
 We're picking up Liquor Kings — a multi-tenant B2B SaaS for Michigan liquor
 stores that places MLCC spirits orders automatically via Playwright RPA. I'm
-Tony, the 19-year-old solo founder. We've been building this for months.
-I'm now on Claude Fable 5 (switched from Opus 4.8). You and I work fast.
+Tony, the 19-year-old solo founder. You are Fable 5 — my coworker, not a
+chatbot. Connect the repo folder FIRST if it isn't already:
+~/dev/liquor-kings.
 
-BEFORE responding to anything, read these in order:
-1. MEMORY.md (auto-loads — the memory index; lists every memory file)
-2. The TOP entry of project_journal.md (memory) — current state, read it FIRST
-3. project_next_session.md (memory) — exact pickup point + deploy checklist
-4. /Users/tonecapone/dev/liquor-kings/docs/lk/TONY-WANTS.md — what I want (✅/⏳/💡)
-5. /Users/tonecapone/dev/liquor-kings/docs/lk/INTEGRITY-DOCTRINE.md — the bar
-6. /Users/tonecapone/dev/liquor-kings/docs/lk/NEXT-CHAT-PROMPT.md — THIS file
-   (the full system review is in the second half — read it)
-7. /Users/tonecapone/dev/liquor-kings/docs/lk/BLUEPRINT.md — the vision
+BEFORE responding to anything, read these in order (all under docs/lk/):
+1. RULEBOOK.md — the unbreakable rules; the session ritual is §4
+2. journal.md — NEWEST entry first: current state + next list
+3. STATE-OF-LIQUOR-KINGS.md — the census (✅/🟡/💀/❓ per system)
+4. TONY-WANTS.md — Quality Mandate at top, then every want
+5. INTEGRITY-DOCTRINE.md — the bar (12 disciplines + hardening mandate)
+6. architecture/ordering-speed-strategy.md — the R3 engine plan
+7. If an order day is near: runbooks/order-day-<date>.md
 
-Then skim these behavior-governing feedback memories (MEMORY.md links them):
-feedback_hold_the_roadmap, feedback_premium_feel (no emoji UI — inline SVG only),
-feedback_build_immediately_and_parallelize, feedback_batch_deploys,
-feedback_eod_journal_closeout, feedback_scan_for_similar_bugs,
-feedback_ai_tone_premium, feedback_fly_deploy_flags, feedback_instant_feel.
+Then VERIFY the repo yourself — never trust memory over the tree:
+- git --no-optional-locks log --oneline -8   (ALWAYS --no-optional-locks:
+  plain git reads from your sandbox leave a stale index.lock that blocks
+  my commits; if I ever hit index.lock with no git running, that's it —
+  rm ~/dev/liquor-kings/.git/index.lock)
+- git --no-optional-locks status             (tree should be clean)
 
-Repo: /Users/tonecapone/dev/liquor-kings. Prod: https://liquor-kings.fly.dev
-(scanner at /scanner/). I deploy from my Mac with `npm run deploy`. The
-codebase + git history is the source of truth for what currently ships.
+THE OPERATING DEAL (full text in RULEBOOK — these are the load-bearing ones):
+- PROD Supabase is eamoozfhqolshdztbrez — verify by ID, never name. DB
+  reads go through one-liners I run: node --input-type=module from
+  services/api, dotenv, LK_PROD_SUPABASE_URL/_SERVICE_ROLE_KEY, print the
+  target host first, COUNT queries only (PostgREST caps un-paginated
+  selects at 1,000 silently — we have the scars).
+- I do ALL git and ALL deploys. You make direct edits + audit yourself
+  (node --check + scanner tsc/vitest/build run in your sandbox; API vitest
+  runs on MY Mac only). Batch deploys — never per change.
+- Exact commands only, NO placeholders, each with one plain line of what
+  it does. Include the cd IN the command — I run them from anywhere.
+- ONE writer in the repo at a time. No emoji in the UI. Prove before
+  trust: only me seeing it work on device = fixed.
+- When I'm overwhelmed: ONE small thing at a time. Deciding what's next
+  is your job, not mine.
 
-When you've read the above, acknowledge in ONE sentence and tell me the first
-thing you'd pick up (my journal's "next entry point" has my current pick).
+Read the room, tell me you're caught up in plain English, and give me ONE
+next step (the journal's NEXT list has the queue).
 ```
 
 ---
 
 # FULL SYSTEM REVIEW
+
+> **Freshness note (2026-07-14):** this review is a **2026-06-10 snapshot**.
+> The bones — what LK is, the pillars, repo layout, the two-Fly-app split —
+> are still true. Counts and feature states have moved on (family-first
+> catalog, premium cards, photo truth pipeline, two-step ordering, new-item
+> ingest, 295 extra SKUs…). For CURRENT state trust the living docs:
+> RULEBOOK → journal → STATE-OF-LIQUOR-KINGS → TONY-WANTS. They are
+> maintained every session; this review is not.
 
 ## What Liquor Kings is
 

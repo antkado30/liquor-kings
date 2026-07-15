@@ -298,25 +298,39 @@ but nothing reads them yet (the wiring we planned).
 
 ## THE PATH — finish-to-empty, in order (no new features until 🟡 = 0)
 
-**Phase 0 — Trust & safety (this week, before anything):**
-1. ✅ White-screen postmortem (fly logs) → fix the API boot problem for real. (DONE 7/3)
-2. Uptime monitor + real Sentry DSN → the app can never die silently again.
-3. ✅ Confirm `LK_CRON_SECRET` is set → prices aren't silently stale. (FIXED 7/4 —
-   was broken all 36 runs; secret re-keyed both sides; prices verified current.
-   Final proof = tomorrow's scheduled run green.)
+**Phase 0 — Trust & safety: ✅ COMPLETE**
+1. ✅ White-screen postmortem → API boot fixed for real. (DONE 7/3)
+2. ✅ UptimeRobot live (7/5) + Sentry finished w/ release tagging (7/11) —
+   verified 7/14: ZERO unresolved issues across a 3-deploy week. (Known
+   gap for the observability center: HANDLED 5xx responses don't reach
+   Sentry — the browse_families dark-fallback week was invisible to it.)
+3. ✅ `LK_CRON_SECRET` fixed 7/4; scheduled runs green since.
 
-**Phase 1 — Kill the dead (one afternoon, pure subtraction, feels amazing):**
-4. Confirm + drop the 4 `pilot_ops_*` tables + their admin pages.
-5. Cancel UPCitemdb + Google CSE billing; decide Serper (run once or cancel).
-6. Archive the ~8 one-time loader scripts; delete the 2 dead image scripts.
-7. Remove `UPCITEMDB_API_KEY` + vestigial flags; delete superseded validate code.
+**Phase 1 — Kill the dead (REWRITTEN 7/14 after the census corrections —
+half the original list turned out to be ALIVE):**
+4. ~~Drop pilot_ops_* tables~~ — INVALID: verified LIVE 7/3 (operator
+   review subsystem). Do not drop.
+5. Cancel **Google CSE billing** (the one true kill). UPCitemdb: KEEP
+   until the scan-path lookup is replaced (verified wired 7/3). Serper:
+   KEEP — it's now THE photo pipeline (76% coverage through it).
+6. Archive the ~8 one-time loader scripts; delete the 2 dead image
+   scripts (google/ai backfills).
+7. Delete superseded validate code + dormant `SUPABASE_JWT_SECRET` branch
+   (verified safe 7/12); UPCITEMDB_API_KEY stays until #5's replacement.
 
-**Phase 2 — Finish the started (the order loop is the point):**
-8. The notification layer (Phase 0 #3's cousin): "order needs you" push.
-9. Family-tree wiring (engine + backfill DONE 7/1 → endpoint + chips + search).
-10. Then, and only then: the deferred speed win (productId pre-map) + engine submit.
+**Phase 2 — Finish the started: ✅ COMPLETE (7/8–7/14)**
+8. ✅ Notification layer — push proven on Tony's phone 7/8.
+9. ✅ Family-tree wiring — endpoint + chips + grouped search (7/11),
+   family-first Catalog scrolling + premium cards (7/12), pack truth +
+   chip order + page-scoped RPC actually-live at 625ms (7/14).
 
-**Phase 3 — the rest of TONY-WANTS**, once the board is clean.
+**Phase 3 — the order loop's endgame (the live queue):**
+10. THU 7/16 ORDER DAY: armed two-step run + HAR submit-endpoint capture.
+11. Engine submit from the capture → scan-to-submitted in seconds.
+12. productId pre-map (the deferred speed win) → ~3s checks.
+13. Post-7/16 follow-ups: cron-wire new-item ingest; photo flake re-run;
+    catalog polish pass (Tony's "advanced and amazing" bar); Phase 1's
+    cleanup afternoon.
 
 Every item above is finite and named. There is no "everything" anymore —
 there's this list, and we cross items off until it's empty.
