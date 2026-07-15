@@ -40,13 +40,35 @@ that read as corruption. Both were fixed at the CLASS level, and the
   the whole catalog red "likely discontinued" — Tony's eyes caught it in
   one walkthrough; baseline now = latest FULL book run.
 
-**Found + fix in flight:** browse_families times out even on a quiet DB —
-the Catalog tab has been silently on its flat fallback since Sunday. The
-function's output is proven CORRECT; it's a speed problem. Fix: page-scoped
-aggregation (build cards only for the 30 on screen).
+**Found + FIXED same night:** browse_families timed out even on a quiet
+DB — the Catalog tab had been silently on its flat fallback since Sunday
+(the function's output was CORRECT; it built cards for all 9,800 families
+per page request). Page-scoped rewrite: **timeout → 625ms**, applied
+straight to prod via SQL editor — no deploy needed, the app had been
+ready since Sunday. *Device proof of family cards on the Catalog tab is
+the ONE open box — first glance tomorrow.*
 
-**Board:** git `174a793` · gates + Colony flag OFF at rest · prod healthy ·
-THU 7/16 = order day (runbook ready, two-button flow's first armed use).
+**The late-night recall fix (Tony: "no way there's not one clean photo"):**
+he was right — the matcher spoke wholesale and the internet speaks retail.
+Searching raw MLCC strings ("ARROW PPRMNT SCHNAPPS PL") found nothing AND
+the variant guard REJECTED pages saying "Peppermint" as a wrong flavor.
+Fix: curated name expansion feeds the query + every text gate (vision
+keeps the raw name), candidate walk 4 → 8. Result: +664 photos in one
+pass, noMatch floor 2,630 → 1,953. **Final standing: 11,994 of 14,123
+photographed (85%)** — the remaining ~1,950 are genuine in-store-snap /
+curation territory, the moat path.
+
+**Also this night:** order-day preflight cross-checked against current
+code (clean — nothing drifted); Sentry swept (Tony's org, ZERO unresolved
+issues across a 3-deploy week; noted gap: handled 5xxs are invisible —
+the dark-fallback week never appeared); NEXT-CHAT-PROMPT bootstrap
+rewritten for the current stack; STATE's PATH reconciled (Phases 0 + 2
+complete).
+
+**Board:** git `5822ad1` · gates + Colony flag OFF at rest · prod healthy ·
+THU 7/16 = order day (runbook verified, two-button flow's first armed use).
+Wednesday is deliberately quiet by Tony's own sequencing — polish waits
+for the other side of Thursday.
 
 All glory to God — two days of finding out the product we said we had, we
 now actually have.
