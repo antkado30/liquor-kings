@@ -71,6 +71,7 @@ import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 import sharp from "sharp";
 import { extractBottleSizeMl } from "../src/lib/upcitemdb.js";
+import { expandMlccNameForImageSearch } from "../src/mlcc/mlcc-name-search-expansion.js";
 
 // ── Verification tunables ──────────────────────────────────────────────────
 const NAME_SIMILARITY_THRESHOLD = 0.6;
@@ -883,7 +884,21 @@ async function main() {
   async function processItem(item) {
     const tag = `[${++stats.done}/${total}] ${item.code} "${item.name}"`;
     const sizeLabel = item.bottle_size_label ?? `${item.bottle_size_ml ?? ""}ml`;
-    const query = `${item.name} ${sizeLabel} liquor bottle`.trim();
+    /*
+      RECALL FIX (2026-07-14): search AND text-match on the EXPANDED name.
+      The raw wholesale string ("ARROW PPRMNT SCHNAPPS PL") found nothing
+      AND the variant guard rejected correct results ("mentions
+      peppermint" — a flavor the raw token set didn't contain). One
+      expanded truth feeds the query, the containment score, the variant
+      guard, and the sub-brand check. The VISION gate keeps the raw name —
+      its prompt decodes abbreviations itself and is proven at scale.
+    */
+    const expandedName = expandMlccNameForImageSearch(item.name) || item.name;
+    const matchItem = expandedName === item.name ? item : { ...item, name: expandedName };
+    if (expandedName !== item.name) {
+      console.log(`${tag} — searching as "${expandedName}"`);
+    }
+    const query = `${expandedName} ${sizeLabel} liquor bottle`.trim();
 
     const search = await serperImageSearch(query);
     stats.queries += 1;
@@ -904,7 +919,7 @@ async function main() {
       return;
     }
 
-    const ranked = rankVerified(item, search.results);
+    const ranked = rankVerified(matchItem, search.results);
     if (ranked.length === 0) {
       stats.noMatch += 1;
       console.log(`${tag} — ✗ no verified match (${search.results.length} results)`);
@@ -930,7 +945,11 @@ async function main() {
      *     no clean shot survives the walk;
      *   - nothing passes at all → placeholder (accurate or nothing).
      */
-    const MAX_TRIES = 4;
+    // 4 → 8 (2026-07-14 recall fix): with expanded names producing more
+    // verified candidates, a clean shot at position 6 deserves its walk.
+    // Only stubborn items pay the extra vision calls — clean hits still
+    // stop at the first accept.
+    const MAX_TRIES = 8;
     let fallback = null; // first correct-but-busy-background candidate
     for (const cand of ranked.slice(0, MAX_TRIES)) {
       const dl = await downloadImage(cand.r.imageUrl);
