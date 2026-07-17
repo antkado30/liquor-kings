@@ -3,8 +3,18 @@ import path from "node:path";
 import { waitForAngularStable } from "../milo-discovery.js";
 import { KNOWN_ADAS } from "../../mlcc/milo-ordering-rules.js";
 
-const DEFAULT_TIMEOUT_MS = 45_000;
-const DEFAULT_VALIDATE_CLICK_TIMEOUT_MS = 30_000;
+// 300s (was 45s — Order Day 2026-07-16 postmortem-in-motion): the 45s
+// guillotine killed TWO live submit attempts back-to-back. MILO under
+// evening order-day load ran the products page ~90s and delivery dates
+// 25s+; the cart page's "finalize your cart" spinner alone can outlast
+// 45s. checkout.js (stage 5) already runs a 180s budget on the same
+// pages — stage 4's sub-waits (finalize 90s + click response 60s +
+// post-validate 90s + angular + reads) sum past that, so 300s. This is
+// a hang-stop, not a pace-setter: the worker keepalive beats every 15s
+// during stage 4, so the reaper never mistakes slow-MILO for dead.
+const DEFAULT_TIMEOUT_MS = 300_000;
+// 60s (was 30s, same incident): MILO's validate response under load.
+const DEFAULT_VALIDATE_CLICK_TIMEOUT_MS = 60_000;
 
 function createStage4Error(code, message, details = {}, screenshotPath = null) {
   const err = new Error(message);
@@ -573,7 +583,9 @@ export async function validateCartOnMilo(session, options = {}) {
     if (!currentUrl.includes("/milo/cart")) {
       throw createStage4Error("MILO_STAGE4_INVALID_SESSION", "Stage 4 requires /milo/cart", { currentUrl });
     }
-    await waitForCartFinalized(page, 30_000);
+    // 90s (was 30s, 2026-07-16): "finalize your cart" + delivery-date
+    // banners on the cart page outlasted 30s under order-day load.
+    await waitForCartFinalized(page, 90_000);
 
     const hasCartRows = await page
       .evaluate(() => {
@@ -647,14 +659,15 @@ export async function validateCartOnMilo(session, options = {}) {
         );
       }
 
-      const postValidate = await waitForPostValidateStabilized(page, 30_000);
+      // 90s (was 30s, 2026-07-16): same order-day-load stretch as above.
+      const postValidate = await waitForPostValidateStabilized(page, 90_000);
       if (postValidate.sawValidated) sawValidatedSignal = true;
       if (!postValidate.stabilized) {
         const screenshotPath = await captureFailure(page, outputDir, stage4Artifacts, "error-post-validate-finalization-timeout");
         throw createStage4Error(
           "MILO_STAGE4_VALIDATE_TIMEOUT",
           "Post-validate cart stabilization timed out",
-          { currentUrl: page.url(), waitedMs: 30_000 },
+          { currentUrl: page.url(), waitedMs: 90_000 },
           screenshotPath,
         );
       }

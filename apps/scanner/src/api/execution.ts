@@ -44,7 +44,15 @@ export type RunStatus =
   | "running"
   | "succeeded"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  /**
+   * 2026-07-16 truth rule: the submit click dispatched and no
+   * confirmation OR rejection was captured before the run ended. The
+   * order very likely EXISTS on MILO (tonight's did — MLCC emailed while
+   * the run "failed"). Terminal, never auto-retried, and the UI must
+   * never render it as "didn't go through."
+   */
+  | "submitted_unconfirmed";
 
 /**
  * Mode passed to /execution-runs/from-cart. Phase 1 Week 1 of V1 roadmap
@@ -377,5 +385,10 @@ export async function recoverStore(): Promise<RecoverStoreResult> {
 }
 
 export function isTerminalStatus(status: RunStatus): boolean {
-  return status === "succeeded" || status === "failed" || status === "cancelled";
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "submitted_unconfirmed"
+  );
 }

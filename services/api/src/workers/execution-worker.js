@@ -6,11 +6,12 @@ import { makeBoundedFetch, resolveDbFetchTimeoutMs } from "../lib/bounded-fetch.
 
 import { buildMlccPreflightReport } from "./mlcc-adapter.js";
 import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
+import { uploadRunArtifacts, formatUploadSummary } from "../lib/run-artifacts-storage.js";
 import { loginToMilo } from "../rpa/stages/login.js";
 import { navigateToProducts } from "../rpa/stages/navigate-to-products.js";
 import { addItemsToCart, clearMiloCart } from "../rpa/stages/add-items-to-cart.js";
 import { validateCartOnMilo } from "../rpa/stages/validate-cart.js";
-import { checkoutOnMilo } from "../rpa/stages/checkout.js";
+import { checkoutOnMilo, navigateToOrdersAndCapture } from "../rpa/stages/checkout.js";
 import { buildAndValidateViaApi } from "../rpa/engine/engine-api.js";
 import { attachMiloProductCache } from "../rpa/engine/attach-product-cache.js";
 import {
@@ -1205,6 +1206,10 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
           },
         );
       } catch (loginError) {
+      // P0-3 (2026-07-16 postmortem F2): every stage death prints to stdout.
+      console.error(
+        `[stage1] FAILED run ${run.id}: ${loginError?.code ?? "UNKNOWN"} — ${loginError?.message ?? "no message"}`,
+      );
       const failure = summarizeFailure(
         loginError?.message ?? "RPA Stage 1 login failed",
         loginError?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -1459,6 +1464,10 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         captureArtifacts: true,
       });
     } catch (stage2Error) {
+      // P0-3 (2026-07-16 postmortem F2): every stage death prints to stdout.
+      console.error(
+        `[stage2] FAILED run ${run.id}: ${stage2Error?.code ?? "UNKNOWN"} — ${stage2Error?.message ?? "no message"}`,
+      );
       const failure = summarizeFailure(
         stage2Error?.message ?? "RPA Stage 2 navigation failed",
         stage2Error?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -1683,6 +1692,10 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         },
       });
     } catch (stage3Error) {
+      // P0-3 (2026-07-16 postmortem F2): every stage death prints to stdout.
+      console.error(
+        `[stage3] FAILED run ${run.id}: ${stage3Error?.code ?? "UNKNOWN"} — ${stage3Error?.message ?? "no message"}`,
+      );
       const failure = summarizeFailure(
         stage3Error?.message ?? "RPA Stage 3 add items failed",
         stage3Error?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -1766,6 +1779,12 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         captureArtifacts: true,
       });
     } catch (stage4Error) {
+      // Print to stdout so `fly logs` shows the death (2026-07-16: two live
+      // submit attempts died in stage 4 with NOTHING in the log stream — the
+      // failure only existed in the DB and cost 20 blind minutes mid-order).
+      console.error(
+        `[stage4] FAILED run ${run.id}: ${stage4Error?.code ?? "UNKNOWN"} — ${stage4Error?.message ?? "no message"}`,
+      );
       const failure = summarizeFailure(
         stage4Error?.message ?? "RPA Stage 4 validate cart failed",
         stage4Error?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -2167,12 +2186,25 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       // function's session-release/teardown in the `finally` block.
       // 240_000ms covers the documented 185s worst case with real margin,
       // matching checkout.js's own DEFAULT_TIMEOUT_MS (180_000) intent.
+      // 420s (was 240s — Order Day 2026-07-16 postmortem F3): 240s
+      // guillotined the run mid-backstop on a slow MILO — AFTER the real
+      // submit clicked (MLCC email arrived while the run "failed"). The
+      // post-click machinery alone is 75s signal wait + 90s history
+      // backstop + nav/parse; pre-click checkout-page work on an
+      // order-night MILO eats the rest. Hang-stop, not pace-setter — and
+      // post-click expiry now resolves to submitOutcome:"unconfirmed"
+      // inside checkout.js instead of throwing (the truth rule).
       checkedOut = await checkoutOnMilo(session, {
         mode: stage5Mode,
         allowOrderSubmission,
-        timeoutMs: 240_000,
+        timeoutMs: 420_000,
       });
     } catch (stage5Error) {
+      // Stage-5 deaths must be visible in `fly logs` (postmortem F2 — the
+      // stage-4 twin of this line was added mid-order-day 2026-07-16).
+      console.error(
+        `[stage5] FAILED run ${run.id}: ${stage5Error?.code ?? "UNKNOWN"} — ${stage5Error?.message ?? "no message"}`,
+      );
       const failure = summarizeFailure(
         stage5Error?.message ?? "RPA Stage 5 checkout failed",
         stage5Error?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -2184,18 +2216,45 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
               : {},
         },
       );
+      /*
+        A thrown stage-5 error with submit_clicked in its details means the
+        click dispatched and MILO then showed an explicit rejection toast
+        (the one error checkout.js still throws post-click). The attestation
+        must tell the truth either way (2026-07-16: tonight's placed order
+        carries a FALSE "no submit" attestation in evidence — never again).
+      */
+      const clickDispatched = stage5Error?.details?.submit_clicked === true;
       await finalizeRun({
         apiBaseUrl,
         runId: run.id,
         storeId,
         status: "failed",
-        workerNotes: "RPA Stage 5 failed",
+        workerNotes: clickDispatched
+          ? "RPA Stage 5 failed — MILO rejected the submit after the click (error toast)"
+          : "RPA Stage 5 failed",
         errorMessage: failure.message,
         failureType: failure.failureType,
-        failureDetails: failure.details,
+        failureDetails: {
+          ...failure.details,
+          submit_clicked: clickDispatched,
+        },
         evidence: [
           ...stepEvidence,
-          buildNoSubmitAttestationEvidence("stage5_checkout", "rpa_run"),
+          ...(clickDispatched
+            ? [
+                buildEvidenceEntry({
+                  kind: "submit_click_attestation",
+                  stage: "stage5_checkout",
+                  message:
+                    "Checkout click DISPATCHED; MILO returned an explicit rejection toast — no order expected, verify Orders page",
+                  attributes: {
+                    submit_clicked: true,
+                    submit_clicked_at: stage5Error?.details?.submit_clicked_at ?? null,
+                    error_code: stage5Error?.code ?? null,
+                  },
+                }),
+              ]
+            : [buildNoSubmitAttestationEvidence("stage5_checkout", "rpa_run")]),
         ],
       });
       return {
@@ -2206,6 +2265,141 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         stage: "stage5_checkout",
         error: stage5Error?.code ?? FAILURE_TYPE.UNKNOWN,
       };
+    }
+
+    /*
+      THE TRUTH RULE, worker half (2026-07-16 postmortem P0-1). checkout.js
+      resolves post-click errors/timeouts as submitOutcome:"unconfirmed"
+      instead of throwing. The run finalizes as submitted_unconfirmed:
+      TERMINAL (status is not "failed", so the retry scheduler never sees
+      it — re-running a dispatched submit risks a DOUBLE ORDER), and the
+      client renders "Submitted — confirming", never "didn't go through."
+      External truth (MLCC email / MILO Orders page) outranks run state.
+    */
+    if (stage5Mode === "submit" && checkedOut?.submitOutcome === "unconfirmed") {
+      console.error(
+        `[stage5] UNCONFIRMED run ${run.id}: submit click dispatched at ${checkedOut?.submitClickedAt ?? "unknown"}; ` +
+          `no confirmation captured before the stage ended (${checkedOut?.stage5Error?.code ?? "no code"}). ` +
+          `Attempting second-chance receipt scrape before settling.`,
+      );
+
+      /*
+        SECOND-CHANCE RECEIPT SCRAPE (2026-07-16 postmortem F3, the
+        self-healing half). On 7/16 the run gave up while the placed
+        order sat fully visible on /milo/orders — a human (Tony) had to
+        read the page and hand-insert the confirmations. If the browser
+        page survived whatever killed stage 5, the worker can read that
+        same page itself: one bounded, read-only orders-history parse.
+        Confirmations found → this run UPGRADES to a full success with
+        numbers persisted, exactly as if stage 5 had finished. Nothing
+        found (or page dead) → settle at submitted_unconfirmed, honest.
+        No cart mutation, no clicks — the submit already happened.
+      */
+      let recoveredReceipt = null;
+      if (session?.page) {
+        try {
+          recoveredReceipt = await navigateToOrdersAndCapture(
+            session.page,
+            session,
+            checkedOut?.outputDir ?? session?.outputDir ?? null,
+            [],
+            90_000,
+          );
+        } catch (scrapeErr) {
+          console.error(
+            `[stage5] second-chance scrape failed for run ${run.id}: ${scrapeErr?.code ?? "UNKNOWN"} — ${scrapeErr?.message ?? scrapeErr}`,
+          );
+        }
+      }
+      const rc = recoveredReceipt?.confirmationNumbers;
+      const receiptRecovered =
+        rc != null &&
+        (Array.isArray(rc)
+          ? rc.length > 0
+          : typeof rc === "object"
+            ? Object.keys(rc).length > 0
+            : String(rc).trim() !== "");
+
+      if (receiptRecovered) {
+        console.log(
+          `[stage5] SECOND-CHANCE RECOVERY run ${run.id}: confirmations found on /milo/orders — upgrading to succeeded`,
+        );
+        stepEvidence.push(
+          buildEvidenceEntry({
+            kind: "submit_click_attestation",
+            stage: "stage5_checkout",
+            message:
+              "Submit click dispatched; stage 5 missed the receipt, but the worker's second-chance orders-history scrape recovered the confirmations",
+            attributes: {
+              submit_clicked: true,
+              submit_clicked_at: checkedOut?.submitClickedAt ?? null,
+              stage5_error_code: checkedOut?.stage5Error?.code ?? null,
+              recovered_from_worker_backstop: true,
+            },
+          }),
+        );
+        // Rebuild checkedOut as a confirmed submit and FALL THROUGH to the
+        // normal success path below (confirmations persist + finalize
+        // succeeded) — this run never touches submitted_unconfirmed.
+        checkedOut = {
+          ...checkedOut,
+          submitted: true,
+          submitOutcome: undefined,
+          confirmationNumbers: recoveredReceipt.confirmationNumbers,
+          submittedTimestamp:
+            recoveredReceipt.submittedTimestamp ?? checkedOut?.submitClickedAt ?? null,
+          currentUrl: recoveredReceipt.currentUrl ?? checkedOut?.currentUrl ?? null,
+          recoveredFromWorkerBackstop: true,
+          ...(recoveredReceipt.historyOrders
+            ? { historyOrders: recoveredReceipt.historyOrders }
+            : {}),
+        };
+      }
+
+      if (!receiptRecovered) {
+      console.error(
+        `[stage5] UNCONFIRMED run ${run.id} settling: NOT failed, NOT retryable — verify on MILO Orders / MLCC email.`,
+      );
+      await finalizeRun({
+        apiBaseUrl,
+        runId: run.id,
+        storeId,
+        status: "submitted_unconfirmed",
+        workerNotes:
+          "Submit click dispatched; confirmation not captured before stage end. Verify MILO Orders page / MLCC email. Never auto-retried.",
+        errorMessage: checkedOut?.stage5Error?.message ?? undefined,
+        failureDetails: {
+          submit_clicked: true,
+          submit_clicked_at: checkedOut?.submitClickedAt ?? null,
+          stage5_error_code: checkedOut?.stage5Error?.code ?? null,
+        },
+        evidence: [
+          ...stepEvidence,
+          buildEvidenceEntry({
+            kind: "submit_click_attestation",
+            stage: "stage5_checkout",
+            message:
+              "Checkout click DISPATCHED in submit mode; no terminal confirmation or rejection signal captured before the run ended",
+            attributes: {
+              submit_clicked: true,
+              submit_clicked_at: checkedOut?.submitClickedAt ?? null,
+              stage5_error_code: checkedOut?.stage5Error?.code ?? null,
+              stage5_error_message: checkedOut?.stage5Error?.message ?? null,
+              current_url: checkedOut?.currentUrl ?? null,
+              output_dir: checkedOut?.outputDir ?? null,
+            },
+          }),
+        ],
+      });
+      return {
+        success: false,
+        claimed: true,
+        failed: false,
+        runId: run.id,
+        stage: "stage5_checkout",
+        submittedUnconfirmed: true,
+      };
+      }
     }
 
     stepEvidence.push(
@@ -2340,6 +2534,28 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       // (documented in _test_validate.js). Best-effort — teardown never throws.
       if (session?.context) await session.context.close().catch(() => {});
       if (session?.browser) await session.browser.close().catch(() => {});
+    }
+
+    /*
+      P0-2 (2026-07-16 postmortem F5): upload the run's artifacts OFF-MACHINE
+      the moment they're flushed. This line exists because the 7/16 disarm
+      restart wiped the live submit run's network.har from this ephemeral
+      disk — the submit-endpoint capture, gone. Placement is deliberate:
+      AFTER the context close above (so network.har exists on disk) and
+      inside the finally (so success, failure, and submitted_unconfirmed
+      all preserve their evidence). Best-effort + bounded — a slow or
+      failed upload logs one line and never blocks the worker loop.
+      NOTE: this runs after finalizeRun, so counts land in fly logs (grep
+      "[artifacts]"), not in run evidence — retrieval is by run id via
+      scripts/pull-run-artifacts.mjs, which lists Storage directly.
+    */
+    if (session?.outputDir && run?.id) {
+      const artifactSummary = await uploadRunArtifacts({
+        supabase: workerSupabase,
+        runId: run.id,
+        outputDir: session.outputDir,
+      });
+      console.log(formatUploadSummary(run.id, artifactSummary));
     }
   }
 }

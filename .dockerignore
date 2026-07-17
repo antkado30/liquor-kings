@@ -55,3 +55,11 @@ README.md
 *.md
 !Dockerfile
 actions.jsonl
+
+# Pulled run evidence (P0-2, 2026-07-16) — local forensic copies from
+# Supabase Storage / the worker. Never belongs in an image, and it was
+# adding MBs to every build context upload.
+rpa-captures
+**/rpa-output
+family-audit
+sql

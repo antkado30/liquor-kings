@@ -49,6 +49,7 @@ import { useActiveOrder } from "../hooks/useActiveOrder";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
 import { hashCart } from "../hooks/useBackgroundPreValidate";
+import { oosDisplayLabel } from "../lib/oos-display";
 import { resolvePlaceGate } from "../lib/place-gate";
 import { useHideTabBar } from "../hooks/useHideTabBar";
 import { SubmitConfirmationModal } from "./SubmitConfirmationModal";
@@ -866,6 +867,68 @@ export function CartDrawer({
     [fireOrder, items, itemsHash, trackOrder, onClose],
   );
 
+  /*
+    One-tap "Remove these N and check again" (TONY-WANTS 7/16 #0 — stated
+    live mid-order: "we shouldn't have to fix the cart… at least give an
+    option to remove all of those items to proceed"). A red check with OOS
+    lines used to strand the operator hand-hunting codes out of a 34-line
+    cart. This strips exactly what MILO rejected and fires a fresh check
+    in one tap.
+
+    Honesty preserved: this automates the CLEANUP, not the gate — the new
+    check must still come back green before Place unlocks (hash mismatch
+    re-locks the moment lines are removed, same as any edit).
+
+    Race note: fireOrder takes the REMAINING list explicitly — never the
+    `items` closure — because removeItem's setState hasn't landed inside
+    this same tick.
+  */
+  const removeOosAndRecheck = useCallback(() => {
+    if (state.kind !== "validateDone") return;
+    const oosSet = new Set<string>(serverOosCodes);
+    for (const line of inferredOos) oosSet.add(line.product.code);
+    for (const it of state.validateResult?.out_of_stock_items ?? []) {
+      const c = it?.code != null ? String(it.code).trim() : "";
+      if (c !== "") oosSet.add(c);
+    }
+    if (oosSet.size === 0) return;
+
+    const remaining = items.filter((line) => !oosSet.has(line.product.code));
+    for (const code of oosSet) removeItem(code);
+
+    if (remaining.length === 0) {
+      // Whole cart was OOS — nothing left to check. Removal already done.
+      setFireError(null);
+      return;
+    }
+
+    setFireError(null);
+    setIsFiring(true);
+    void (async () => {
+      const r = await fireOrder(remaining, "validate_only");
+      setIsFiring(false);
+      if (r.ok) {
+        trackOrder(r.runId, "validate_only", { cartHash: hashCart(remaining) });
+        onClose();
+      } else {
+        setFireError(r.error);
+      }
+    })();
+  }, [state, serverOosCodes, inferredOos, items, removeItem, fireOrder, trackOrder, onClose]);
+
+  // Every OOS code the current check surfaced (server list + inferred
+  // backstop) — drives the pinned strip + the one-tap button label.
+  const oosCodesForRecheck = useMemo(() => {
+    if (state.kind !== "validateDone") return new Set<string>();
+    const set = new Set<string>(serverOosCodes);
+    for (const line of inferredOos) set.add(line.product.code);
+    for (const it of state.validateResult?.out_of_stock_items ?? []) {
+      const c = it?.code != null ? String(it.code).trim() : "";
+      if (c !== "") set.add(c);
+    }
+    return set;
+  }, [state, serverOosCodes, inferredOos]);
+
   // Cart-wide blockers shown above the validate button. Per-line errors
   // render inline on their cart line below.
   const validationBlockers = useMemo(() => {
@@ -1310,6 +1373,10 @@ export function CartDrawer({
               inferredOos.length === 0
             }
             cartItems={items}
+            onRemoveOosAndRecheck={
+              oosCodesForRecheck.size > 0 ? removeOosAndRecheck : null
+            }
+            removeBusy={isFiring}
           />
         ) : null}
 
@@ -1467,6 +1534,46 @@ export function CartDrawer({
               surface it inline near the footer so the user can retry.
             */}
             {fireError ? <div className="banner banner-err">{fireError}</div> : null}
+            {/*
+              Pinned check-result strip (TONY-WANTS 7/16 #2): "post-validate
+              results posted in the cart all the way at the bottom." The full
+              panel lives up in the body where it can scroll away; this strip
+              sits ON the footer so the OOS verdict and the one-tap fix are
+              in view exactly where the operator is about to press buttons.
+            */}
+            {state.kind === "validateDone" && oosCodesForRecheck.size > 0 ? (
+              <div className="banner banner-warn" style={{ marginBottom: 8 }}>
+                <strong>
+                  {oosCodesForRecheck.size} item{oosCodesForRecheck.size === 1 ? "" : "s"} out of
+                  stock at MLCC
+                </strong>
+                <div className="muted small" style={{ marginTop: 4 }}>
+                  {(() => {
+                    const names = [...oosCodesForRecheck]
+                      .map((code) => oosDisplayLabel({ code }, items))
+                      .filter((n) => n !== "");
+                    const shown = names.slice(0, 3).join(", ");
+                    const more = names.length - 3;
+                    return more > 0 ? `${shown}, and ${more} more` : shown;
+                  })()}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-block"
+                  disabled={isFiring}
+                  onClick={removeOosAndRecheck}
+                  style={{ marginTop: 8 }}
+                >
+                  {isFiring
+                    ? "Working…"
+                    : `Remove ${
+                        oosCodesForRecheck.size === 1
+                          ? "it"
+                          : `these ${oosCodesForRecheck.size}`
+                      } and check again`}
+                </button>
+              </div>
+            ) : null}
             <div className="drawer-footer">
               <div className="drawer-footer__total">
                 <span className="drawer-footer__total-label">Total</span>
@@ -1938,10 +2045,15 @@ function ValidateResultPanel({
   result,
   canCheckout,
   cartItems,
+  onRemoveOosAndRecheck = null,
+  removeBusy = false,
 }: {
   result: import("../api/execution").ValidateResult | null;
   canCheckout: boolean | null;
   cartItems: CartContextValue["items"];
+  /** TONY-WANTS 7/16 #0: one-tap strip-the-rejects-and-recheck. Null hides the button. */
+  onRemoveOosAndRecheck?: (() => void) | null;
+  removeBusy?: boolean;
 }) {
   if (!result) {
     return (
@@ -2052,7 +2164,8 @@ function ValidateResultPanel({
           <ul className="drawer-validation-errors">
             {oos.map((item, i) => (
               <li key={i}>
-                {item.productName ?? item.code ?? "Unknown item"}
+                {/* TONY-WANTS 7/16 #1: cart-joined name — never a naked code */}
+                {oosDisplayLabel(item, cartItems)}
                 {item.quantity ? ` × ${item.quantity}` : ""}
                 {/*
                   Reason-tagged messages from #53 (2026-06-04):
@@ -2075,9 +2188,29 @@ function ValidateResultPanel({
               </li>
             ))}
           </ul>
-          <p className="muted small" style={{ marginTop: 6 }}>
-            Remove these from your cart and re-validate to clear.
-          </p>
+          {onRemoveOosAndRecheck ? (
+            /*
+              TONY-WANTS 7/16 #0 — the button that replaces hand-hunting
+              8 codes out of a 34-line cart mid-order. Strips exactly the
+              rejected lines and fires a fresh check; Place stays locked
+              until that check comes back green (gate untouched).
+            */
+            <button
+              type="button"
+              className="btn btn-block"
+              disabled={removeBusy}
+              onClick={onRemoveOosAndRecheck}
+              style={{ marginTop: 8 }}
+            >
+              {removeBusy
+                ? "Working…"
+                : `Remove ${oos.length === 1 ? "it" : `these ${oos.length}`} and check again`}
+            </button>
+          ) : (
+            <p className="muted small" style={{ marginTop: 6 }}>
+              Remove these from your cart and re-validate to clear.
+            </p>
+          )}
         </>
       ) : null}
       {/*

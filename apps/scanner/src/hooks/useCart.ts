@@ -281,3 +281,14 @@ export function useCart(): CartContextValue {
   }
   return ctx;
 }
+
+/**
+ * Read-only cart lines with a graceful empty fallback (2026-07-16).
+ * For display-only consumers (RunResultSheet's OOS name join) that render
+ * fine without a provider — e.g. in component tests. NOT for anything
+ * that mutates the cart; those keep the loud useCart() contract.
+ */
+export function useCartItemsOrEmpty(): CartItem[] {
+  const ctx = useContext(CartContext);
+  return ctx?.items ?? [];
+}

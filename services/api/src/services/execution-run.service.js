@@ -30,9 +30,13 @@ const ALLOWED_STATUSES = [
   "succeeded",
   "failed",
   "canceled",
+  // 2026-07-16 postmortem P0-1 (the truth rule): submit click dispatched,
+  // confirmation not captured. Terminal, never re-queued — see the
+  // "failed" branch's retry logic, which this status never enters.
+  "submitted_unconfirmed",
 ];
 
-const TERMINAL_STATUSES = ["succeeded", "failed", "canceled"];
+const TERMINAL_STATUSES = ["succeeded", "failed", "canceled", "submitted_unconfirmed"];
 const DEFAULT_MAX_RETRIES = 2;
 const OPERATOR_ACTION = {
   ACKNOWLEDGE: "acknowledge",
@@ -2218,6 +2222,29 @@ export const updateExecutionRunStatus = async (
     patch.progress_message = "Execution completed successfully";
   }
 
+  /*
+    submitted_unconfirmed (2026-07-16 postmortem P0-1): the Checkout click
+    dispatched in submit mode and no confirmation OR rejection was captured
+    before the run ended. Terminal on arrival — it never touches the
+    "failed" branch below, so the retry scheduler can never re-queue it
+    (a re-run could place a SECOND real order). failure_type stays null:
+    this is not a failure verdict, it's an honest "verify externally."
+  */
+  if (status === "submitted_unconfirmed") {
+    patch.finished_at = nowIso;
+    patch.heartbeat_at = nowIso;
+    patch.error_message = errorMessage ?? null;
+    patch.failure_type = null;
+    patch.failure_details = {
+      ...(failureDetails && typeof failureDetails === "object" ? failureDetails : {}),
+      submit_clicked: true,
+      recorded_at: nowIso,
+    };
+    patch.progress_stage = "submitted_unconfirmed";
+    patch.progress_message =
+      "Submitted — confirmation pending. Verify MILO Orders / MLCC email before any further action.";
+  }
+
   if (status === "failed") {
     const classifiedType = classifyFailureType({
       errorMessage,
@@ -2226,7 +2253,19 @@ export const updateExecutionRunStatus = async (
     const retryable = isRetryableFailureType(classifiedType);
     const retryCount = Number(run.retry_count ?? 0);
     const maxRetries = Number(run.max_retries ?? DEFAULT_MAX_RETRIES);
-    const shouldRetry = retryable && retryCount < maxRetries;
+    /*
+      Belt-and-suspenders retry ban past the submit click (2026-07-16
+      postmortem F4). The failure-type deny-list already blocks STAGE5/
+      CHECKOUT/SUBMIT codes — but a post-click death can surface under a
+      GENERIC code (browser crash → TARGET_CLOSED/SESSION, both on the
+      RETRYABLE list). If the worker attested the click dispatched, no
+      code string may re-queue this run: a retry rebuilds the cart and
+      submits AGAIN — the double-order machine. Hard no, forever.
+    */
+    const submitClickDispatched =
+      (failureDetails && typeof failureDetails === "object" && failureDetails.submit_clicked === true) ||
+      run?.failure_details?.submit_clicked === true;
+    const shouldRetry = retryable && !submitClickDispatched && retryCount < maxRetries;
 
     patch.error_message = errorMessage ?? null;
     patch.failure_type = classifiedType;

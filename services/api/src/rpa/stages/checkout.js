@@ -199,7 +199,7 @@ function buildDryRunReason(mode, allowOrderSubmission, envAllowSubmission) {
   return failed.join("; ");
 }
 
-async function clickCheckoutButtonSafely(page, button, outputDir, artifacts, session) {
+async function clickCheckoutButtonSafely(page, button, outputDir, artifacts, session, onBeforeClick) {
   const currentUrl = page.url();
   if (!currentUrl.includes("/milo/cart")) {
     throw createStage5Error("MILO_STAGE5_SAFETY_GATE_VIOLATION", "Refusing Checkout click outside /milo/cart", { currentUrl });
@@ -235,6 +235,14 @@ async function clickCheckoutButtonSafely(page, button, outputDir, artifacts, ses
   }
 
   await captureArtifact(page, outputDir, artifacts, "01b-checkout-preclick-forensic");
+  // POINT OF NO RETURN (2026-07-16 postmortem P0-1): the caller's marker
+  // fires BEFORE the click dispatches. From this exact line forward, any
+  // error/timeout must be treated as "submitted, unconfirmed" — never as
+  // a plain failure — because we can no longer prove MILO didn't accept.
+  // (A crash between click-dispatch and response is indistinguishable
+  // from a successful submit whose receipt we missed. Tonight's order
+  // proved it: MLCC's email arrived while the run "failed".)
+  if (typeof onBeforeClick === "function") onBeforeClick();
   await button.click({ force: false });
   await captureArtifact(page, outputDir, artifacts, "01c-checkout-postclick-forensic");
 }
@@ -796,6 +804,12 @@ export async function checkoutOnMilo(session, options = {}) {
   const stage5Artifacts = [];
   const outputDir = session.outputDir ? path.join(session.outputDir, "stage5") : null;
 
+  // Set the instant the Checkout click DISPATCHES (see the marker inside
+  // clickCheckoutButtonSafely). null = we can prove no submit happened.
+  // Non-null = point of no return crossed; failures downstream resolve to
+  // submitOutcome:"unconfirmed", never to a thrown "failed".
+  let submitClickedAtMs = null;
+
   const run = async () => {
     if (outputDir) await mkdir(outputDir, { recursive: true });
 
@@ -879,7 +893,9 @@ export async function checkoutOnMilo(session, options = {}) {
       };
     }
 
-    await clickCheckoutButtonSafely(page, checkoutButton, outputDir, stage5Artifacts, session);
+    await clickCheckoutButtonSafely(page, checkoutButton, outputDir, stage5Artifacts, session, () => {
+      submitClickedAtMs = Date.now();
+    });
 
     /**
      * Post-click resolution. The wait function returns the FIRST terminal
@@ -1019,6 +1035,57 @@ export async function checkoutOnMilo(session, options = {}) {
   };
 
   return withTimeout(run(), timeoutMs).catch(async (error) => {
+    /*
+      THE TRUTH RULE (2026-07-16 postmortem P0-1). Once the Checkout click
+      has dispatched in submit mode, NO error below may surface as a plain
+      failure — a "failed" here becomes "Order didn't go through" on the
+      operator's phone while MLCC may be emailing them a confirmation
+      (exactly what happened tonight on a placed $5,338 order). Instead we
+      RESOLVE with submitOutcome:"unconfirmed" and let the worker finalize
+      the run as submitted_unconfirmed: terminal, never retried, honest.
+
+      One deliberate exception: MILO_STAGE5_ERROR_TOAST is MILO itself
+      saying the submit was REJECTED — that is trustworthy proof of
+      no-order, so it stays a real failure (its code contains STAGE5, so
+      the retry deny-list still blocks any auto-retry).
+    */
+    if (submitClickedAtMs != null && error?.code !== "MILO_STAGE5_ERROR_TOAST") {
+      const screenshotPath = await captureFailure(page, outputDir, stage5Artifacts, "error-post-click-unconfirmed").catch(() => null);
+      await appendAction(outputDir, {
+        stage: "stage5",
+        action: "submit_clicked_but_unconfirmed",
+        mode: "submit",
+        ts: new Date().toISOString(),
+        submitClickedAt: new Date(submitClickedAtMs).toISOString(),
+        errorCode: error?.code || null,
+        errorMessage: String(error?.message || error),
+        currentUrl: page.url(),
+      }).catch(() => {});
+      const completedAtDate = new Date();
+      return {
+        ...session,
+        stage5DurationMs: completedAtDate.getTime() - stage5StartedAtDate.getTime(),
+        // Tri-state honesty: true = confirmed, false = provably not
+        // submitted (dry_run / pre-click), null = clicked, unconfirmed.
+        submitted: null,
+        submitOutcome: "unconfirmed",
+        submitClickedAt: new Date(submitClickedAtMs).toISOString(),
+        mode: "submit",
+        confirmationNumbers: null,
+        submittedTimestamp: null,
+        successToastMessages: [],
+        errorToastMessages: [],
+        confirmationEmail: null,
+        currentUrl: page.url(),
+        outputDir,
+        stage5Artifacts,
+        stage5Error: {
+          code: error?.code || "MILO_STAGE5_UNHANDLED",
+          message: String(error?.message || error),
+          ...(screenshotPath ? { screenshotPath } : {}),
+        },
+      };
+    }
     if (error?.code === "MILO_STAGE5_TIMEOUT") {
       const screenshotPath = await captureFailure(page, outputDir, stage5Artifacts, "error-stage5-timeout");
       error.screenshotPath = error.screenshotPath || screenshotPath;
@@ -1031,6 +1098,15 @@ export async function checkoutOnMilo(session, options = {}) {
         { currentUrl: page.url(), reason: String(error?.message || error) },
         screenshotPath,
       );
+    }
+    // Forensics: the only click-dispatched error that rethrows is
+    // ERROR_TOAST (MILO's explicit rejection) — stamp when the click was.
+    if (submitClickedAtMs != null) {
+      error.details = {
+        ...(error.details || {}),
+        submit_clicked: true,
+        submit_clicked_at: new Date(submitClickedAtMs).toISOString(),
+      };
     }
     throw error;
   });

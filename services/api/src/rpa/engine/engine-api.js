@@ -299,3 +299,140 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
     },
   };
 }
+
+/**
+ * Build the MILO checkout payload from a priced cart. Pure + exported for
+ * tests. Mirrors MILO's own checkout() exactly (see
+ * docs/lk/milo-checkout-endpoint.md): items are {productId, quantity,
+ * available} straight off the priced cart; deliveries is the JSON string of
+ * the deliveries array; emails optional.
+ *
+ * Throws if any priced-cart line is missing a productId — we NEVER submit a
+ * cart we can't fully address (fail closed, same doctrine as the boundary
+ * gate in buildAndValidateViaApi).
+ */
+export function buildCheckoutPayload({ pricedCart, deliveries, emails } = {}) {
+  const cartItems = Array.isArray(pricedCart?.items) ? pricedCart.items : [];
+  if (cartItems.length === 0) {
+    throw new Error("buildCheckoutPayload: priced cart has no items — nothing to submit");
+  }
+  const items = cartItems.map((it) => {
+    const productId = it?.product?.id != null ? String(it.product.id) : "";
+    if (productId === "") {
+      throw new Error(
+        `buildCheckoutPayload: a priced-cart line is missing product.id (code ${it?.product?.code ?? "?"}) — failing closed`,
+      );
+    }
+    const quantity = Number(it?.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      throw new Error(
+        `buildCheckoutPayload: invalid quantity for product ${productId} — failing closed`,
+      );
+    }
+    return { productId, quantity, available: it?.available === true };
+  });
+
+  const payload = { items };
+  const dArr = Array.isArray(deliveries) ? deliveries : [];
+  if (dArr.length > 0) payload.deliveries = JSON.stringify(dArr);
+  const cleanEmails = Array.isArray(emails)
+    ? emails.map((e) => String(e).trim()).filter((e) => e.includes("@"))
+    : [];
+  if (cleanEmails.length > 0) payload.emails = cleanEmails;
+  return payload;
+}
+
+/**
+ * Best-effort confirmation-number extraction from a checkout POST response.
+ * The authoritative source is still /users/orders (the orders-history page the
+ * Stage-5 backstop scrapes) — this just surfaces anything inline so the caller
+ * has an immediate signal. Returns string[] (possibly empty).
+ */
+export function extractConfirmationNumbers(body) {
+  const out = new Set();
+  const visit = (v) => {
+    if (v == null) return;
+    if (Array.isArray(v)) return v.forEach(visit);
+    if (typeof v === "object") {
+      for (const [k, val] of Object.entries(v)) {
+        if (/confirmation|confirm.*number|order.*number/i.test(k) && (typeof val === "string" || typeof val === "number")) {
+          const s = String(val).trim();
+          if (/\d{3,}/.test(s)) out.add(s);
+        }
+        visit(val);
+      }
+    }
+  };
+  visit(body);
+  return [...out];
+}
+
+/**
+ * ENGINE SUBMIT — the seconds-fast replacement for RPA Stage 5's browser
+ * crawl. One POST to /users/cart/checkout with the priced cart the engine
+ * already holds (docs/lk/milo-checkout-endpoint.md).
+ *
+ * TRIPLE-GATE, defense in depth: this function REFUSES to POST unless
+ * `allowLiveSubmission === true`. The worker passes that only when
+ * mode==="submit" AND LK_ALLOW_ORDER_SUBMISSION==="yes" AND
+ * stores.allow_order_submission===true — the exact same three-key arming as
+ * the browser path. Without it, returns a dry-run result (no network write).
+ *
+ * TRUTH RULE (2026-07-16): the caller must treat any post-dispatch failure as
+ * submitted_unconfirmed, never a retry. This function marks `dispatched:true`
+ * the instant the POST is issued so the worker can enforce that.
+ *
+ * NOT wired into the pipeline yet — live arming waits for one real order-day
+ * confirmation (see the go-live checklist in the endpoint doc).
+ *
+ * @returns {Promise<{
+ *   submitted: boolean, dispatched: boolean, mode: "submit"|"dry_run",
+ *   status: number|null, confirmationNumbers: string[], reason?: string,
+ *   rawBody?: unknown,
+ * }>}
+ */
+export async function submitCartViaApi(
+  session,
+  { token, groupId, pricedCart, deliveries, emails, allowLiveSubmission = false } = {},
+) {
+  if (!session?.page) throw new Error("submitCartViaApi: session.page is required");
+  if (!token) throw new Error("submitCartViaApi: token is required");
+  if (groupId == null || String(groupId).trim() === "") {
+    throw new Error("submitCartViaApi: groupId is required");
+  }
+
+  // Build (and validate) the payload BEFORE the gate so a malformed cart
+  // fails closed even in dry-run — we never want a "would have submitted
+  // garbage" path to look clean.
+  const payload = buildCheckoutPayload({ pricedCart, deliveries, emails });
+
+  if (allowLiveSubmission !== true) {
+    return {
+      submitted: false,
+      dispatched: false,
+      mode: "dry_run",
+      status: null,
+      confirmationNumbers: [],
+      reason: "live submission not allowed (triple-gate not satisfied) — no POST issued",
+    };
+  }
+
+  // POINT OF NO RETURN. From the apiCall below, a failure is
+  // submitted_unconfirmed, never a retry (the caller enforces).
+  const res = await apiCall(session.page, "POST", `/users/cart/checkout?groupid=${encodeURIComponent(groupId)}`, {
+    token,
+    body: payload,
+    label: "POST /users/cart/checkout (LIVE SUBMIT)",
+  });
+
+  const confirmationNumbers = res.ok ? extractConfirmationNumbers(res.body) : [];
+  return {
+    submitted: res.ok === true,
+    dispatched: true,
+    mode: "submit",
+    status: res.status ?? null,
+    confirmationNumbers,
+    rawBody: res.ok ? res.body : redact(JSON.stringify(res.body)).slice(0, 300),
+    ...(res.ok ? {} : { reason: `checkout POST returned ${res.status}` }),
+  };
+}

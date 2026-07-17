@@ -347,3 +347,86 @@ Notes:
   - Tony's reaction to the order placing: "LETS GOOOOO BABYYYY LETS FUCKING GOOOOO LETS GOOOOO IM SO HAPPY MUAHAHAHHAHAHAHAAHHA"
   - Real win night. Liquor Kings has officially graduated from "infrastructure that might work someday" to "product that placed a real order today." 🥃🚀🔥
 ---
+
+---
+Date: 2026-07-16 (Thursday — ORDER DAY, ~4:45pm–7:00pm ET, live from the store)
+Focus: 🏆 FIRST REAL IN-APP ORDER — mandate 1/3. Colony's weekly order ($5,338.26 net, 34 SKUs, 414 bottles) built in the scanner, checked green, and PLACED from the phone through the two-step flow. Both ADAs confirmed. It took four submit attempts, two live hotfixes, and one deliberate kill — every failure documented in the postmortem.
+Files touched (high level):
+  - apps/scanner/src/api/assistant.ts (assistant chat timeout 30s→90s, resolve-order 30s→60s, abort→timeout copy) — DEPLOYED (API app)
+  - services/api/src/rpa/stages/validate-cart.js (stage-4 budgets: overall 45s→300s, finalize 30s→90s, click-response 30s→60s, post-validate 30s→90s) — DEPLOYED (worker)
+  - services/api/src/workers/execution-worker.js (stage-4 failures now print to fly logs) — DEPLOYED (worker)
+  - docs/lk/TONY-WANTS.md (live wants: multi-photo assistant, smarter AI, one-tap remove-OOS+recheck, OOS names not codes, results pinned in cart, price reconciliation)
+  - docs/lk/runbooks/order-day-2026-07-16-postmortem.md (NEW — full timeline + fixes queue)
+Commands / tests run (Tony's terminal):
+  - order-day-preflight.mjs — GO (disarmed), later GO --expect armed (twice: initial arm + post-hotfix re-arm)
+  - fly deploy (API app — assistant timeout fix), fly deploy -c fly.worker.toml (worker — stage-4 budget fix)
+  - Arming/disarming via fly secrets + Colony store flag SQL (armed → emergency disarm → re-arm → final disarm)
+  - pull-latest-har.mjs — recovered only the post-disarm dry-run HAR (submit HAR lost to ephemeral FS)
+  - Manual insert of the two confirmations into milo_order_confirmations (+ dedupe cleanup after an accidental double-run)
+Real production confirmation numbers (verified on MILO Orders page by eye):
+  - General Wine & Liquor (#221): Order #274509587, Confirmation #5806580, $3,752.60 net, delivery 7/21/2026
+  - NWS Michigan, Inc. (#321): Order #274509604, Confirmation #31002245, $1,585.66 net, delivery 7/21/2026
+  - Sum $5,338.26 = the validated net to the penny. No Imperial (141) order — those lines went OOS pre-place.
+What was learned (postmortem headlines — full doc in runbooks/):
+  - Stage 4 had a 45s total budget vs MILO's order-night reality (products page alone settled in 90s+). Killed submit attempts 1 and 2 AFTER the cart was built. Silent in fly logs (failure only reached the DB).
+  - Stage 5 clicked the real submit, MLCC emailed confirmation — then the receipt scrape blew its 240s budget and the run finalized as FAILED. Client showed "Order didn't go through" on a PLACED $5,338 order. Truth rule needed: post-submit-click timeout ≠ failed.
+  - Auto-retry nearly became the villain: failed submit runs self-retry, and a retry after a submitted-but-unconfirmed run = double order. Emergency disarm was the only guard. Retry must be BANNED once stage 5 enters the submit sequence.
+  - rpa-output lives on the worker's ephemeral FS — the disarm restart ate the submit run's HAR (goal #2 lost). Captures must upload off-machine at flush.
+  - "The email is truth": external confirmation signals outrank internal run state. Codified in the postmortem.
+Observed state:
+  - 🟢 Green: Order placed IN-APP, both ADAs confirmed, Orders tab shows both confirmations (manual insert tonight; auto-ingest queued)
+  - 🟢 Green: System fully disarmed at rest (gates no/no, store flag false, persist=yes, worker at 1 machine)
+  - 🟢 Green: Assistant big-paste flow unblocked (timeout fix deployed + verified live)
+  - 🟡 Yellow: line_items empty on tonight's two confirmation rows (backfill via orders-history scrape queued)
+  - 🔴 Red: Submit-endpoint HAR capture failed (ephemeral FS) — recon via MILO's Angular bundle + next order day with durable captures
+What's next (1-3 bullets):
+  - P0: Stage-5 truth rule (submitted_unconfirmed state + orders-page backstop + retry ban past submit click) — the double-order guard
+  - P0: Durable run artifacts (HAR/screenshots → Supabase Storage at teardown)
+  - Then: TONY-WANTS 7/16 batch (one-tap remove-OOS+recheck, OOS names, price reconciliation, multi-photo assistant)
+Notes:
+  - Four submit attempts: #1 and #2 guillotined by stage-4's 45s budget after building the cart perfectly; #3 deliberately killed mid-run to hotfix rather than gamble; #4 (post-fix) submitted for real in ~2 minutes on a fast MILO window.
+  - Hotfix loop was LIVE: diagnose from fly logs → edit → deploy worker → re-arm → place, inside ~25 minutes, order landed 90 minutes before cutoff.
+  - Tony ran every command and deploy himself (RULEBOOK #11 held under fire). Claude edited files and navigated the failure live.
+  - Tony's words when the MLCC email landed mid-"failed" run: the email was right, the app was wrong. That gap is the #1 fix.
+  - Mandate scoreboard: in-app order days 1/3. Next two Thursdays prove it's repeatable.
+---
+
+---
+Date: 2026-07-16 (Thursday night → 7/17 early AM — post-order build sprint, ~7pm–12:30am ET)
+Focus: 🛠️ Shipped the entire P0 postmortem block + OOS UX batch + 🗝️ RECOVERED MILO'S SUBMIT ENDPOINT. Everything below is deployed to prod (worker + API) and verified, EXCEPT the engine-submit which is built/tested but deliberately not wired live.
+Files touched (high level):
+  - services/api/src/rpa/stages/checkout.js (point-of-no-return marker; post-click errors resolve submitOutcome:"unconfirmed" not throw; stage-5 budget 240s→420s)
+  - services/api/src/workers/execution-worker.js (submitted_unconfirmed finalize + SECOND-CHANCE orders scrape that upgrades to succeeded; retry ban past submit click; stage 1/2/3/5 failure lines to stdout; durable-artifact upload hook at teardown)
+  - services/api/src/services/execution-run.service.js (submitted_unconfirmed status in ALLOWED/TERMINAL; finalize branch; retry ban on failure_details.submit_clicked)
+  - services/api/src/lib/run-final-push.js (submitted_unconfirmed push copy — never "tap to retry")
+  - services/api/src/lib/run-artifacts-storage.js (NEW — bounded, never-throw uploader to private run-artifacts bucket, HAR-first priority)
+  - services/api/scripts/pull-run-artifacts.mjs (NEW — --run/--all/--list/--list-runs from Storage)
+  - services/api/src/rpa/engine/engine-api.js (NEW: buildCheckoutPayload, extractConfirmationNumbers, submitCartViaApi — the seconds-fast submit, triple-gated, NOT wired)
+  - apps/scanner/src/api/execution.ts + components/OrderStatusPill.tsx + components/RunResultSheet.tsx (submitted_unconfirmed client state — amber "Submitted — confirming", never red)
+  - apps/scanner/src/lib/oos-display.ts (NEW — cart-joined OOS names), CartDrawer.tsx (one-tap remove-OOS+recheck, pinned footer verdict, names not codes), hooks/useCart.ts (useCartItemsOrEmpty)
+  - supabase/migrations/20260716233000_add_submitted_unconfirmed_status.sql (NEW — applied via SQL editor; db push blocked by pre-existing history drift)
+  - docs/lk/milo-checkout-endpoint.md (NEW — 🗝️ decompiled checkout contract + go-live checklist)
+  - docs/lk/runbooks/order-day-2026-07-16-postmortem.md (NEW), docs/lk/architecture/execution-state-machine.md (new status), .dockerignore (rpa-captures excluded)
+Commands / tests run (Tony's Mac):
+  - services/api: npm test — 779 passed, anti-drift updated for new status, only pre-existing ~40 env-smoke fails
+  - run-artifacts-storage.unit.test.js — 7/7; engine-submit.unit.test.js — 11/11; scanner npx vitest run — 60/60; scanner tsc — clean
+  - Deploys: worker ×4 + API ×2, all healthy; live artifact upload PROVEN (run 3321c57a folder landed in Storage seconds after a check)
+🗝️ THE ENDPOINT (docs/lk/milo-checkout-endpoint.md — do not lose):
+  - POST {API_BASE}/users/cart/checkout?groupid={activeGroup.id}
+  - body { items:[{productId, quantity, available}], deliveries: JSON.stringify(deliveriesArr), emails?:[] }
+  - Decompiled from main.e0d724cc bundle inside the 7/16 dry-run HAR. Every field already sits on the engine's priced cart (verified vs __fixtures__/cart.json). Confirmations authoritative on /users/orders.
+  - Engine now 12/12 MILO calls — the ONLY missing piece (submit) is found. 10-min browser crawl → one POST.
+What's next (priority):
+  - Next order day: shadow-run engine-submit, first live fire with human + fly logs, capture real request/response durably, THEN promote ahead of RPA Stage 5 (checklist in the endpoint doc).
+  - P1 leftovers: auto-ingest confirmations into Orders tab (kill manual SQL); post-validate price reconciliation into cart; multi-photo assistant + smarter model; migration-history cleanup (db push drift).
+Observed state:
+  - 🟢 Truth rule live end-to-end + self-healing second-chance receipt scrape (a placed-but-timed-out order now recovers itself to succeeded)
+  - 🟢 Durable artifacts proven in prod; every stage death visible in fly logs
+  - 🟢 OOS UX shipped: names not codes, one-tap remove+recheck, pinned footer verdict
+  - 🟡 engine-submit built + tested, NOT wired — awaiting one real order-day confirmation
+  - 🟡 Working tree uncommitted at sprint end — Tony to commit the batch (his ritual, RULEBOOK #11)
+Notes:
+  - Design call locked (Tony, midnight): guardrails cost milliseconds, the BROWSER costs the 10 minutes. Keep every gate, murder every spinner. engine-submit is that murder.
+  - Line-by-line confirm modal flagged as trimmable UX (not safety — server re-validates) — candidate for a one-summary-screen simplification whenever Tony wants.
+  - Energy: absolute tear. First real order + full P0 block + endpoint recovery in one session. "lets fucking go" x∞.
+---

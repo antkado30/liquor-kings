@@ -15,7 +15,9 @@
  */
 import type { ActiveOrderResult } from "../hooks/useActiveOrder";
 import type { RunMode } from "../api/execution";
+import { useCartItemsOrEmpty } from "../hooks/useCart";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
+import { oosDisplayLabel } from "../lib/oos-display";
 import { IconAlert, IconCheck, IconLoader, IconX } from "./Icons";
 
 type Props = {
@@ -29,6 +31,12 @@ type Props = {
   live?: { title: string; sub: string | null } | null;
   /** True when the run finalized failed/canceled → honest failure view. */
   failed?: boolean;
+  /**
+   * True when the run finalized submitted_unconfirmed (2026-07-16 truth
+   * rule): submit clicked, receipt missed. Renders the amber
+   * "don't place again" view — NEVER the red failure view.
+   */
+  submittedUnconfirmed?: boolean;
   mode: RunMode;
   onClose: () => void;
 };
@@ -106,8 +114,69 @@ function confirmationRows(
   return rows;
 }
 
-export function RunResultSheet({ result, live = null, failed = false, mode, onClose }: Props) {
+export function RunResultSheet({
+  result,
+  live = null,
+  failed = false,
+  submittedUnconfirmed = false,
+  mode,
+  onClose,
+}: Props) {
   useLockBodyScroll();
+  // Cart lines carry the real name/size for every OOS code MILO reports
+  // bare (TONY-WANTS 7/16 #1). Graceful-empty variant: in the app this
+  // always has the provider (OrderStatusPill sits inside CartProvider in
+  // App.tsx); without one (component tests) it falls back to
+  // productName/code rendering instead of throwing.
+  const cartItems = useCartItemsOrEmpty();
+
+  // ─── SUBMITTED-UNCONFIRMED view (2026-07-16 truth rule): the submit
+  // click went to MILO and the receipt wasn't captured before the run
+  // ended. The order very likely EXISTS — the first live one did, with
+  // MLCC's email arriving while this sheet said "didn't go through."
+  // Amber, not red. The one instruction that matters: don't place again.
+  if (submittedUnconfirmed) {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Order submitted, confirmation pending"
+        style={backdropStyle}
+        onClick={onClose}
+      >
+        <div style={cardStyle} onClick={(e) => e.stopPropagation()}>
+          <div style={headerStyle}>
+            <div style={headerIconRowStyle}>
+              <span style={{ display: "inline-flex", color: "#fbbf24" }}>
+                <IconAlert size={18} />
+              </span>
+              <strong style={{ fontSize: 17 }}>Order submitted — confirming</strong>
+            </div>
+            <button type="button" aria-label="Close" onClick={onClose} style={closeBtnStyle}>
+              <IconX size={18} />
+            </button>
+          </div>
+          <div style={bodyStyle}>
+            <div style={practiceNoteStyle}>
+              Your order went to MILO, but the confirmation didn&apos;t come back
+              before the run ended. <strong>Do not place this order again.</strong>
+            </div>
+            <p style={mutedStyle}>
+              Check your MLCC confirmation email or MILO&apos;s Orders page — the
+              order is most likely there. Confirmations will appear in the
+              Orders tab once verified. If MILO shows nothing after a few
+              minutes, tell support before doing anything else.
+            </p>
+          </div>
+          <div style={footerStyle}>
+            <button type="button" style={primaryBtnStyle} onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ─── LIVE view: the run is still in flight (2026-07-08 want — tap the pill
   // DURING the run). Same sheet shell; the result body replaces this in place
@@ -319,7 +388,9 @@ export function RunResultSheet({ result, live = null, failed = false, mode, onCl
             ) : (
               <ul style={listStyle}>
                 {oos.map((item, i) => {
-                  const name = item.productName ?? item.code ?? "Unknown item";
+                  // TONY-WANTS 7/16 #1: never a naked code — join against the
+                  // cart, which knows every OOS line's real name and size.
+                  const name = oosDisplayLabel(item, cartItems);
                   return (
                     <li key={`${item.code ?? name}-${i}`} style={liStyle}>
                       <span>{name}</span>

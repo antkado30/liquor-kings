@@ -149,6 +149,73 @@ that miss-list drives the resolver fixes.
 
 ---
 
+## 📸🧠 Assistant: multi-photo sends + "a lot smarter" (stated 2026-07-16, LIVE during the real Colony order)
+
+> "when sending pictures or photos to the AI u should be able to send
+> multiple not just 1, also we need to make the AI alot more advanced
+> alot smarter" — given as live input from the store mid-order.
+
+**Want #1 — multiple photos per message.** The chat takes ONE image per
+send (`imageDataUri` singular end-to-end: picker → api client → route →
+`askAssistant`). Real orders are multi-photo — a two-page handwritten
+list, front/back, several shelf shots. FIX shape (contained):
+- Client: picker accepts N photos, downscale each, thumbnails in the
+  composer (`AssistantChat.tsx` / `AssistantPage.tsx`).
+- API client: send `imageDataUris: string[]` (keep `imageDataUri`
+  working for back-compat) — `apps/scanner/src/api/assistant.ts`.
+- Server: map each data URI to an image block in the one user turn —
+  `assistant.routes.js` + `lib/assistant.js`. Mind body-size limit
+  (express json limit) with 3-4 downscaled images.
+
+**Want #2 — assistant "a lot more advanced, a lot smarter."** Levers to
+weigh AFTER order day, not a single switch:
+- Model bump for chat (Sonnet → stronger model; watch per-question cost).
+- Streaming responses — also kills the long-request timeout class for
+  good (the 7/16 fix bumped the client to 90s but Fly's ~60s silent-
+  response ceiling still exists for monster asks).
+- Resolver-scoring tuning fed by real miss-lists (per the 7/9 rule:
+  every order day, capture exactly which lines the AI missed).
+- Sharper system prompt + tools (order history, inventory, price
+  history) — deepen the data-grounded moat, never generic ChatGPT.
+
+Status: ⏳ captured live 7/16 while the order was being placed; build
+starts after the order lands. Context: same session as the assistant
+timeout fix (ask 30s→90s, resolve-order 30s→60s) that unblocked the
+big paste.
+
+**More live 7/16 input (same order, from the check-result sheet):**
+0. **🔥 ONE-TAP "Remove out-of-stock + re-check" (the big one).** A red
+   check with OOS lines currently strands the operator: MILO answers
+   `can_checkout=false`, Place stays locked (correctly — MILO rejected
+   that cart), but the operator has to hand-hunt every rejected code out
+   of the cart, then re-check. Tony live 7/16: "we shouldn't have to fix
+   the cart… at least give an option to remove all of those items to
+   proceed." FIX: the result sheet already knows the exact rejected
+   lines — end it with one button, "Remove these N and check again" →
+   strips them, fires a fresh check, green unlocks Place. (Optionally a
+   second, gentler "Remove them, don't re-check yet" for operators who
+   want to swap sizes first.) Keep the honesty rule: never place a cart
+   MILO hasn't blessed — this automates the cleanup, not the gate.
+1. **OOS list shows bare codes.** "Review before ordering" listed
+   out-of-stock lines as `32181 × 3` — "how am I supposed to know what
+   that is?" Join codes back to bottle names (cart already knows them;
+   the sheet should never show a naked code).
+2. **Post-validate results must ALSO live in the cart.** Not just the
+   result sheet — pin what came back out-of-stock at the bottom of the
+   cart so it's still visible after the sheet closes, while fixing lines.
+3. **Post-validate prices didn't update.** After the green check, cart
+   prices didn't change to the MILO-checked totals. Reconcile per-line
+   prices + totals from the run results into the cart display.
+4. **AI screenshot resolution missed on some bottles** ("being dumb on
+   some") — need the exact miss-list from today to tune the resolver
+   (standing 7/9 rule).
+5. **(Resolved, not a bug)** "After I validated it didn't let me place
+   order" — the store was still DISARMED (practice-check banner). The
+   two-step Place flow only appears once the three locks are set per
+   `runbooks/order-day-2026-07-16.md`.
+
+---
+
 ## 🗄️ Permanent price-book archive + history (stated 2026-06-16)
 
 > "Whenever I give you the whole MLCC price book file, create a file on the
@@ -678,6 +745,14 @@ ProductCard sheet, photo presentation, combo card titles (raw truncated
 MLCC names like "TITO'S HANDMADE VODK/50ML TIT0 W/" read ugly — prettify
 without lying), typography/spacing to the premium bar. Function first
 (done), then make it beautiful. Sequencing: after Thu 7/16 order day.
+**RE-AFFIRMED HARDER 2026-07-15 night (order-day eve): "a lot of our
+features are dull, they're in the starter phase — we need everything to
+be advanced, we need to be the best."** Standing mandate. The agreed
+shape (Fable, same night): advanced = the order loop being untouchable
+(3 green orders → engine submit in seconds → nobody in Michigan close),
+then surface-by-surface ceiling passes in priority order — never
+"everything at once" (the 7/3 census exists because "everything"
+thinking broke the map once already).
 
 ## 🔥🔥 CATALOG RELEVANCE v3 + ADVANCED FILTERS (Tony, 2026-07-15 eve — decisions LOCKED via Q&A)
 

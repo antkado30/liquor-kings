@@ -127,6 +127,19 @@ export function buildRunFinalPush(run) {
 
     if (!NOTIFY_RUN_TYPES.has(runType)) return null;
 
+    /*
+      2026-07-16 truth rule: submit clicked, receipt missed. The one copy
+      rule that matters: NEVER "couldn't finish" + "tap to retry" — that
+      pairing on a placed order is the double-order recipe. Amber facts.
+    */
+    if (status === "submitted_unconfirmed") {
+      return base(
+        "order_submitted_unconfirmed",
+        "Order submitted — confirming",
+        "Your order went to MILO but the receipt didn't come back. Check your MLCC email or MILO Orders before doing anything. Do NOT place again.",
+      );
+    }
+
     if (status === "failed") {
       const reason = firstSentence(run.error_message) ?? "It hit a problem and stopped.";
       return base(

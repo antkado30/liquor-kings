@@ -25,8 +25,10 @@ export function formatAssistantError(raw: string): string {
   if (/^HTTP 5\d\d/.test(code) || code === "HTTP 500" || code === "HTTP 503") {
     return "The assistant is temporarily unavailable. Please try again.";
   }
-  if (/timeout|timed out/i.test(code)) {
-    return "The request timed out. Try again with a shorter question.";
+  if (/timeout|timed out|abort/i.test(code)) {
+    // "Fetch is aborted" is our own AbortController timeout firing — show
+    // timeout copy, not the raw retry-wrapper text (Order Day 2026-07-16).
+    return "The request timed out. Try again — or use Paste an order for long lists.";
   }
   return code;
 }
@@ -72,7 +74,12 @@ export async function askAssistant(
           ...(history && history.length ? { history } : {}),
         }),
       },
-      { maxRetries: 1, baseDelayMs: 600, timeoutMs: 30_000 },
+      // 90s (was 30s — Order Day 2026-07-16): a long pasted order sends the
+      // tool-use loop through multiple Anthropic calls + resolve_bottles, which
+      // routinely runs past 30s. The 30s AbortController was killing its own
+      // request ("Fetch is aborted") on every big paste. maxRetries stays 1 —
+      // never re-fire an LLM run that's still working server-side.
+      { maxRetries: 1, baseDelayMs: 600, timeoutMs: 90_000 },
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -171,7 +178,10 @@ export async function resolveOrder(text: string): Promise<ResolveOrderResult> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: trimmed }),
       },
-      { maxRetries: 1, baseDelayMs: 600, timeoutMs: 30_000 },
+      // 60s (was 30s — Order Day 2026-07-16): resolve-order is DB-only (no
+      // LLM) and normally finishes in seconds; the extra headroom covers a
+      // cold machine + a 40-line paste without the client aborting.
+      { maxRetries: 1, baseDelayMs: 600, timeoutMs: 60_000 },
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

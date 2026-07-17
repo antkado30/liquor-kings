@@ -105,6 +105,14 @@ export function OrderStatusPill() {
       const netStr = money(net);
       sub = netStr ? `Everything in stock · ${netStr}` : "Everything in stock";
     }
+  } else if (activeOrder.status === "submitted_unconfirmed") {
+    // 2026-07-16 truth rule: the submit click went to MILO and we lost the
+    // receipt, not the order. NEVER "didn't go through" — that copy on a
+    // placed $5,338 order is how operators double-order.
+    icon = <IconAlert size={14} />;
+    title = "Order submitted — confirming";
+    sub = "Check your MLCC email or MILO Orders. Do NOT place again.";
+    tone = "warn";
   } else {
     // failed / cancelled — tap opens the honest failure sheet (was: navigate
     // home, which explained nothing).
@@ -207,7 +215,12 @@ export function OrderStatusPill() {
         <RunResultSheet
           result={activeOrder.result}
           live={!terminal ? { title, sub } : null}
-          failed={terminal && activeOrder.status !== "succeeded"}
+          failed={
+            terminal &&
+            activeOrder.status !== "succeeded" &&
+            activeOrder.status !== "submitted_unconfirmed"
+          }
+          submittedUnconfirmed={terminal && activeOrder.status === "submitted_unconfirmed"}
           mode={activeOrder.mode}
           onClose={() => setShowResult(false)}
         />
