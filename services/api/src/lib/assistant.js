@@ -720,23 +720,56 @@ function parseImageInput(raw) {
   return { mediaType: "image/jpeg", data: cleaned };
 }
 
-function buildUserMessageContent({ question, imageDataUri }) {
+// Cap on images per message (2026-07-17, multi-photo). A real weekly order
+// is a page or two of handwriting plus a few shelf shots; 6 covers that while
+// bounding request size + token cost. Extra images beyond the cap are dropped
+// (oldest-kept: we take the first 6 the client sent).
+const MAX_IMAGES_PER_MESSAGE = 6;
+
+/**
+ * Normalize the caller's image inputs into an array of raw data-URI strings.
+ * Accepts the new plural `imageDataUris` (array) AND the legacy singular
+ * `imageDataUri` (string) — both may be present; singular is appended.
+ */
+function collectImageInputs({ imageDataUri, imageDataUris }) {
+  const out = [];
+  if (Array.isArray(imageDataUris)) {
+    for (const u of imageDataUris) {
+      if (typeof u === "string" && u.trim() !== "") out.push(u.trim());
+    }
+  }
+  if (typeof imageDataUri === "string" && imageDataUri.trim() !== "") {
+    out.push(imageDataUri.trim());
+  }
+  return out;
+}
+
+// Exported for unit tests (multi-photo mapping + back-compat, 2026-07-17).
+export function buildUserMessageContent({ question, imageDataUri, imageDataUris }) {
   const trimmed = String(question ?? "").trim();
+  const rawInputs = collectImageInputs({ imageDataUri, imageDataUris });
+  const images = rawInputs
+    .map((raw) => parseImageInput(raw))
+    .filter((img) => img != null)
+    .slice(0, MAX_IMAGES_PER_MESSAGE);
+
   const text =
     trimmed ||
-    "The user attached a photo. Describe what you see and answer any implied question about liquor, products, or their store context.";
-  const image = imageDataUri ? parseImageInput(imageDataUri) : null;
-  if (!image) return trimmed || text;
+    (images.length > 1
+      ? "The user attached photos. Read them together as one order/context — describe what you see and answer any implied question about liquor, products, or their store."
+      : "The user attached a photo. Describe what you see and answer any implied question about liquor, products, or their store context.");
+
+  if (images.length === 0) return trimmed || text;
 
   return [
-    {
+    ...images.map((image) => ({
       type: "image",
       source: {
         type: "base64",
         media_type: image.mediaType,
         data: image.data,
       },
-    },
+    })),
     { type: "text", text },
   ];
 }
@@ -869,12 +902,15 @@ export async function askAssistant({
   question,
   storeId = null,
   imageDataUri = null,
+  imageDataUris = null,
   history = [],
   supabase = supabaseDefault,
 }) {
   const trimmed = String(question ?? "").trim();
-  const hasImage =
-    typeof imageDataUri === "string" && parseImageInput(imageDataUri) != null;
+  const validImages = collectImageInputs({ imageDataUri, imageDataUris })
+    .map((raw) => parseImageInput(raw))
+    .filter((img) => img != null);
+  const hasImage = validImages.length > 0;
   if (!trimmed && !hasImage) {
     throw new Error("assistant: question or image is required");
   }
@@ -892,7 +928,7 @@ export async function askAssistant({
     ...sanitizeHistory(history),
     {
       role: "user",
-      content: buildUserMessageContent({ question: trimmed, imageDataUri }),
+      content: buildUserMessageContent({ question: trimmed, imageDataUri, imageDataUris }),
     },
   ];
 

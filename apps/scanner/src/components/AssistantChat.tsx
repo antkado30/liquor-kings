@@ -23,11 +23,13 @@ type Message = {
 
 type FailedAsk = {
   question: string;
-  imageDataUri?: string;
+  imageDataUris?: string[];
 };
 
 /** Max raw upload size before client-side downscale (15 MB). */
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+/** Max photos per message — matches the server cap (MAX_IMAGES_PER_MESSAGE). */
+const MAX_IMAGES = 6;
 
 /** Curated starters — mix of general catalog questions and store ops. */
 const STARTER_PROMPTS = [
@@ -274,7 +276,9 @@ type AssistantChatProps = {
 export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  // Multi-photo (2026-07-17): a real weekly order is a page or two of
+  // handwriting plus a few shelf shots. Capped to match the server.
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [isAsking, setIsAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const [failedAsk, setFailedAsk] = useState<FailedAsk | null>(null);
@@ -299,33 +303,47 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [messages, isAsking, pendingImage, askError]);
+  }, [messages, isAsking, pendingImages, askError]);
 
-  const handleImageFile = async (file: File | undefined) => {
-    if (!file) return;
-
+  // Accepts one OR many files (gallery multi-select). Each is validated +
+  // downscaled and appended, up to MAX_IMAGES total.
+  const handleImageFiles = async (files: FileList | null | undefined) => {
+    if (!files || files.length === 0) return;
     setImageError(null);
 
-    if (!file.type.startsWith("image/")) {
-      setImageError("Please choose a photo (JPEG, PNG, or similar).");
+    const room = MAX_IMAGES - pendingImages.length;
+    if (room <= 0) {
+      setImageError(`You can attach up to ${MAX_IMAGES} photos.`);
       return;
     }
-
-    if (file.size > MAX_IMAGE_BYTES) {
-      setImageError(
-        `Photo is too large (${formatFileSize(file.size)}). Max ${formatFileSize(MAX_IMAGE_BYTES)}.`,
-      );
-      return;
-    }
+    const chosen = Array.from(files).slice(0, room);
+    const droppedForCount = files.length > room;
 
     setImageBusy(true);
     try {
-      const dataUri = await downscaleImageFile(file);
-      setPendingImage(dataUri);
-    } catch (e) {
-      setImageError(
-        e instanceof Error ? e.message : "Could not process that photo.",
-      );
+      const added: string[] = [];
+      let sawError: string | null = null;
+      for (const file of chosen) {
+        if (!file.type.startsWith("image/")) {
+          sawError = "Some files were skipped — photos only (JPEG, PNG, etc.).";
+          continue;
+        }
+        if (file.size > MAX_IMAGE_BYTES) {
+          sawError = `A photo was skipped — too large (max ${formatFileSize(MAX_IMAGE_BYTES)}).`;
+          continue;
+        }
+        try {
+          added.push(await downscaleImageFile(file));
+        } catch (e) {
+          sawError = e instanceof Error ? e.message : "Could not process a photo.";
+        }
+      }
+      if (added.length > 0) setPendingImages((prev) => [...prev, ...added].slice(0, MAX_IMAGES));
+      if (droppedForCount) {
+        setImageError(`Only the first ${MAX_IMAGES} photos were attached.`);
+      } else if (sawError) {
+        setImageError(sawError);
+      }
     } finally {
       setImageBusy(false);
     }
@@ -333,14 +351,15 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
 
   const runAsk = async (
     question: string,
-    imageDataUri?: string,
+    imageList?: string[],
     options?: { appendUserMessage?: boolean },
   ) => {
     const q = question.trim();
-    const image = imageDataUri?.trim() || undefined;
-    if ((!q && !image) || isAsking || imageBusy) return;
+    const images = (imageList ?? []).filter((u) => u && u.trim().length > 0);
+    if ((!q && images.length === 0) || isAsking || imageBusy) return;
 
-    const displayText = q || "What's in this photo?";
+    const displayText =
+      q || (images.length > 1 ? `What's in these ${images.length} photos?` : "What's in this photo?");
     // Send prior turns so the assistant keeps context (fixes "every one of what?").
     const priorTurns = messages
       .map((m) => ({ role: m.role, content: m.text }))
@@ -350,20 +369,20 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
 
     if (options?.appendUserMessage !== false) {
       setInput("");
-      setPendingImage(null);
+      setPendingImages([]);
       setMessages((prev) => [
         ...prev,
         {
           id: nextIdRef.current++,
           role: "user",
           text: displayText,
-          ...(image ? { imagePreview: image } : {}),
+          ...(images.length > 0 ? { imagePreview: images[0] } : {}),
         },
       ]);
     }
 
     setIsAsking(true);
-    const result = await askAssistant(displayText, image, priorTurns);
+    const result = await askAssistant(displayText, images, priorTurns);
     setIsAsking(false);
 
     if (result.ok) {
@@ -379,23 +398,23 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
     } else {
       const message = formatAssistantError(result.error);
       setAskError(message);
-      setFailedAsk({ question: displayText, imageDataUri: image });
+      setFailedAsk({ question: displayText, imageDataUris: images });
     }
   };
 
   const submit = (question: string) => {
-    void runAsk(question, pendingImage ?? undefined);
+    void runAsk(question, pendingImages);
   };
 
   const retryLastAsk = () => {
     if (!failedAsk || isAsking) return;
-    void runAsk(failedAsk.question, failedAsk.imageDataUri, {
+    void runAsk(failedAsk.question, failedAsk.imageDataUris, {
       appendUserMessage: false,
     });
   };
 
   const canSend =
-    !isAsking && !imageBusy && (input.trim().length > 0 || pendingImage != null);
+    !isAsking && !imageBusy && (input.trim().length > 0 || pendingImages.length > 0);
 
   return (
     <div
@@ -505,21 +524,36 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
         </p>
       ) : null}
 
-      {pendingImage ? (
-        <div className="assistant-image-preview">
-          <img src={pendingImage} alt="Attached photo preview" />
-          <button
-            type="button"
-            className="assistant-image-remove"
-            onClick={() => {
-              setPendingImage(null);
-              setImageError(null);
-            }}
-            disabled={isAsking || imageBusy}
-            aria-label="Remove attached photo"
-          >
-            <IconX size={16} strokeWidth={2} />
-          </button>
+      {pendingImages.length > 0 ? (
+        <div className="assistant-image-preview-row">
+          {pendingImages.map((img, i) => (
+            <div className="assistant-image-preview" key={`${i}-${img.slice(0, 24)}`}>
+              <img src={img} alt={`Attached photo ${i + 1}`} />
+              <button
+                type="button"
+                className="assistant-image-remove"
+                onClick={() => {
+                  setPendingImages((prev) => prev.filter((_, idx) => idx !== i));
+                  setImageError(null);
+                }}
+                disabled={isAsking || imageBusy}
+                aria-label={`Remove photo ${i + 1}`}
+              >
+                <IconX size={16} strokeWidth={2} />
+              </button>
+            </div>
+          ))}
+          {pendingImages.length < MAX_IMAGES ? (
+            <button
+              type="button"
+              className="assistant-image-add"
+              onClick={() => galleryInputRef.current?.click()}
+              disabled={isAsking || imageBusy}
+              aria-label="Add another photo"
+            >
+              <IconPaperclip size={18} strokeWidth={1.85} />
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -534,11 +568,12 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
           ref={galleryInputRef}
           type="file"
           accept="image/*"
+          multiple
           className="assistant-file-input"
           aria-hidden
           tabIndex={-1}
           onChange={(e) => {
-            void handleImageFile(e.target.files?.[0]);
+            void handleImageFiles(e.target.files);
             e.target.value = "";
           }}
         />
@@ -551,7 +586,7 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
           aria-hidden
           tabIndex={-1}
           onChange={(e) => {
-            void handleImageFile(e.target.files?.[0]);
+            void handleImageFiles(e.target.files);
             e.target.value = "";
           }}
         />

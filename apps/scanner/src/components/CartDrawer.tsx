@@ -51,6 +51,7 @@ import type { BackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
 import { hashCart } from "../hooks/useBackgroundPreValidate";
 import { oosDisplayLabel } from "../lib/oos-display";
 import { resolvePlaceGate } from "../lib/place-gate";
+import { resolveDisplayedTotal } from "../lib/cart-total";
 import { useHideTabBar } from "../hooks/useHideTabBar";
 import { SubmitConfirmationModal } from "./SubmitConfirmationModal";
 import {
@@ -843,6 +844,25 @@ export function CartDrawer({
   });
 
   /*
+    TONY-WANTS 7/16 #3 — show MILO's real net once THIS cart is priced.
+    Net comes from the succeeded validate's order_summary; it's only
+    "current" when the last green check's cart hash matches what's on
+    screen (any edit reverts to the client estimate — never a stale MLCC
+    price). See lib/cart-total.ts for the honesty rules.
+  */
+  const miloNetTotal =
+    state.kind === "validateDone" && state.finalStatus === "succeeded"
+      ? (state.validateResult?.order_summary?.netTotal ?? null)
+      : null;
+  const cartMatchesGreenCheck =
+    lastGreenCheck != null && lastGreenCheck.cartHash === itemsHash;
+  const displayedTotal = resolveDisplayedTotal({
+    clientTotal: totalCost,
+    miloNetTotal,
+    cartMatchesGreenCheck,
+  });
+
+  /*
     Shared fire path for BOTH buttons (and the confirm modal): sync the
     cart, trigger the run (validate_only latches onto an identical
     in-flight background check — the 2026-07-11 dedupe), hand the runId +
@@ -1016,7 +1036,8 @@ export function CartDrawer({
             {items.length > 0 && state.kind !== "submitDone" ? (
               <span className="drawer-header__meta">
                 {items.length} product{items.length === 1 ? "" : "s"} ·{" "}
-                {money(totalCost)}
+                {money(displayedTotal.value)}
+                {displayedTotal.isMlccNet ? " · MLCC net" : ""}
               </span>
             ) : null}
           </div>
@@ -1576,8 +1597,12 @@ export function CartDrawer({
             ) : null}
             <div className="drawer-footer">
               <div className="drawer-footer__total">
-                <span className="drawer-footer__total-label">Total</span>
-                <strong className="drawer-footer__total-value">{money(totalCost)}</strong>
+                <span className="drawer-footer__total-label">
+                  {displayedTotal.label}
+                </span>
+                <strong className="drawer-footer__total-value">
+                  {money(displayedTotal.value)}
+                </strong>
               </div>
               {/*
                 Two-step Check → SEE → Place (2026-07-11, Tony's 2026-07-01

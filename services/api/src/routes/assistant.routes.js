@@ -18,9 +18,12 @@ const router = express.Router();
 
 /**
  * POST /assistant/ask
- * Body: { question: string, storeId?: string, imageDataUri?: string }
+ * Body: { question: string, storeId?: string, imageDataUri?: string, imageDataUris?: string[] }
+ *   - imageDataUris[] (2026-07-17, multi-photo): send several photos in one
+ *     message. Legacy imageDataUri (singular) still accepted; both may be
+ *     present. Server caps + validates.
  * 200 → { answer, toolCalls, model, iterations }
- * 400 → { error } when question and image are both missing
+ * 400 → { error } when question and images are both missing
  * 503 → { error } when ANTHROPIC_API_KEY not configured
  * 500 → { error } on unexpected failure
  */
@@ -30,11 +33,14 @@ router.post("/ask", async (req, res) => {
   const storeId = body.storeId ? String(body.storeId) : null;
   const imageDataUri =
     typeof body.imageDataUri === "string" ? body.imageDataUri.trim() : "";
+  const imageDataUris = Array.isArray(body.imageDataUris)
+    ? body.imageDataUris.filter((u) => typeof u === "string" && u.trim() !== "").map((u) => u.trim())
+    : [];
   // Conversation history so follow-ups keep context (fixes "every one of what?").
   const history = Array.isArray(body.history) ? body.history : [];
 
-  if (!question && !imageDataUri) {
-    return res.status(400).json({ error: "question or imageDataUri is required" });
+  if (!question && !imageDataUri && imageDataUris.length === 0) {
+    return res.status(400).json({ error: "question or image is required" });
   }
 
   try {
@@ -42,6 +48,7 @@ router.post("/ask", async (req, res) => {
       question,
       storeId,
       imageDataUri: imageDataUri || null,
+      imageDataUris,
       history,
     });
     return res.json(result);

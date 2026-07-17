@@ -41,15 +41,15 @@ export function formatAssistantError(raw: string): string {
  */
 export async function askAssistant(
   question: string,
-  imageDataUri?: string,
+  // Accepts a single data URI (legacy) OR an array (2026-07-17, multi-photo).
+  images?: string | string[],
   history?: { role: "user" | "assistant"; content: string }[],
 ): Promise<AssistantResult> {
   const trimmed = question.trim();
-  const image =
-    typeof imageDataUri === "string" && imageDataUri.trim().length > 0
-      ? imageDataUri.trim()
-      : undefined;
-  if (!trimmed && !image) {
+  const imageList = (Array.isArray(images) ? images : images ? [images] : [])
+    .map((u) => (typeof u === "string" ? u.trim() : ""))
+    .filter((u) => u.length > 0);
+  if (!trimmed && imageList.length === 0) {
     return { ok: false, error: "Question or image is required." };
   }
 
@@ -70,7 +70,8 @@ export async function askAssistant(
         body: JSON.stringify({
           question: trimmed,
           ...(storeId ? { storeId } : {}),
-          ...(image ? { imageDataUri: image } : {}),
+          // Always send the plural; server keeps singular back-compat too.
+          ...(imageList.length ? { imageDataUris: imageList } : {}),
           ...(history && history.length ? { history } : {}),
         }),
       },

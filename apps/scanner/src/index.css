@@ -1728,18 +1728,49 @@ select {
   flex-shrink: 0;
 }
 
+/* Multi-photo thumbnail strip (2026-07-17): horizontal, scrolls if it
+   overflows, with a trailing "+" add tile. */
+.assistant-image-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 8px;
+  padding-top: 4px;
+}
+
 .assistant-image-preview {
   position: relative;
   align-self: flex-start;
-  margin: 0 0 8px;
+  margin: 0;
 }
 
 .assistant-image-preview img {
   display: block;
-  max-width: 120px;
-  max-height: 120px;
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
   border-radius: 12px;
   border: 1px solid rgba(108, 99, 255, 0.28);
+}
+
+.assistant-image-add {
+  width: 72px;
+  height: 72px;
+  border-radius: 12px;
+  border: 1px dashed rgba(108, 99, 255, 0.45);
+  background: rgba(108, 99, 255, 0.06);
+  color: rgba(255, 255, 255, 0.7);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.assistant-image-add:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .assistant-image-remove {
