@@ -456,3 +456,31 @@ Notes:
   - Auto-fill Orders tab: discovered it's ALREADY handled for the common timed-out case by tonight's self-heal (recovered run → submitted:true → persistMiloOrderConfirmations writes confirmations + line_items). Only the dead-page case needs the deferred recovery script.
   - Clean wrap honored after the commit — every remaining item is genuinely a live-MILO or fresh-brain task per Tony's own discipline.
 ---
+
+---
+Date: 2026-07-17 (Friday afternoon, ~3:20–4:30pm ET)
+Focus: 🔥 FIRE ORDER shipped (catalog relevance v3 + advanced filters, held since 7/15 for after order day) + 📸 on-device photo-truth bug fixed at the root + 🔎 browse↔search filter parity. Four commits: 297e89f, 1181ec7, cdfa19e (+ the pre-built 399f779 package applied/deployed).
+FIRE ORDER (399f779 package — applied + deployed today, all 5 steps):
+  - Migrations 20260717010000 (order_stats + featured_sort v3) + 20260717011000 (browse_families v4) applied via SQL editor (db push still blocked by history drift — applied directly).
+  - GAP FOUND: backfill-order-stats found 0 runs — Thursday's Colony order was hand-inserted into milo_order_confirmations with execution_run_id=NULL, so the backfill (which needs the run's payload_snapshot) skipped it. FIX: linked the 2 confirmation rows to run 255a41c0 (a 34-item submit-window run), re-ran backfill → 1 run, 34 codes, ordered_count set.
+  - Deployed. VERIFIED ON DEVICE: catalog now leads with Tito's/J Daniels/Grey Goose (most-ordered), Pickle Shot dethroned. Four filter chips live in browse.
+PHOTO-TRUTH BUG (Tony caught on device): ROYAL CANADIAN showing CROWN ROYAL photos.
+  - Root cause: "Royal Canadian" ⊂ "Crown Royal … Canadian Whisky" — both target tokens match, vision fooled by Royal/Canadian text on the crown bottle. Subset-brand collision.
+  - Fix 1 (297e89f): "crown royal" added to SUBBRAND_CONFLICT_PHRASES (directional — real Crown Royal SKUs exempt). Nulled the wrong RC images, re-fetched: Crown Royal gone, honest placeholders.
+  - Fix 2 (1181ec7): COLLISION_NEGATIVES map — append `-"crown royal"` to the Serper query so the impostor is excluded at SEARCH level. Recovered 2 real RC photos (14723, 14722) that were placeholders. Reusable class-fix for any budget↔premium collision.
+  - Final RC state: 5 real photos, 4 honest placeholders, ZERO wrong-brand. Remaining placeholders curatable via /admin/catalog-images.
+BROWSE↔SEARCH PARITY (cdfa19e): the fire-order's known gap — typed grouped search ignored the 4 new filters.
+  - Wired New/Material/Format into /items/grouped (server predicates mirror browse_families v4 WHERE exactly; verified the generated PostgREST URL ANDs the OR-groups correctly) + client searchProductsGrouped + BrowsePage.
+  - "Ordered before" in typed search DEFERRED: needs store identity (p_ordered_store) but /price-book mounts WITHOUT resolve-store middleware. Still works in browse via the RPC. Clean follow-up.
+Observed state:
+  - 🟢 Fire order live + verified on device; photo bug fixed + verified; 3/4 advanced filters now work in search too
+  - 🟢 Working tree clean, all committed (cdfa19e HEAD); prod healthy + disarmed
+Next session (priority):
+  - "Ordered before" in typed search (add resolve-store to the grouped route OR read X-Store-Id securely)
+  - Other brand collisions audit (Crown Royal/Royal Canadian won't be the only budget↔premium clash in 13.8k items) — pre-load COLLISION_NEGATIVES before they bite on device
+  - Curate the 4 RC placeholders via /admin/catalog-images if wanted
+  - Still open from 7/16: engine-submit go-live (next order day), submitted_unconfirmed recovery script (live MILO), smarter-AI plan, migration-history drift cleanup
+Notes:
+  - Featured v3 tiebreak confirmed working: ordered bottles rank by scan_count within the ordered tier (Tito's 14 > 12 > J Daniels 8…), then non-ordered below. Exactly "relevance = what Michigan buys."
+  - The AskUserQuestion tool kept erroring for Tony all session (harness flake, not his setup) — drove via text choices instead.
+---
