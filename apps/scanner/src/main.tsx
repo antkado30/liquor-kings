@@ -6,6 +6,53 @@ import { initSentry, Sentry } from "./lib/sentry";
 
 initSentry();
 
+/*
+  Self-healing stale-chunk recovery (2026-07-18 hardening, LIQUOR-KINGS-
+  SCANNER-4). When we deploy, chunk filenames get new hashes; a user still
+  running the old index.html hits "Importing a module script failed" the
+  moment they navigate to a lazy route. Instead of the error boundary, we
+  reload ONCE — the reload fetches the fresh index + new chunks and the user
+  never knows. A sessionStorage stamp guards against a reload loop if the
+  failure is something other than a stale deploy (then we let it surface).
+*/
+const RELOAD_STAMP = "lk.chunkReloadAt";
+function looksLikeStaleChunk(reason: unknown): boolean {
+  const msg = String(
+    (reason as { message?: unknown })?.message ?? reason ?? "",
+  ).toLowerCase();
+  return (
+    msg.includes("importing a module script failed") ||
+    msg.includes("failed to fetch dynamically imported module") ||
+    msg.includes("error loading dynamically imported module") ||
+    msg.includes("unable to preload")
+  );
+}
+function recoverFromStaleChunk(reason: unknown): void {
+  if (!looksLikeStaleChunk(reason)) return;
+  let last = 0;
+  try {
+    last = Number(sessionStorage.getItem(RELOAD_STAMP) ?? "0");
+  } catch {
+    /* private mode / storage blocked — fall through to a single reload */
+  }
+  // Only auto-reload if we haven't just done so (within 15s) — no loops.
+  if (Date.now() - last < 15_000) return;
+  try {
+    sessionStorage.setItem(RELOAD_STAMP, String(Date.now()));
+  } catch {
+    /* ignore */
+  }
+  window.location.reload();
+}
+// Vite's dedicated signal for a failed lazy import.
+window.addEventListener("vite:preloadError", (e) => {
+  recoverFromStaleChunk((e as unknown as { payload?: unknown }).payload ?? e);
+});
+// Belt + suspenders: a rejected dynamic import that didn't fire the Vite event.
+window.addEventListener("unhandledrejection", (e) => {
+  recoverFromStaleChunk(e.reason);
+});
+
 /**
  * Global error boundary fallback. Shows the user something useful when
  * React tree crashes (e.g. an unhandled promise rejection in a render

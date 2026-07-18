@@ -7,6 +7,7 @@ import { makeBoundedFetch, resolveDbFetchTimeoutMs } from "../lib/bounded-fetch.
 import { buildMlccPreflightReport } from "./mlcc-adapter.js";
 import { buildMlccDryRunPlan } from "./mlcc-dry-run.js";
 import { uploadRunArtifacts, formatUploadSummary } from "../lib/run-artifacts-storage.js";
+import { captureRunFailure, captureSubmittedUnconfirmed } from "../lib/sentry.js";
 import { loginToMilo } from "../rpa/stages/login.js";
 import { navigateToProducts } from "../rpa/stages/navigate-to-products.js";
 import { addItemsToCart, clearMiloCart } from "../rpa/stages/add-items-to-cart.js";
@@ -1210,6 +1211,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       console.error(
         `[stage1] FAILED run ${run.id}: ${loginError?.code ?? "UNKNOWN"} — ${loginError?.message ?? "no message"}`,
       );
+      captureRunFailure(loginError, { stage: "stage1_login", runId: run.id, storeId });
       const failure = summarizeFailure(
         loginError?.message ?? "RPA Stage 1 login failed",
         loginError?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -1468,6 +1470,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       console.error(
         `[stage2] FAILED run ${run.id}: ${stage2Error?.code ?? "UNKNOWN"} — ${stage2Error?.message ?? "no message"}`,
       );
+      captureRunFailure(stage2Error, { stage: "stage2_navigate", runId: run.id, storeId });
       const failure = summarizeFailure(
         stage2Error?.message ?? "RPA Stage 2 navigation failed",
         stage2Error?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -1696,6 +1699,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       console.error(
         `[stage3] FAILED run ${run.id}: ${stage3Error?.code ?? "UNKNOWN"} — ${stage3Error?.message ?? "no message"}`,
       );
+      captureRunFailure(stage3Error, { stage: "stage3_add_items", runId: run.id, storeId });
       const failure = summarizeFailure(
         stage3Error?.message ?? "RPA Stage 3 add items failed",
         stage3Error?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -1785,6 +1789,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       console.error(
         `[stage4] FAILED run ${run.id}: ${stage4Error?.code ?? "UNKNOWN"} — ${stage4Error?.message ?? "no message"}`,
       );
+      captureRunFailure(stage4Error, { stage: "stage4_validate", runId: run.id, storeId });
       const failure = summarizeFailure(
         stage4Error?.message ?? "RPA Stage 4 validate cart failed",
         stage4Error?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -2205,6 +2210,13 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       console.error(
         `[stage5] FAILED run ${run.id}: ${stage5Error?.code ?? "UNKNOWN"} — ${stage5Error?.message ?? "no message"}`,
       );
+      captureRunFailure(stage5Error, {
+        stage: "stage5_checkout",
+        runId: run.id,
+        storeId,
+        mode: stage5Mode,
+        extra: { submit_clicked: stage5Error?.details?.submit_clicked === true },
+      });
       const failure = summarizeFailure(
         stage5Error?.message ?? "RPA Stage 5 checkout failed",
         stage5Error?.code ?? FAILURE_TYPE.UNKNOWN,
@@ -2357,6 +2369,14 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       }
 
       if (!receiptRecovered) {
+      // MONEY AT RISK — a real order may exist on MILO with no confirmation
+      // captured. Always page (2026-07-18 telemetry gap fix).
+      captureSubmittedUnconfirmed({
+        runId: run.id,
+        storeId,
+        submitClickedAt: checkedOut?.submitClickedAt ?? null,
+        stage5ErrorCode: checkedOut?.stage5Error?.code ?? null,
+      });
       console.error(
         `[stage5] UNCONFIRMED run ${run.id} settling: NOT failed, NOT retryable — verify on MILO Orders / MLCC email.`,
       );
