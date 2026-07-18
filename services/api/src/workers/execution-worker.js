@@ -1282,6 +1282,28 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         current_url: session?.page?.url?.() ?? session?.currentUrl ?? null,
       }),
     );
+    } // end if (!sessionWasReused) — Stage 1 login is COLD-ONLY
+
+    /*
+     * ═══ BUG FIX 2026-07-18 — the engine must run WARM *or* COLD ═══
+     *
+     * The API ENGINE block below used to sit INSIDE `if (!sessionWasReused)`.
+     * So when a session WAS reused, the engine was skipped entirely: the run
+     * did no work, completed nothing, and the session manager tore the
+     * session down as `run_did_not_complete` — then the run got re-claimed
+     * and ran cold from scratch.
+     *
+     * Measured 2026-07-18 (run ed2359a7): warm acquire at 22:27:16, session
+     * closed `run_did_not_complete` in the SAME second, re-claimed at
+     * 22:27:20, cold engine at +5331ms. On run adc38c07 the cold retry took
+     * 141,860ms. That made warm reuse architecturally impossible and turned
+     * every check into a coin flip between 0.3s and 2min21s.
+     *
+     * Login is the ONLY thing that should be conditional on session reuse.
+     * The engine runs every time. Stage 2 navigate re-enters a cold-only
+     * guard below, so a cold engine run still skips navigate exactly as it
+     * did before — cold stays as fast as it was, warm finally works.
+     */
 
     // ─── API ENGINE PATH (opt-in, validate-only) ──────────────────────────
     // When LK_ORDER_ENGINE=api AND this is a validate_only run, replace RPA
@@ -1525,6 +1547,12 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     }
     // ─── END API ENGINE PATH ──────────────────────────────────────────────
 
+    // Stage 2 navigate + the cold-path session attach are COLD-ONLY. A reused
+    // session is already logged in AND navigated (it was attached after a
+    // completed run), so re-entering the guard here keeps warm runs skipping
+    // straight past. Reached only when the engine is off (LK_ORDER_ENGINE=rpa)
+    // or this is a submit run — the engine returns before this point.
+    if (!sessionWasReused) {
     await heartbeatRun({
       apiBaseUrl,
       runId: run.id,
