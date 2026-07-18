@@ -120,6 +120,31 @@ const SUBBRAND_CONFLICT_PHRASES = [
   "ranch water",
 ];
 
+/*
+ * Collision negatives (Tony, 2026-07-17). A budget brand whose name is a
+ * SUBSET of a dominant premium brand gets swamped in image search by the
+ * premium one — "ROYAL CANADIAN" returns Crown Royal everywhere. The text +
+ * vision gates then correctly REJECT the impostor, but with no real photo
+ * surviving the SKU falls to a placeholder. Excluding the impostor at the
+ * SEARCH level (Google honors `-"phrase"` via Serper) surfaces the real
+ * brand instead. Directional by construction: `unless` exempts the premium
+ * brand's own SKUs so their searches are untouched. Add a row per known
+ * collision; the same guard class as SUBBRAND_CONFLICT_PHRASES, one layer
+ * earlier (search recall vs. candidate rejection).
+ */
+const COLLISION_NEGATIVES = [
+  { when: /\broyal canadian\b/i, unless: /\bcrown royal\b/i, negatives: ['-"crown royal"'] },
+];
+
+function collisionNegativesFor(expandedName) {
+  const name = String(expandedName ?? "");
+  const out = [];
+  for (const rule of COLLISION_NEGATIVES) {
+    if (rule.when.test(name) && !rule.unless.test(name)) out.push(...rule.negatives);
+  }
+  return out;
+}
+
 function normalizeTokens(s) {
   return String(s ?? "")
     .toLowerCase()
@@ -907,7 +932,15 @@ async function main() {
     if (expandedName !== item.name) {
       console.log(`${tag} — searching as "${expandedName}"`);
     }
-    const query = `${expandedName} ${sizeLabel} liquor bottle`.trim();
+    // Exclude a known collision brand at the search level so the real
+    // (budget) brand's photos aren't buried by the premium impostor.
+    const negatives = collisionNegativesFor(expandedName);
+    const query = `${expandedName} ${sizeLabel} liquor bottle${
+      negatives.length ? " " + negatives.join(" ") : ""
+    }`.trim();
+    if (negatives.length) {
+      console.log(`${tag} — excluding at search: ${negatives.join(" ")}`);
+    }
 
     const search = await serperImageSearch(query);
     stats.queries += 1;
