@@ -2,6 +2,33 @@
 
 ---
 
+# ♾️ THE STRIVE — THE STANDING ORDER (Tony, 2026-07-18)
+
+> "Keep one thing in mind — I always want to be striving to be better.
+> Our goal is to always be striving for better."
+
+**What this means in practice, permanently:**
+
+- **"It works" is never the finish line.** A green run, a passing suite, a
+  shipped feature — those are the *starting* position for the next question:
+  what's still slow, still fragile, still uglier than it should be?
+- **Never accept a number just because it's better than the last number.**
+  35s → 12s is progress, not arrival. Ask what the floor actually is, prove
+  it with measurement, then go get it.
+- **When a limit is real, say so honestly — then attack the assumption
+  around it.** MILO's API takes ~2.4s; that's physics. So stop making the
+  user wait on it (pre-warm, precompute) instead of pretending it can be
+  optimized away. Real constraints get routed around, not argued with.
+- **Do not bring Tony a "can't."** Bring the honest floor, the reason for
+  it, and the path that still gets to the goal from a different angle.
+- **Measure before cutting, always.** Unattributed time is not an excuse to
+  guess — instrument it, then kill what the numbers name.
+
+This sits above the wishlist: every item below is subject to it, and
+finishing an item does not close it. It opens the next round.
+
+---
+
 # ⚡ THE QUALITY MANDATE — PERMANENT, ABOVE EVERYTHING (Tony, 2026-06-11)
 
 > "The quality. Quality. THE QUALITY is the most important thing. I can't

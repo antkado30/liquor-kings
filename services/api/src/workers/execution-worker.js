@@ -721,6 +721,25 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
 
   const { run, payload } = claimBody.data;
   const storeId = run.store_id;
+
+  /*
+   * Timing instrumentation (2026-07-18, speed dig).
+   *
+   * A warm-session validate showed ~5s between the Stage-5 arming log and
+   * the first engine call, and the whole claim→arming stretch (payload
+   * fetch, credential decrypt, readiness checks) was never measured at
+   * all — so "where does the time go" was guesswork. These marks attribute
+   * every phase, so the next optimization pass cuts what the numbers name.
+   *
+   * Measured floor for reference (run a88bd06f, warm, 2026-07-18): MILO's
+   * own API critical path is ~2.4s, of which GET /validate alone is 1.87s.
+   * Anything we shave has to come from OUR overhead, not theirs.
+   *
+   * Log-only — no control flow reads these values.
+   */
+  const tClaimed = Date.now();
+  const msSince = () => Date.now() - tClaimed;
+
   const stepEvidence = [
     buildWorkerStepEvidence("claimed", "Run claimed for RPA execution", {
       run_id: run.id,
@@ -1093,6 +1112,9 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
   console.log(
     `[worker] Stage 5 arming: requestedMode=${requestedMode}, envAllow=${envAllow}, storeAllowsSubmission=${storeAllowsSubmission}, finalMode=${stage5Mode}`,
   );
+  console.log(
+    `[timing] run ${run.id}: claim→arming ${msSince()}ms (payload + credentials + readiness)`,
+  );
 
   let session;
   let checkedOut;
@@ -1123,10 +1145,16 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     // always runs, and its existing auto-clear-cart pre-flight (task #9)
     // handles any cart state left behind by the previous run.
     if (persistEnabled) {
+      const tAcquireStart = Date.now();
       const acq = await acquireSession({
         storeId,
         licenseNumber: normalizedLicenseNumber,
       });
+      console.log(
+        `[timing] run ${run.id}: session acquire ${Date.now() - tAcquireStart}ms ` +
+          `(reused=${acq.reused === true}${acq.reused ? "" : `, reason=${acq.reason}`}) ` +
+          `· +${msSince()}ms from claim`,
+      );
       if (acq.reused) {
         session = acq.session;
         sessionId = acq.sessionId;
@@ -1297,7 +1325,16 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       }
 
       try {
+        console.log(
+          `[timing] run ${run.id}: engine START · +${msSince()}ms from claim ` +
+            `(everything before this is OUR overhead)`,
+        );
+        const tEngineStart = Date.now();
         const engineResult = await buildAndValidateViaApi(session, engineItems, { username, password });
+        console.log(
+          `[timing] run ${run.id}: engine DONE ${Date.now() - tEngineStart}ms ` +
+            `(MILO round trips) · +${msSince()}ms from claim`,
+        );
         session.validated = engineResult.validated;
         session.canCheckout = engineResult.canCheckout;
         session.adaOrders = engineResult.adaOrders;
