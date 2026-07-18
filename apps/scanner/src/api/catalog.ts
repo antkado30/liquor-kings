@@ -161,6 +161,12 @@ export async function searchProductsGrouped(
     maxPrice?: number;
     minProof?: number;
     maxProof?: number;
+    /* Advanced filters in typed search (2026-07-17) — parity with browse.
+       "Ordered before" is intentionally absent: it needs store identity the
+       grouped-search route can't resolve yet. */
+    newOnly?: boolean;
+    container?: "glass" | "plastic";
+    packs?: "singles" | "packs";
   },
 ): Promise<FamilyGroup[]> {
   const q = query.trim();
@@ -174,6 +180,9 @@ export async function searchProductsGrouped(
   if (options?.maxPrice != null) params.set("maxPrice", String(options.maxPrice));
   if (options?.minProof != null) params.set("minProof", String(options.minProof));
   if (options?.maxProof != null) params.set("maxProof", String(options.maxProof));
+  if (options?.newOnly) params.set("new_only", "1");
+  if (options?.container) params.set("container", options.container);
+  if (options?.packs) params.set("packs", options.packs);
   const res = await fetchWithRetry(`${BASE}/items/grouped?${params.toString()}`, {
     credentials: "same-origin",
   });

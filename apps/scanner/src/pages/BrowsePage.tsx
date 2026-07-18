@@ -114,6 +114,12 @@ export function BrowsePage() {
         maxPrice: filters.max_price ?? undefined,
         minProof: filters.min_proof ?? undefined,
         maxProof: filters.max_proof ?? undefined,
+        // Advanced filters now respected in typed search too (2026-07-17).
+        // ordered_only intentionally omitted — grouped route can't resolve
+        // the store yet; it still works in browse mode via the RPC.
+        newOnly: filters.new_only || undefined,
+        container: filters.container ?? undefined,
+        packs: filters.packs ?? undefined,
       });
       return { groups };
     },

@@ -1892,6 +1892,23 @@ router.get("/items/grouped", async (req, res) => {
     const maxPrice = Number.parseFloat(String(req.query.maxPrice ?? ""));
     const minProof = Number.parseFloat(String(req.query.minProof ?? ""));
     const maxProof = Number.parseFloat(String(req.query.maxProof ?? ""));
+    /*
+      Advanced filters in typed search (2026-07-17 — closing the fire-order
+      gap: browse modes applied these four but grouped SEARCH didn't). These
+      three are pure item-column filters, so they mirror browse_families v4's
+      WHERE clause exactly. "Ordered before" is NOT here yet: it needs the
+      store identity (p_ordered_store), and /price-book mounts WITHOUT the
+      resolve-store middleware — wiring that securely is a separate change.
+    */
+    const newOnly = req.query.new_only === "1" || req.query.new_only === "true";
+    const container =
+      req.query.container === "glass" || req.query.container === "plastic"
+        ? req.query.container
+        : null;
+    const packs =
+      req.query.packs === "singles" || req.query.packs === "packs"
+        ? req.query.packs
+        : null;
     const applyGroupedBrowseFilters = (q) => {
       let out = q;
       if (category) out = out.eq("category", category);
@@ -1899,6 +1916,19 @@ router.get("/items/grouped", async (req, res) => {
       if (Number.isFinite(maxPrice)) out = out.lte("licensee_price", maxPrice);
       if (Number.isFinite(minProof)) out = out.gte("proof", minProof);
       if (Number.isFinite(maxProof)) out = out.lte("proof", maxProof);
+      // is_new_item IS TRUE
+      if (newOnly) out = out.eq("is_new_item", true);
+      // container: null/empty counts as glass (v4: coalesce(nullif(btrim..),'glass'))
+      if (container === "glass") out = out.or("container.is.null,container.eq.glass");
+      else if (container === "plastic") out = out.eq("container", "plastic");
+      // packs: singles = pack_count<2 (null→1) AND is_combo NOT TRUE; packs =
+      // pack_count>=2 OR combo. `.not(is_combo,is,true)` = "is_combo IS NOT
+      // TRUE" (false or null) in one filter — avoids a second OR group.
+      if (packs === "singles") {
+        out = out.or("pack_count.is.null,pack_count.lt.2").not("is_combo", "is", true);
+      } else if (packs === "packs") {
+        out = out.or("pack_count.gte.2,is_combo.is.true");
+      }
       return out;
     };
 
