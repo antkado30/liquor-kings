@@ -24,7 +24,7 @@
  */
 
 import process from "node:process";
-import { initSentry } from "../lib/sentry.js";
+import { initSentry, captureRunFailure } from "../lib/sentry.js";
 import { processOneRpaRun } from "./execution-worker.js";
 import { forceCloseAll as forceCloseRpaSessions } from "./rpa-session-manager.js";
 
@@ -34,6 +34,19 @@ import { forceCloseAll as forceCloseRpaSessions } from "./rpa-session-manager.js
 // crash (the surface that actually matters most, per the 2026-06-09 wedge
 // incident) was invisible to Sentry. Safe no-op if SENTRY_DSN is unset.
 initSentry();
+
+// One-shot Sentry self-test (2026-07-18). Set LK_SENTRY_SELFTEST=1 to fire a
+// single clearly-tagged event on boot — proves the money-path telemetry chain
+// end to end (real DSN, real captureRunFailure code path, real delivery) so we
+// KNOW the eyes are open, not just wired. No-op unless the flag is "1"; unset
+// the secret once you've seen it land in the liquor-kings-api project.
+if (process.env.LK_SENTRY_SELFTEST === "1") {
+  captureRunFailure(
+    new Error("[selftest] RPA telemetry self-test — expected, safe to resolve"),
+    { stage: "selftest", runId: "selftest", storeId: "selftest", failureType: "LK_SENTRY_SELFTEST" },
+  );
+  console.log("[sentry] self-test event fired (LK_SENTRY_SELFTEST=1) — check liquor-kings-api, then unset the flag");
+}
 
 // Polling cadence when the queue is empty — snappy enough for orders to feel
 // instant, cheap enough that we're not hammering claim-next.
