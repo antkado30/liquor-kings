@@ -8,6 +8,8 @@
     "start": "node src/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:smoke": "LK_TEST_SMOKE=1 vitest run",
+    "test:all": "vitest run && LK_TEST_SMOKE=1 vitest run",
     "playwright:install": "PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium",
     "worker:run-once": "node src/workers/execution-worker.js",
     "worker:rpa-run-once": "WORKER_MODE=rpa_run node src/workers/execution-worker.js"
