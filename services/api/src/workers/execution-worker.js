@@ -1335,6 +1335,61 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
           `[timing] run ${run.id}: engine DONE ${Date.now() - tEngineStart}ms ` +
             `(MILO round trips) · +${msSince()}ms from claim`,
         );
+
+        /*
+         * Hold this session for reuse — BUG FIX, 2026-07-18.
+         *
+         * attachFreshSession() lives at the end of the OLD stage-by-stage
+         * path (right after Stage 2 navigate). The API engine added later
+         * returns from this function long before reaching it — so with
+         * LK_RPA_PERSIST_SESSION=yes, sessionId stayed null forever, the
+         * manager was never handed a session, and EVERY run reported
+         * `no_held_session` and paid a full browser login.
+         *
+         * Measured 2026-07-18 (runs 0ee6ce58 + 73b5b5ce): two back-to-back
+         * validates BOTH logged reused=false. What looked like warm reuse
+         * (31s → 5.6s) was only Chromium/OS warm-start, not session reuse.
+         * Login+navigate was 31,248ms cold and 5,476ms "warm" — while setup
+         * was just ~199ms. That login is the entire cost of a check.
+         *
+         * Attaching here is what makes reuse actually happen on the path
+         * production takes. This point is correct-by-construction: the
+         * engine just completed a full MILO round trip on this session, so
+         * it is provably alive. Non-fatal — if the manager declines we run
+         * as a one-shot and finally{} closes the browser exactly as before.
+         * If the run fails after this, runSucceeded stays false and the
+         * finally block tears the session down rather than holding it.
+         */
+        if (persistEnabled && !sessionWasReused && !sessionId) {
+          try {
+            const att = await attachFreshSession({
+              storeId,
+              licenseNumber: normalizedLicenseNumber,
+              session,
+            });
+            if (att.ok) {
+              sessionId = att.sessionId;
+              console.log(
+                `[timing] run ${run.id}: session ATTACHED for reuse (${sessionId}) — next run should skip login`,
+              );
+              stepEvidence.push(
+                buildWorkerStepEvidence(
+                  "rpa_session_attached",
+                  "Fresh MILO session attached for future reuse (engine path)",
+                  { session_id: sessionId },
+                ),
+              );
+            } else {
+              console.warn(
+                `[worker] attachFreshSession declined (non-fatal): ${att.reason ?? "unknown"}`,
+              );
+            }
+          } catch (attachError) {
+            console.warn(
+              `[worker] attachFreshSession threw (non-fatal): ${attachError?.message ?? attachError}`,
+            );
+          }
+        }
         session.validated = engineResult.validated;
         session.canCheckout = engineResult.canCheckout;
         session.adaOrders = engineResult.adaOrders;
