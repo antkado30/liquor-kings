@@ -26,10 +26,10 @@ const requiredFiles = [
   "services/api/src/services/mlcc-operator-context.service.js",
   "services/api/src/middleware/store-param.middleware.js",
   "services/api/src/middleware/require-service-role.middleware.js",
-  "services/api/src/workers/mlcc-browser-worker.js",
-  "services/api/src/workers/mlcc-browser-add-by-code-probe.js",
-  "services/api/src/workers/mlcc-phase-2k-policy.js",
-  "services/api/src/workers/mlcc-phase-2m-policy.js",
+  // Live execution path. The legacy browser-worker + phase-policy files that
+  // used to be pinned here were removed 2026-07-18 with the legacy RPA
+  // subsystem (strangler-fig final cut) — production runs the rpa/ stages via
+  // processOneRpaRun in execution-worker.js.
   "services/api/src/workers/execution-worker.js",
   "apps/admin/src/pages/DiagnosticsPage.tsx",
   "apps/admin/src/pages/OperatorOverviewPage.tsx",

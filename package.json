@@ -21,10 +21,8 @@
     "audit:lk:cart-identity": "node scripts/lk-audit/cart-item-identity-backfill.mjs",
     "audit:lk:cart-identity:apply": "node scripts/lk-audit/cart-item-identity-backfill.mjs --apply",
     "verify:lk:contracts": "node scripts/lk-verify/verify-contracts.mjs",
-    "verify:lk:rpa-safety": "node scripts/lk-verify/verify-rpa-safety.mjs",
-    "safety:lk:rpa-local": "npm run doctor:lk:mlcc-dry-run && npm run test:ci && npm run verify:lk:rpa-safety",
     "verify:lk:architecture": "node scripts/lk-verify/verify-architecture.mjs",
-    "doctor:lk:mlcc-dry-run": "node scripts/lk-verify/doctor-mlcc-dry-run.mjs",
+    "safety:lk:rpa-local": "npm run test:ci && npm run verify:lk:architecture",
     "seed:lk:queue-mlcc-dry-run": "node scripts/lk-seed/queue-mlcc-dry-run.mjs",
     "seed:lk:queue-mlcc-dry-run:replace": "MLCC_SEED_REPLACE_STALE_QUEUED=true node scripts/lk-seed/queue-mlcc-dry-run.mjs"
   },

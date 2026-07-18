@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, configDefaults } from "vitest/config";
 
 /*
  * Two test tiers (2026-07-18 — "make the suite trustworthy"):
@@ -21,8 +21,11 @@ export default defineConfig({
     include: smoke
       ? ["**/*.smoke.test.js"]
       : ["**/*.test.js", "**/*.unit.test.js"],
+    // Extend vitest's built-in excludes (node_modules, dist, .git, .cache, …)
+    // rather than hand-rolling them — so those stay excluded no matter how the
+    // run is invoked (e.g. test:ci passing its own --exclude on the CLI).
     exclude: smoke
-      ? ["**/node_modules/**", "**/dist/**"]
-      : ["**/node_modules/**", "**/dist/**", "**/*.smoke.test.js"],
+      ? [...configDefaults.exclude]
+      : [...configDefaults.exclude, "**/*.smoke.test.js"],
   },
 });

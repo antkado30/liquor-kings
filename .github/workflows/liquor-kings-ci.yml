@@ -56,11 +56,15 @@ jobs:
       - name: Install API dependencies and run unit tests (no smoke / no live stack)
         run: npm run test:ci
 
-      - name: Install root Playwright browsers (for RPA safety invariant test)
-        run: npx playwright install chromium --with-deps
-
-      - name: RPA safety checks (static checks + SAFE MODE invariant)
-        run: npm run verify:lk:rpa-safety
+      # 2026-07-18: the legacy "RPA safety" step (verify:lk:rpa-safety + the
+      # node --test SAFE MODE invariant, which needed root Playwright) was
+      # retired with the legacy browser-automation subsystem it policed. The
+      # live money-path safety is now asserted by the unit suite (submit
+      # triple-gate + submitted_unconfirmed never-retry). What remains here is
+      # the architecture/contract check: every documented live implementation
+      # path still exists.
+      - name: Architecture & contract checks (live implementation paths exist)
+        run: npm run verify:lk:architecture
 
   smoke-tests-staging:
     name: Smoke tests (staging DB — readiness contract)
@@ -70,6 +74,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
     env:
       CI: "true"
+      # This job explicitly runs a *.smoke.test.js file. The 2026-07-18
+      # vitest.config split excludes smoke tests by default; LK_TEST_SMOKE=1
+      # flips the config into smoke mode so the explicitly-named file runs.
+      LK_TEST_SMOKE: "1"
       SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
