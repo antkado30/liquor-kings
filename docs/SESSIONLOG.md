@@ -430,3 +430,29 @@ Notes:
   - Line-by-line confirm modal flagged as trimmable UX (not safety — server re-validates) — candidate for a one-summary-screen simplification whenever Tony wants.
   - Energy: absolute tear. First real order + full P0 block + endpoint recovery in one session. "lets fucking go" x∞.
 ---
+
+---
+Date: 2026-07-17 (early AM continuation — product-wants batch, ~12:30–1:15am ET)
+Focus: 🎨 Shipped 2 more of Tony's stated 7/16 wants (multi-photo assistant, cart shows MILO net). Both deployed + committed (a04e87a). Prior sprint committed at c61d5af.
+Files touched:
+  - services/api/src/lib/assistant.js (buildUserMessageContent now maps imageDataUris[] → one image block each, cap 6, singular back-compat; exported for tests) + routes/assistant.routes.js (accept imageDataUris[])
+  - apps/scanner: api/assistant.ts (send imageDataUris[]), components/AssistantChat.tsx (multi-select picker, thumbnail strip w/ per-photo remove + "+" tile, state string→string[]), index.css (preview-row + add tile)
+  - apps/scanner/src/lib/cart-total.ts (NEW: resolveDisplayedTotal — MILO net vs client estimate) + CartDrawer.tsx (footer + header show MLCC net after a green check matching current cart hash; revert to Est. total on any edit)
+  - tests: assistant-multi-image.unit.test.js (7), cart-total.test.ts (5)
+Commands / tests run (Tony's Mac):
+  - assistant-multi-image 7/7; scanner npx vitest run 65/65; scanner tsc clean; fly deploy ×2 healthy
+Wants status (from the 7/16 live-order batch in TONY-WANTS):
+  - ✅ #0 one-tap remove-OOS+recheck | ✅ #1 OOS names not codes | ✅ #2 pinned cart verdict | ✅ #3 cart MILO net after validate | ✅ multi-photo assistant
+  - ⏳ smarter AI (model bump/streaming/resolver tuning) — needs a design call, not a 1am build
+  - ⏳ AI screenshot miss-list tuning — needs the exact misses from a real order day
+What's next (priority, all needing fresh brain or live MILO):
+  - Next order day: shadow + first live fire of engine-submit (docs/lk/milo-checkout-endpoint.md checklist)
+  - Standalone re-scrape+ingest recovery script for truly submitted_unconfirmed runs (needs live MILO)
+  - Smarter-AI plan conversation; migration-history drift cleanup (db push blocked)
+Observed state:
+  - 🟢 4 product wants live; both sprints committed (c61d5af, a04e87a); prod healthy + disarmed
+  - 🟡 engine-submit still built-not-wired (by design)
+Notes:
+  - Auto-fill Orders tab: discovered it's ALREADY handled for the common timed-out case by tonight's self-heal (recovered run → submitted:true → persistMiloOrderConfirmations writes confirmations + line_items). Only the dead-page case needs the deferred recovery script.
+  - Clean wrap honored after the commit — every remaining item is genuinely a live-MILO or fresh-brain task per Tony's own discipline.
+---

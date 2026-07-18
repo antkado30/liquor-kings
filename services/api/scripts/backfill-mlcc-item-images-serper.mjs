@@ -107,6 +107,15 @@ const SUBBRAND_CONFLICT_PHRASES = [
   "bacardi breezer",
   "jose cuervo playamar",
   "crown royal washington apple", // pre-mixed RTD line vs the whisky
+  // Crown Royal ↔ Royal Canadian collision (Tony, 2026-07-17 on device):
+  // "ROYAL CANADIAN" (budget Canadian whisky) kept getting CROWN ROYAL
+  // photos. Crown Royal IS Canadian whisky, so its listings read
+  // "Crown Royal ... Canadian Whisky" — both target tokens (royal +
+  // canadian) match, no numeric/variant tripped, and the vision gate got
+  // fooled by "Royal/Canadian" text on the crown-shaped bottle. The
+  // directional exemption below saves real Crown Royal SKUs: a target
+  // that itself contains "crown royal" is exempt; "ROYAL CANADIAN" is not.
+  "crown royal",
   "hard seltzer",
   "ranch water",
 ];
