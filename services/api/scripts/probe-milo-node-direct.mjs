@@ -88,7 +88,10 @@ async function main() {
     // ── PHASE 1: browser login (the expensive thing we want to delete) ──
     const t0 = Date.now();
     console.log("\n[PHASE 1] browser login (this is the ~31s we are trying to kill)…");
-    session = await loginToMilo({ username, password, headless: true });
+    // loginToMilo(credentials, options) — verified against src/rpa/stages/login.js:
+    // credentials = {username, password[, loginUrl]}; options carry headless etc.
+    // (Was one merged object; worked only because options.headless defaults true.)
+    session = await loginToMilo({ username, password }, { headless: true });
     console.log(`[PHASE 1] login complete in ${Date.now() - t0}ms`);
 
     const page = session.page;
