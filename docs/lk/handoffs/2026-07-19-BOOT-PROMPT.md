@@ -1,5 +1,12 @@
 # BOOT PROMPT — paste this entire file as your FIRST message in a new chat
 
+> **⚠️ PARTIALLY STALE (2026-07-18 evening session): the probe RAN — verdict
+> 200, Node-direct works — and the node engine SHIPPED (cold check 34.4s →
+> 3.7s in prod; tests now 617/0, not 590/0). Phase 0 + Phase 2 of this file
+> still apply verbatim. For current state and the NEXT mission (engine
+> submit), read `2026-07-19-node-direct-closeout.md` in this folder AFTER
+> Phase 0.**
+
 You are picking up work on **Liquor Kings** — a B2B SaaS that automates
 MLCC/MILO liquor ordering for retail stores. Tony (19, founder) built it and is
 running real money through it. Your predecessor handed off mid-mission.
