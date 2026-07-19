@@ -16,6 +16,11 @@ import { checkoutOnMilo, navigateToOrdersAndCapture } from "../rpa/stages/checko
 import { buildAndValidateViaApi } from "../rpa/engine/engine-api.js";
 import { attachMiloProductCache } from "../rpa/engine/attach-product-cache.js";
 import {
+  getNodeMiloSession,
+  invalidateNodeMiloSession,
+  MiloNodeLoginError,
+} from "../rpa/engine/milo-node-session.js";
+import {
   acquireSession,
   attachFreshSession,
   releaseSession,
@@ -705,6 +710,35 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
   };
 }
 
+/**
+ * Pre-map: attach cached MILO productIds (mlcc_items.milo_product_id /
+ * milo_distributor) so the engine skips the per-code /products/code resolves
+ * (~1.3s each). PURE OPTIMIZATION — any lookup failure logs and returns the
+ * items unchanged, so the order still runs identically via live resolve
+ * (never blocked). Extracted 2026-07-18 so the node-direct and browser
+ * engine branches share one implementation.
+ */
+async function attachProductCacheOrFallback(workerSupabase, normalizedItems) {
+  try {
+    const cartCodes = normalizedItems.map((i) => String(i.code));
+    const { data: cacheRows, error: cacheErr } = await workerSupabase
+      .from("mlcc_items")
+      .select("code, milo_product_id, milo_distributor")
+      .in("code", cartCodes)
+      .not("milo_product_id", "is", null);
+    if (cacheErr) {
+      console.warn(`[engine] productId cache lookup failed — live resolve fallback: ${cacheErr.message}`);
+      return normalizedItems;
+    }
+    const merged = attachMiloProductCache(normalizedItems, cacheRows);
+    console.log(`[engine] productId cache: ${merged.hits}/${normalizedItems.length} cart codes pre-mapped`);
+    return merged.items;
+  } catch (cacheLookupError) {
+    console.warn(`[engine] productId cache lookup threw — live resolve fallback: ${cacheLookupError?.message ?? cacheLookupError}`);
+    return normalizedItems;
+  }
+}
+
 export async function processOneRpaRun({ apiBaseUrl, workerId }) {
   const claimBody = await claimNextRun({
     apiBaseUrl,
@@ -1137,6 +1171,268 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
   let runSucceeded = false;
   let runUnhealthyReason = null;
   try {
+    /*
+     * ─── NODE-DIRECT ENGINE (2026-07-18, the speed dig's verdict) ────────
+     *
+     * The probe (scripts/probe-milo-node-direct.mjs, run ON this worker)
+     * proved MILO answers pure Node with no browser and no cf_clearance:
+     * login 200 (~160ms), GET /account 200 (329ms), token exp 30 min. So a
+     * validate check no longer pays the ~31s Stage-1 Chromium login — the
+     * whole check runs as direct fetch calls at the MILO floor (~2.7s),
+     * cold, every time.
+     *
+     * Routing rules:
+     *   - Only validate_only runs with LK_ORDER_ENGINE=api take this path.
+     *   - LK_MILO_TRANSPORT=browser is the kill switch back to the proven
+     *     browser engine (default: node).
+     *   - Login classified invalid_credentials → fail the run LOUD here.
+     *     NEVER fall back to the browser on bad creds — loginToMilo would
+     *     burn a second bad-password attempt and MLCC can lock the account.
+     *   - Login classified blocked_or_down (Cloudflare challenge, network
+     *     death) → warn LOUD and fall through to the unchanged browser
+     *     pipeline below. Honest degradation, never silent.
+     *   - ANY engine failure invalidates the cached node session (poisoned
+     *     cache < fresh ~500ms login) and finalizes failed through the
+     *     normal retry machinery; the retry re-classifies from scratch.
+     */
+    const miloTransportChoice = (process.env.LK_MILO_TRANSPORT || "node").toLowerCase();
+    if (orderEngine === "api" && isValidateOnly && miloTransportChoice === "node") {
+      const nodeKeepalive = setInterval(() => {
+        void heartbeatRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          workerId,
+          progressStage: "rpa_validate",
+          progressMessage: "Confirming your cart with MLCC",
+        }).catch(() => {});
+      }, 15_000);
+      try {
+        await heartbeatRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          workerId,
+          progressStage: "rpa_validate",
+          progressMessage: "Confirming your cart with MLCC",
+        });
+
+        const engineItems = await attachProductCacheOrFallback(workerSupabase, normalizedItems);
+
+        let nodeSession = null;
+        const tNodeAuth = Date.now();
+        try {
+          nodeSession = await getNodeMiloSession({ storeId, username, password });
+        } catch (nodeLoginErr) {
+          const classification =
+            nodeLoginErr instanceof MiloNodeLoginError
+              ? nodeLoginErr.classification
+              : "blocked_or_down";
+          if (classification === "invalid_credentials") {
+            console.error(
+              `[node-engine] FAILED run ${run.id}: MILO rejected the stored credentials (status ${nodeLoginErr?.status ?? "?"})`,
+            );
+            captureRunFailure(nodeLoginErr, { stage: "engine_validate", runId: run.id, storeId });
+            const failure = summarizeFailure(
+              "MILO rejected the stored MLCC credentials (node login)",
+              "MILO_LOGIN_INVALID_CREDENTIALS",
+              { stage: "engine_validate", transport: "node", status: nodeLoginErr?.status ?? null },
+            );
+            await finalizeRun({
+              apiBaseUrl,
+              runId: run.id,
+              storeId,
+              status: "failed",
+              workerNotes: "Node-direct MILO login failed: invalid credentials",
+              errorMessage: failure.message,
+              failureType: failure.failureType,
+              failureDetails: failure.details,
+              evidence: [
+                ...stepEvidence,
+                buildNoSubmitAttestationEvidence("engine_validate", "validate_only"),
+              ],
+            });
+            return {
+              success: false,
+              claimed: true,
+              failed: true,
+              runId: run.id,
+              stage: "engine_validate",
+              error: "MILO_LOGIN_INVALID_CREDENTIALS",
+            };
+          }
+          // Cloudflare / network shaped → the browser path below still works.
+          console.warn(
+            `[node-engine] run ${run.id}: node transport blocked pre-engine ` +
+              `(status ${nodeLoginErr?.status ?? "?"}: ${nodeLoginErr?.message ?? nodeLoginErr}) — ` +
+              `FALLING BACK to the browser engine for this run (slow path, ~34s). ` +
+              `If this repeats, MILO/Cloudflare posture changed — re-run the probe.`,
+          );
+          stepEvidence.push(
+            buildWorkerStepEvidence(
+              "node_transport_fallback",
+              "Node-direct MILO transport failed before the engine; using the browser engine for this run",
+              { classification, status: nodeLoginErr?.status ?? null },
+            ),
+          );
+        }
+
+        if (nodeSession) {
+          console.log(
+            `[timing] run ${run.id}: node auth ${Date.now() - tNodeAuth}ms ` +
+              `(fromCache=${nodeSession.fromCache}) · +${msSince()}ms from claim`,
+          );
+          console.log(
+            `[timing] run ${run.id}: engine START (node) · +${msSince()}ms from claim ` +
+              `(everything before this is OUR overhead)`,
+          );
+          const tEngineStart = Date.now();
+          let engineResult;
+          try {
+            engineResult = await buildAndValidateViaApi(
+              { transport: nodeSession.transport },
+              engineItems,
+              {
+                username,
+                password,
+                preauth: {
+                  token: nodeSession.token,
+                  groupId: nodeSession.groupId,
+                  subscriptionId: nodeSession.subscriptionId,
+                },
+              },
+            );
+          } catch (engineError) {
+            invalidateNodeMiloSession(storeId, "engine_failure");
+            console.error(
+              `[node-engine] FAILED run ${run.id}: ${engineError?.code ?? "UNKNOWN"} — ${engineError?.message ?? "no message"}`,
+            );
+            captureRunFailure(engineError, { stage: "engine_validate", runId: run.id, storeId });
+            const failure = summarizeFailure(
+              engineError?.message ?? "API engine validate failed",
+              engineError?.code ?? FAILURE_TYPE.UNKNOWN,
+              {
+                stage: "engine_validate",
+                transport: "node",
+                details:
+                  engineError?.details && typeof engineError.details === "object"
+                    ? engineError.details
+                    : {},
+              },
+            );
+            await finalizeRun({
+              apiBaseUrl,
+              runId: run.id,
+              storeId,
+              status: "failed",
+              workerNotes: "API engine validate failed (node transport)",
+              errorMessage: failure.message,
+              failureType: failure.failureType,
+              failureDetails: failure.details,
+              evidence: [
+                ...stepEvidence,
+                buildNoSubmitAttestationEvidence("engine_validate", "validate_only"),
+              ],
+            });
+            return {
+              success: false,
+              claimed: true,
+              failed: true,
+              runId: run.id,
+              stage: "engine_validate",
+              error: engineError?.code ?? FAILURE_TYPE.UNKNOWN,
+            };
+          }
+          console.log(
+            `[timing] run ${run.id}: engine DONE ${Date.now() - tEngineStart}ms ` +
+              `(MILO round trips) · +${msSince()}ms from claim`,
+          );
+
+          const validateOnlySummary = {
+            validated: engineResult.validated ?? null,
+            can_checkout: engineResult.canCheckout ?? null,
+            ada_breakdown: engineResult.adaOrders ?? null,
+            order_summary: engineResult.orderSummary ?? null,
+            items_added: null,
+            items_rejected: null,
+            out_of_stock_items: Array.isArray(engineResult.outOfStockItems)
+              ? engineResult.outOfStockItems
+              : null,
+            validate_messages: Array.isArray(engineResult.validationMessages)
+              ? engineResult.validationMessages
+              : null,
+            validate_errors: null,
+            current_url: null,
+          };
+
+          stepEvidence.push(
+            buildWorkerStepEvidence(
+              "engine_validate_complete",
+              "API engine validate succeeded (node transport — no browser)",
+              {
+                can_checkout: validateOnlySummary.can_checkout,
+                out_of_stock_count: Array.isArray(engineResult.outOfStockItems)
+                  ? engineResult.outOfStockItems.length
+                  : null,
+                engine_timings: engineResult.engineTimings ?? null,
+                transport: "node",
+              },
+            ),
+          );
+          stepEvidence.push(
+            buildWorkerStepEvidence(
+              "validate_only_complete",
+              "validate_only pipeline complete; Stage 5 deliberately skipped",
+              { ...validateOnlySummary, stage_5_invoked: false },
+            ),
+          );
+
+          await finalizeRun({
+            apiBaseUrl,
+            runId: run.id,
+            storeId,
+            status: "succeeded",
+            workerNotes:
+              "validate_only complete — Stages 1-4 ran successfully; Stage 5 was not reachable",
+            evidence: [
+              ...stepEvidence,
+              buildEvidenceEntry({
+                kind: "validate_only_summary",
+                stage: "validate_only_complete",
+                message:
+                  "Live MILO cart state for the scanner's Validate-against-MLCC UI",
+                attributes: validateOnlySummary,
+              }),
+              buildNoSubmitAttestationEvidence(
+                "validate_only_complete",
+                "validate_only",
+              ),
+            ],
+          });
+          console.log(
+            `[worker] validate_only run ${run.id} finalized succeeded (canCheckout=${validateOnlySummary.can_checkout}, oos=${Array.isArray(engineResult.outOfStockItems) ? engineResult.outOfStockItems.length : "?"}, transport=node)`,
+          );
+          runSucceeded = true;
+          return {
+            success: true,
+            claimed: true,
+            failed: false,
+            runId: run.id,
+            runType: "validate_only",
+            canCheckout: validateOnlySummary.can_checkout,
+            outOfStockCount: Array.isArray(engineResult.outOfStockItems)
+              ? engineResult.outOfStockItems.length
+              : null,
+            sessionReused: false,
+            transport: "node",
+          };
+        }
+      } finally {
+        clearInterval(nodeKeepalive);
+      }
+    }
+    // ─── END NODE-DIRECT ENGINE (fallthrough = browser pipeline below) ────
+
     // ─── Phase A reuse path ──────────────────────────────────────────
     // If persist is enabled AND we have a warm session for THIS store
     // with THIS license, skip Stages 1 + 2 entirely. The session
@@ -1323,28 +1619,9 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
         }).catch(() => {});
       }, 15_000);
 
-      // Pre-map: attach cached MILO productIds so the engine skips the per-code
-      // /products/code resolves (the per-bottle bottleneck). PURE OPTIMIZATION —
-      // any lookup failure logs and falls back to normalizedItems unchanged, so
-      // the order still runs identically via live resolve (never blocked).
-      let engineItems = normalizedItems;
-      try {
-        const cartCodes = normalizedItems.map((i) => String(i.code));
-        const { data: cacheRows, error: cacheErr } = await workerSupabase
-          .from("mlcc_items")
-          .select("code, milo_product_id, milo_distributor")
-          .in("code", cartCodes)
-          .not("milo_product_id", "is", null);
-        if (cacheErr) {
-          console.warn(`[engine] productId cache lookup failed — live resolve fallback: ${cacheErr.message}`);
-        } else {
-          const merged = attachMiloProductCache(normalizedItems, cacheRows);
-          engineItems = merged.items;
-          console.log(`[engine] productId cache: ${merged.hits}/${normalizedItems.length} cart codes pre-mapped`);
-        }
-      } catch (cacheLookupError) {
-        console.warn(`[engine] productId cache lookup threw — live resolve fallback: ${cacheLookupError?.message ?? cacheLookupError}`);
-      }
+      // Pre-map via the shared helper (extracted 2026-07-18 for the node
+      // branch; behavior + log lines identical to the old inline block).
+      const engineItems = await attachProductCacheOrFallback(workerSupabase, normalizedItems);
 
       try {
         console.log(

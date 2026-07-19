@@ -55,4 +55,50 @@ Captured a HAR of a real add+validate run (after fixing Stage 2's license-dropdo
 
 **Biggest optimization:** pre-store MILO's `productId` in our own catalog → delete the slow `/products/code/*` resolves at order time. Live path becomes login → bulk-add → inventory+validate. Plausibly ~2–4s warm.
 
-**GAP — submit is unmapped.** The spike is dry-run; `confirmationNumber` stays null. The submit/checkout endpoint is NOT captured. To map it: a SUPERVISED ARMED run on a real Colony order with HAR recording, per the go-live runbook. Deliberate step — real order, real money.
+**GAP — submit is unmapped.** The spike is dry-run; `confirmationNumber` stays null. The submit/checkout endpoint is NOT captured. To map it: a SUPERVISED ARMED run on a real Colony order with HAR recording, per the go-live runbook. Deliberate step — real order, real money. *(Closed 2026-07-17: endpoint recovered from the Angular bundle — see docs/lk/milo-checkout-endpoint.md.)*
+
+---
+
+## ⭐⭐ R2 IS FULLY BROWSERLESS — PROVEN + BUILT 2026-07-18 (the Node-direct dig)
+
+Ran `scripts/probe-milo-node-direct.mjs` ON the worker (stable egress IP),
+then a pure-Node login test. Measured live:
+
+- Browser-harvested token replayed from pure Node: `GET /account` → **200 in 329ms**
+- **NO `cf_clearance` cookie existed** (1 cookie total) — Cloudflare is not
+  challenging this API route at all right now
+- **Pure-Node `POST /auth/login` → 200**, accessToken present, **token exp = 30 min**
+- `GET /account` with that Node-obtained token → **200**
+
+Conclusion: the browser was load-bearing for NOTHING on the API path. The
+Cloudflare assumption (engine ran inside `page.evaluate` to carry
+`cf_clearance`) is not currently enforced by MILO. The ~31s Stage-1 login was
+pure tax.
+
+**BUILT same day (worker-side; default ON via `LK_MILO_TRANSPORT=node`):**
+
+- `src/rpa/engine/engine-api.js` — pluggable transports:
+  `makeNodeMiloTransport()` (plain fetch, 60s hang-stop per call) alongside
+  the original page transport (kept byte-identical as the fallback). Same
+  `{ms,status,ok,body}` contract; the engine body, fail-closed clear,
+  parallel reads, and boundary gate are unchanged. `submitCartViaApi` speaks
+  transport too — engine-submit fires browserless the day it arms (still
+  triple-gated, still order-day-only per the go-live runbook).
+- `src/rpa/engine/milo-node-session.js` — per-store token+account cache
+  (30-min JWT, 5-min refresh margin, same-username-only, invalidated on ANY
+  engine failure). Also kills the handoff's warm micro-win: `preauth` skips
+  the redundant `/auth/login` + `/account` pair (~460ms).
+- `src/workers/execution-worker.js` — node-direct branch ahead of the
+  browser pipeline for `LK_ORDER_ENGINE=api` validate_only runs. Login
+  failures are classified: `invalid_credentials` fails the run LOUD and
+  never touches the browser (a second bad-password attempt risks an MLCC
+  lockout); `blocked_or_down` (Cloudflare/network shaped) falls back LOUDLY
+  to the untouched browser engine for that run. Kill switch:
+  `LK_MILO_TRANSPORT=browser`.
+
+**Expected cold check: ~2.5–3.5s (was 34.4s), every time — no warm/cold
+distinction left.** MILO's own ~2.4–2.7s API floor is now the whole cost.
+
+Honest caveat: Cloudflare posture can change any day. The browser path stays
+deployed and reachable per-run (automatic fallback) or wholesale (env flip).
+If fallback warnings ever appear in worker logs, re-run the probe.

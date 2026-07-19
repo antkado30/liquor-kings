@@ -328,6 +328,12 @@ half the original list turned out to be ALIVE):**
 10. THU 7/16 ORDER DAY: armed two-step run + HAR submit-endpoint capture.
 11. Engine submit from the capture → scan-to-submitted in seconds.
 12. productId pre-map (the deferred speed win) → ~3s checks.
+    ✅ **2026-07-18: NODE-DIRECT ENGINE built.** The probe proved MILO
+    answers pure Node — no browser, no cf_clearance, token 30 min. Cold
+    checks now run browserless at the MILO floor (~3s, was 34.4s); browser
+    engine kept as automatic loud fallback (`LK_MILO_TRANSPORT=browser`
+    kill switch). See ordering-speed-strategy.md §"R2 IS FULLY BROWSERLESS".
+    Deploy + on-device proof pending.
 13. Post-7/16 follow-ups: cron-wire new-item ingest; photo flake re-run;
     catalog polish pass (Tony's "advanced and amazing" bar); Phase 1's
     cleanup afternoon.

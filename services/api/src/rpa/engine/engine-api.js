@@ -14,6 +14,14 @@
  * browser session from loginToMilo (which cleared Cloudflare) and the MILO
  * credentials; we re-POST /auth/login from the page to capture the accessToken
  * (MILO doesn't persist it in reachable storage). Token is redacted in all logs.
+ *
+ * 2026-07-18 UPDATE (the Node-direct dig): the probe proved Cloudflare is NOT
+ * currently challenging this API — pure Node fetch logged in and called MILO
+ * with no browser alive (probe-milo-node-direct.mjs on the worker: login 200,
+ * GET /account 200 in 329ms, NO cf_clearance cookie existed, token exp 30min).
+ * The module now speaks through a pluggable TRANSPORT (node | page). The page
+ * path is byte-identical to before and remains the automatic fallback for the
+ * day Cloudflare wakes up.
  */
 import { parseMiloValidate } from "./parse-milo-validate.js";
 import { cartExactlyMatchesRequest } from "../../lib/cart-match.js";
@@ -25,6 +33,93 @@ export const redact = (v) =>
   String(v)
     .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, "$1<redacted>")
     .replace(/eyJ[A-Za-z0-9._-]+/g, "<jwt-redacted>");
+
+/*
+ * ── MILO TRANSPORTS (2026-07-18) ────────────────────────────────────────────
+ * Every consumer of this module calls MILO through a transport exposing
+ *   call(method, path, { token, body, label, silent }) → { ms, status, ok, body }
+ * with error:true + status:0 on network failure — the exact shape apiCall has
+ * always returned, so engine/submit/scripts stay transport-blind.
+ *
+ *   node transport — plain fetch from the worker process. The fast path: no
+ *     Chromium, no login form; a cold check collapses to the MILO floor.
+ *   page transport — the original page.evaluate(fetch) inside a logged-in
+ *     Playwright page. Unchanged; the fallback if Cloudflare challenges again.
+ */
+const NODE_CALL_TIMEOUT_MS = 60_000; // hang-stop, not pace-setter (7/16 F1 lesson)
+
+/** Plain-Node MILO transport. No browser involved. Token never logged. */
+export function makeNodeMiloTransport({ apiBase = API_BASE, timeoutMs = NODE_CALL_TIMEOUT_MS } = {}) {
+  return {
+    __miloTransport: true,
+    kind: "node",
+    async call(method, path, { token, body, label, silent = false } = {}) {
+      const t0 = Date.now();
+      let res;
+      let text;
+      let result;
+      try {
+        res = await fetch(apiBase + path, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          ...(body != null ? { body: JSON.stringify(body) } : {}),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        text = await res.text();
+      } catch (e) {
+        // Same failure shape as the page transport: never throws on network
+        // death, returns { ok:false, status:0, error:true }. Message redacted.
+        result = {
+          ms: Date.now() - t0,
+          status: 0,
+          ok: false,
+          body: redact(String(e?.message ?? e)),
+          error: true,
+        };
+      }
+      if (!result) {
+        let json = null;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          /* non-JSON */
+        }
+        result = { ms: Date.now() - t0, status: res.status, ok: res.ok, body: json ?? text };
+      }
+      if (!silent) {
+        console.log(
+          `  ${label ?? `${method} ${path}`}: ${result.status} (${result.ms}ms)${result.ok ? "" : " ⚠️ not ok"}`,
+        );
+      }
+      return result;
+    },
+  };
+}
+
+/** Wrap a logged-in Playwright page as a transport (delegates to apiCall). */
+export function makePageMiloTransport(page) {
+  if (!page) throw new Error("makePageMiloTransport: page is required");
+  return {
+    __miloTransport: true,
+    kind: "page",
+    call: (method, path, opts = {}) => apiCall(page, method, path, opts),
+  };
+}
+
+/**
+ * Accepts { transport }, a bare transport, or { page } (legacy) and returns a
+ * transport — or null if the shape offers neither. Callers throw their own
+ * named error on null so messages stay attributable.
+ */
+export function resolveMiloTransport(sessionLike) {
+  if (sessionLike?.transport?.__miloTransport === true) return sessionLike.transport;
+  if (sessionLike?.__miloTransport === true) return sessionLike;
+  if (sessionLike?.page) return makePageMiloTransport(sessionLike.page);
+  return null;
+}
 
 /**
  * Call a MILO API endpoint from INSIDE the page via fetch (same-origin →
@@ -71,18 +166,23 @@ export async function apiCall(page, method, path, { token, body, label, silent =
 }
 
 /**
- * Capture an accessToken by re-POSTing /auth/login from the page. The response
- * body (which contains the token) is NEVER logged — only status/ms. Any error
- * thrown is redacted so the token can't leak via the message.
+ * Capture an accessToken by POSTing /auth/login. First arg is a Playwright
+ * page (legacy callers) OR a transport (2026-07-18). The response body (which
+ * contains the token) is NEVER logged — only status/ms. Any error thrown is
+ * redacted so the token can't leak via the message.
  */
-export async function loginViaApi(page, username, password, { silent = false } = {}) {
-  const r = await apiCall(page, "POST", "/auth/login", {
+export async function loginViaApi(pageOrTransport, username, password, { silent = false } = {}) {
+  const transport =
+    pageOrTransport?.__miloTransport === true
+      ? pageOrTransport
+      : makePageMiloTransport(pageOrTransport);
+  const r = await transport.call("POST", "/auth/login", {
     body: { username, password },
     label: "POST /auth/login (capture token)",
     silent,
   });
   if (!r.ok || !r.body?.accessToken) {
-    throw new Error(`In-page /auth/login failed (${r.status}): ${redact(JSON.stringify(r.body)).slice(0, 200)}`);
+    throw new Error(`/auth/login failed (${r.status}): ${redact(JSON.stringify(r.body)).slice(0, 200)}`);
   }
   return r.body.accessToken;
 }
@@ -96,34 +196,60 @@ function safeBody(r) {
  * Build + price + validate a cart via MILO's API. DRY-RUN: ends at validate +
  * priced-cart read; never submits.
  *
- * @param {object} session  logged-in browser session from loginToMilo (has .page).
+ * @param {object} session  logged-in browser session from loginToMilo (has
+ *   .page) OR { transport } from makeNodeMiloTransport (2026-07-18).
  * @param {Array<{code: string, quantity: number}>} cartItems
- * @param {{username: string, password: string}} creds
+ * @param {{username?: string, password?: string, preauth?: {token: string,
+ *   groupId: string|number, subscriptionId: string|number}}} creds — preauth
+ *   (from the node session cache) skips steps 1+2 entirely: no /auth/login,
+ *   no /account. Without preauth, username+password are required as before.
  * @returns {Promise<object>} parseMiloValidate result + engineTimings.
  */
-export async function buildAndValidateViaApi(session, cartItems, { username, password } = {}) {
-  if (!session?.page) throw new Error("buildAndValidateViaApi: session.page is required");
+export async function buildAndValidateViaApi(session, cartItems, { username, password, preauth } = {}) {
+  const transport = resolveMiloTransport(session);
+  if (!transport) throw new Error("buildAndValidateViaApi: session.page or session.transport is required");
   if (!Array.isArray(cartItems) || cartItems.length === 0) throw new Error("buildAndValidateViaApi: cartItems must be non-empty");
-  if (!username || !password) throw new Error("buildAndValidateViaApi: username + password are required");
+  const hasPreauth = Boolean(
+    preauth?.token &&
+      preauth.groupId != null && String(preauth.groupId).trim() !== "" &&
+      preauth.subscriptionId != null && String(preauth.subscriptionId).trim() !== "",
+  );
+  if (!hasPreauth && (!username || !password)) {
+    throw new Error("buildAndValidateViaApi: username + password are required (or a complete preauth)");
+  }
 
-  const page = session.page;
+  const mcall = (method, p, opts) => transport.call(method, p, opts);
   const perCallMs = [];
   const track = (r, label) => perCallMs.push({ label, ms: r.ms, status: r.status, ok: r.ok });
 
-  // Step 1: capture accessToken (re-POST /auth/login in-page). Token redacted.
-  const loginStart = Date.now();
-  const token = await loginViaApi(page, username, password);
-  const loginMs = Date.now() - loginStart;
-  console.log(`  accessToken captured (${token.length} chars, redacted: ${redact(token)})`);
+  // Steps 1+2: token + identity. With preauth (node session cache) both are
+  // already in hand — this kills the redundant /auth/login + /account pair
+  // the 2026-07-18 handoff flagged as the warm micro-win (~460ms).
+  let token;
+  let groupId;
+  let subscriptionId;
+  let loginMs = 0;
+  if (hasPreauth) {
+    token = preauth.token;
+    groupId = preauth.groupId;
+    subscriptionId = preauth.subscriptionId;
+    console.log("  preauth reused — /auth/login + /account skipped");
+  } else {
+    // Step 1: capture accessToken. Token redacted.
+    const loginStart = Date.now();
+    token = await loginViaApi(transport, username, password);
+    loginMs = Date.now() - loginStart;
+    console.log(`  accessToken captured (${token.length} chars, redacted: ${redact(token)})`);
 
-  // Step 2: account → groupId + subscriptionId.
-  const account = await apiCall(page, "GET", "/account", { token, label: "GET /account" });
-  track(account, "account");
-  if (!account.ok) throw new Error(`GET /account failed (${account.status}): ${safeBody(account)}`);
-  const group = account.body?.groups?.[0] ?? {};
-  const groupId = group.id;
-  const subscriptionId = group.subscriptionId;
-  if (!groupId || !subscriptionId) throw new Error(`Missing groupId/subscriptionId from /account: ${safeBody(account)}`);
+    // Step 2: account → groupId + subscriptionId.
+    const account = await mcall("GET", "/account", { token, label: "GET /account" });
+    track(account, "account");
+    if (!account.ok) throw new Error(`GET /account failed (${account.status}): ${safeBody(account)}`);
+    const group = account.body?.groups?.[0] ?? {};
+    groupId = group.id;
+    subscriptionId = group.subscriptionId;
+    if (!groupId || !subscriptionId) throw new Error(`Missing groupId/subscriptionId from /account: ${safeBody(account)}`);
+  }
 
   // Step 3: resolve each code → productId + distributor (productId kept STRING).
   // FAST PATH: if the caller pre-attached a cached MILO product (item.miloProduct,
@@ -147,7 +273,7 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
       cachedCount += 1;
       continue;
     }
-    const r = await apiCall(page, "POST", `/products/code/${item.code}`, {
+    const r = await mcall("POST", `/products/code/${item.code}`, {
       token,
       body: { include_pr: subscriptionId },
       label: `POST /products/code/${item.code}`,
@@ -161,7 +287,7 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
   }
 
   // Step 4: clear cart (prep; NOT a submit).
-  const clear = await apiCall(page, "DELETE", `/users/cart?groupid=${groupId}`, { token, label: "DELETE /users/cart (clear)" });
+  const clear = await mcall("DELETE", `/users/cart?groupid=${groupId}`, { token, label: "DELETE /users/cart (clear)" });
   track(clear, "clear");
   // FAIL CLOSED (2026-07-08, doctrine §14): a failed clear means the cart is
   // in an UNKNOWN state — adding onto it would price/validate a cart that
@@ -182,7 +308,7 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
     distributor: r.product.distributor,
     restrictedQuantity: 0,
   }));
-  const add = await apiCall(page, "POST", `/users/cart/items?groupid=${groupId}`, {
+  const add = await mcall("POST", `/users/cart/items?groupid=${groupId}`, {
     token,
     body: addPayload,
     label: "POST /users/cart/items (BULK ADD)",
@@ -212,16 +338,16 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
   const postAddStart = Date.now();
   const [inv, validate, ...deliveryResults] = await Promise.all([
     // Step 6: inventory check (stock).
-    apiCall(page, "PUT", `/inventory/check?groupid=${groupId}`, {
+    mcall("PUT", `/inventory/check?groupid=${groupId}`, {
       token,
       body: invPayload,
       label: "PUT /inventory/check (stock)",
     }),
     // Step 7: validate (rules).
-    apiCall(page, "GET", `/validate?licenseId=${subscriptionId}`, { token, label: "GET /validate (rules)" }),
+    mcall("GET", `/validate?licenseId=${subscriptionId}`, { token, label: "GET /validate (rules)" }),
     // Step 8: per-ADA delivery info → deliveryByRef + deliveriesArr (raw).
     ...DELIVERY_REFS.map((ref) =>
-      apiCall(page, "GET", `/distributor/delivery?groupId=${groupId}&referenceNumber=${ref}`, {
+      mcall("GET", `/distributor/delivery?groupId=${groupId}&referenceNumber=${ref}`, {
         token,
         label: `GET /distributor/delivery ${ref}`,
       }),
@@ -253,7 +379,7 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
   // CRITICAL: orderSummary only exists after this call; the parser reads
   // cart.taxes (cart.netTotal is garbage — do not use).
   const encoded = encodeURIComponent(JSON.stringify(deliveriesArr));
-  const taxes = await apiCall(page, "PUT", `/users/cart/taxes?groupid=${groupId}&deliveries=${encoded}`, {
+  const taxes = await mcall("PUT", `/users/cart/taxes?groupid=${groupId}&deliveries=${encoded}`, {
     token,
     body: addedItems,
     label: "PUT /users/cart/taxes (price)",
@@ -296,6 +422,8 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
       postAddWallMs, // wall-clock time of the parallel read batch (steps 6-8)
       cachedCount,
       liveResolveCount: cartItems.length - cachedCount,
+      preauthReused: hasPreauth, // true → steps 1+2 were skipped (node session cache)
+      transport: transport.kind ?? null,
     },
   };
 }
@@ -395,7 +523,8 @@ export async function submitCartViaApi(
   session,
   { token, groupId, pricedCart, deliveries, emails, allowLiveSubmission = false } = {},
 ) {
-  if (!session?.page) throw new Error("submitCartViaApi: session.page is required");
+  const transport = resolveMiloTransport(session);
+  if (!transport) throw new Error("submitCartViaApi: session.page or session.transport is required");
   if (!token) throw new Error("submitCartViaApi: token is required");
   if (groupId == null || String(groupId).trim() === "") {
     throw new Error("submitCartViaApi: groupId is required");
@@ -417,9 +546,9 @@ export async function submitCartViaApi(
     };
   }
 
-  // POINT OF NO RETURN. From the apiCall below, a failure is
+  // POINT OF NO RETURN. From the call below, a failure is
   // submitted_unconfirmed, never a retry (the caller enforces).
-  const res = await apiCall(session.page, "POST", `/users/cart/checkout?groupid=${encodeURIComponent(groupId)}`, {
+  const res = await transport.call("POST", `/users/cart/checkout?groupid=${encodeURIComponent(groupId)}`, {
     token,
     body: payload,
     label: "POST /users/cart/checkout (LIVE SUBMIT)",

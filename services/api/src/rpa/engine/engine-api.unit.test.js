@@ -269,3 +269,55 @@ describe("buildAndValidateViaApi (parallel post-add reads)", () => {
     expect(page.calls.filter((c) => c.url.includes("/products/code/"))).toHaveLength(1);
   });
 });
+
+/*
+ * ── 2026-07-18 additions: preauth (node session cache) + bare transport ──
+ * The engine gained a pluggable transport and an optional preauth that skips
+ * /auth/login + /account. These pin: preauth really skips both network calls,
+ * an incomplete preauth fails closed back to the creds requirement, and the
+ * whole pipeline runs identically over a { transport } with no page at all.
+ */
+describe("buildAndValidateViaApi (preauth + transport, 2026-07-18)", () => {
+  const PREAUTH = () => ({
+    token: "eyJmock.mock.mock",
+    groupId: accountFixture.groups[0].id,
+    subscriptionId: accountFixture.groups[0].subscriptionId,
+  });
+
+  it("PREAUTH: /auth/login and /account are NEVER called; output parity holds", async () => {
+    const page = makeMockPage();
+    const r = await buildAndValidateViaApi({ page }, cachedCartItems(), { preauth: PREAUTH() });
+    const { engineTimings, ...parsed } = r;
+    expect(parsed).toEqual(expectedParse());
+    expect(engineTimings.preauthReused).toBe(true);
+    expect(engineTimings.loginMs).toBe(0);
+    expect(page.calls.some((c) => c.url.includes("/auth/login"))).toBe(false);
+    expect(page.calls.some((c) => c.url.endsWith("/account"))).toBe(false);
+    expect(engineTimings.perCallMs.map((c) => c.label)).not.toContain("account");
+  });
+
+  it("FAIL CLOSED: incomplete preauth (missing subscriptionId) still requires creds", async () => {
+    const page = makeMockPage();
+    await expect(
+      buildAndValidateViaApi({ page }, cachedCartItems(), {
+        preauth: { token: "t", groupId: "g" },
+      }),
+    ).rejects.toThrow(/username \+ password are required/);
+    expect(page.calls).toHaveLength(0); // nothing fired before the guard
+  });
+
+  it("TRANSPORT: the full pipeline runs over a bare { transport } with no page", async () => {
+    const page = makeMockPage(); // reuse the router as the transport backend
+    const transport = {
+      __miloTransport: true,
+      kind: "node",
+      call: (method, path, opts = {}) =>
+        page.evaluate(null, { method, url: `https://mock${path}`, token: opts.token, body: opts.body }),
+    };
+    const r = await buildAndValidateViaApi({ transport }, cachedCartItems(), CREDS);
+    const { engineTimings, ...parsed } = r;
+    expect(parsed).toEqual(expectedParse());
+    expect(engineTimings.transport).toBe("node");
+    expect(engineTimings.preauthReused).toBe(false);
+  });
+});

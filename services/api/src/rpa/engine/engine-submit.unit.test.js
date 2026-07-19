@@ -146,3 +146,36 @@ describe("submitCartViaApi — the gate", () => {
     expect(r.status).toBe(500);
   });
 });
+
+describe("submitCartViaApi — node transport (2026-07-18)", () => {
+  it("runs over a bare { transport } with no page; the gate is enforced identically", async () => {
+    const call = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: { results: [{ confirmationNumber: "123456" }] },
+      ms: 2,
+    }));
+    const transport = { __miloTransport: true, kind: "node", call };
+
+    const dry = await submitCartViaApi(
+      { transport },
+      { token: "tok", groupId: "g1", pricedCart, deliveries },
+    );
+    expect(dry.mode).toBe("dry_run");
+    expect(dry.dispatched).toBe(false);
+    expect(call).not.toHaveBeenCalled();
+
+    const live = await submitCartViaApi(
+      { transport },
+      { token: "tok", groupId: "g1", pricedCart, deliveries, allowLiveSubmission: true },
+    );
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(live.mode).toBe("submit");
+    expect(live.dispatched).toBe(true);
+    expect(live.submitted).toBe(true);
+    expect(live.confirmationNumbers).toContain("123456");
+    const [method, path] = call.mock.calls[0];
+    expect(method).toBe("POST");
+    expect(path).toBe("/users/cart/checkout?groupid=g1");
+  });
+});
