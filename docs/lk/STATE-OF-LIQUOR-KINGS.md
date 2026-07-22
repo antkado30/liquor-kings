@@ -327,6 +327,14 @@ half the original list turned out to be ALIVE):**
 **Phase 3 — the order loop's endgame (the live queue):**
 10. THU 7/16 ORDER DAY: armed two-step run + HAR submit-endpoint capture.
 11. Engine submit from the capture → scan-to-submitted in seconds.
+    ✅ **2026-07-22: WORKER-WIRED behind `LK_SUBMIT_ENGINE=api`** (default
+    browser — inert until flipped). Node transport end to end: validate →
+    gates → one checkout POST → structured confirmations from GET
+    /users/orders (shape probed live; both 7/16 confirmation numbers
+    verified) → same persist path. Truth rule at worker level: dispatched
+    without confirmation = submitted_unconfirmed, never retried. Shadow +
+    go-live + rollback procedure in runbooks/order-submission-go-live.md.
+    First live fire: Thu 7/23 order (mandate 2/3).
 12. productId pre-map (the deferred speed win) → ~3s checks.
     ✅ **2026-07-18: NODE-DIRECT ENGINE built.** The probe proved MILO
     answers pure Node — no browser, no cf_clearance, token 30 min. Cold

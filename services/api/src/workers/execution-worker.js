@@ -13,13 +13,19 @@ import { navigateToProducts } from "../rpa/stages/navigate-to-products.js";
 import { addItemsToCart, clearMiloCart } from "../rpa/stages/add-items-to-cart.js";
 import { validateCartOnMilo } from "../rpa/stages/validate-cart.js";
 import { checkoutOnMilo, navigateToOrdersAndCapture } from "../rpa/stages/checkout.js";
-import { buildAndValidateViaApi } from "../rpa/engine/engine-api.js";
+import { buildAndValidateViaApi, submitCartViaApi } from "../rpa/engine/engine-api.js";
 import { attachMiloProductCache } from "../rpa/engine/attach-product-cache.js";
 import {
   getNodeMiloSession,
   invalidateNodeMiloSession,
   MiloNodeLoginError,
 } from "../rpa/engine/milo-node-session.js";
+import {
+  fetchMiloOrders,
+  normalizeMiloApiOrder,
+  selectOrdersForSubmit,
+  buildConfirmationMapFromOrders,
+} from "../rpa/engine/engine-orders.js";
 import {
   acquireSession,
   attachFreshSession,
@@ -708,6 +714,37 @@ export async function processOneMlccDryRun({ apiBaseUrl, workerId }) {
     runId: run.id,
     plan: planResult.plan,
   };
+}
+
+/*
+ * Duplicate-submit tripwire query (AUDIT #20, extracted 2026-07-22 so the
+ * node engine-submit branch and the browser Stage-5 path share ONE
+ * definition of "a recent ambiguous checkout death"). Failure types in the
+ * safe set are DEFINITIVE no-order outcomes; anything else that died at
+ * rpa_checkout inside the window might have placed an order.
+ */
+const SAFE_CHECKOUT_FAILURE_TYPES = new Set([
+  "MILO_STAGE5_ERROR_TOAST",
+  "MILO_STAGE5_SAFETY_GATE_VIOLATION",
+  "MLCC_CART_MISMATCH_BEFORE_SUBMIT",
+]);
+
+async function fetchAmbiguousCheckoutDeaths(workerSupabase, storeId, windowMinutes = 30) {
+  const cutoffIso = new Date(Date.now() - windowMinutes * 60_000).toISOString();
+  const { data, error } = await workerSupabase
+    .from("execution_runs")
+    .select("id, finished_at, progress_stage, failure_type")
+    .eq("store_id", storeId)
+    .eq("status", "failed")
+    .gte("finished_at", cutoffIso)
+    .eq("progress_stage", "rpa_checkout");
+  if (error) {
+    return { error: error.message, ambiguousDeaths: null };
+  }
+  const ambiguousDeaths = (data ?? []).filter(
+    (r) => !SAFE_CHECKOUT_FAILURE_TYPES.has(String(r.failure_type ?? "")),
+  );
+  return { error: null, ambiguousDeaths };
 }
 
 /**
@@ -1432,6 +1469,653 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       }
     }
     // ─── END NODE-DIRECT ENGINE (fallthrough = browser pipeline below) ────
+
+    /*
+     * ─── NODE ENGINE SUBMIT (2026-07-22 — the second half of the mission) ──
+     *
+     * Replaces browser Stage 5's minutes-long checkout crawl with ONE POST
+     * to /users/cart/checkout (contract: docs/lk/milo-checkout-endpoint.md,
+     * decompiled from MILO's own bundle) + a structured confirmations read
+     * from GET /users/orders (shape probed live 2026-07-22 — both 7/16
+     * confirmation numbers verified present, ADA number structured in
+     * distributor.referenceNumber).
+     *
+     * ARMING — nothing changes until BOTH are true:
+     *   - LK_SUBMIT_ENGINE=api  (NEW flag, default "browser" = this branch
+     *     is dead code until deliberately flipped)
+     *   - the existing triple gate (mode==="submit" + env allow + store
+     *     flag) for a LIVE fire; without it this branch runs the full
+     *     sequence as a dry-run SHADOW: validate + payload build + gate
+     *     refusal, no POST ever issued (submitCartViaApi enforces).
+     *
+     * TRUTH RULE (2026-07-16 P0-1), engine edition: dispatchedAt is stamped
+     * the moment the POST fires. Past that line NOTHING may finalize as
+     * "failed" or re-queue — confirmations found → succeeded; anything
+     * else (POST error, orders-read failure, crash) → submitted_unconfirmed,
+     * terminal, human verifies against MLCC email / MILO Orders page.
+     * Every pre-dispatch refusal (gates, tripwire, bad payload) is still an
+     * honest retryable failure — refusing is always safe before the POST.
+     *
+     * Fallbacks: node login blocked_or_down → LOUD fallthrough to the
+     * browser pipeline below (Stages 1-5, proven on 7/16). Kill switch:
+     * unset LK_SUBMIT_ENGINE (or =browser) — one secret, no deploy.
+     */
+    const submitEngineChoice = (process.env.LK_SUBMIT_ENGINE || "browser").toLowerCase();
+    if (
+      runType === "rpa_run" &&
+      orderEngine === "api" &&
+      miloTransportChoice === "node" &&
+      submitEngineChoice === "api"
+    ) {
+      const submitKeepalive = setInterval(() => {
+        void heartbeatRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          workerId,
+          progressStage: stage5Mode === "submit" ? "rpa_checkout" : "rpa_validate",
+          progressMessage:
+            stage5Mode === "submit"
+              ? "Placing your order with MLCC"
+              : "Confirming your cart with MLCC",
+        }).catch(() => {});
+      }, 15_000);
+      try {
+        await heartbeatRun({
+          apiBaseUrl,
+          runId: run.id,
+          storeId,
+          workerId,
+          progressStage: "rpa_validate",
+          progressMessage: "Confirming your cart with MLCC",
+        });
+
+        const engineItems = await attachProductCacheOrFallback(workerSupabase, normalizedItems);
+
+        // ── Auth (same classification contract as the validate branch) ──
+        let nodeSession = null;
+        const tNodeAuth = Date.now();
+        try {
+          nodeSession = await getNodeMiloSession({ storeId, username, password });
+        } catch (nodeLoginErr) {
+          const classification =
+            nodeLoginErr instanceof MiloNodeLoginError
+              ? nodeLoginErr.classification
+              : "blocked_or_down";
+          if (classification === "invalid_credentials") {
+            console.error(
+              `[node-submit] FAILED run ${run.id}: MILO rejected the stored credentials (status ${nodeLoginErr?.status ?? "?"})`,
+            );
+            captureRunFailure(nodeLoginErr, { stage: "engine_submit", runId: run.id, storeId });
+            const failure = summarizeFailure(
+              "MILO rejected the stored MLCC credentials (node login)",
+              "MILO_LOGIN_INVALID_CREDENTIALS",
+              { stage: "engine_submit", transport: "node", status: nodeLoginErr?.status ?? null },
+            );
+            await finalizeRun({
+              apiBaseUrl,
+              runId: run.id,
+              storeId,
+              status: "failed",
+              workerNotes: "Node engine submit: MILO login failed (invalid credentials)",
+              errorMessage: failure.message,
+              failureType: failure.failureType,
+              failureDetails: failure.details,
+              evidence: [
+                ...stepEvidence,
+                buildNoSubmitAttestationEvidence("engine_submit", "rpa_run"),
+              ],
+            });
+            return {
+              success: false,
+              claimed: true,
+              failed: true,
+              runId: run.id,
+              stage: "engine_submit",
+              error: "MILO_LOGIN_INVALID_CREDENTIALS",
+            };
+          }
+          console.warn(
+            `[node-submit] run ${run.id}: node transport blocked pre-engine ` +
+              `(status ${nodeLoginErr?.status ?? "?"}: ${nodeLoginErr?.message ?? nodeLoginErr}) — ` +
+              `FALLING BACK to the browser pipeline for this run (Stage 5 browser checkout).`,
+          );
+          stepEvidence.push(
+            buildWorkerStepEvidence(
+              "node_transport_fallback",
+              "Node-direct MILO transport failed before engine submit; using the browser pipeline for this run",
+              { classification, status: nodeLoginErr?.status ?? null },
+            ),
+          );
+        }
+
+        if (nodeSession) {
+          console.log(
+            `[timing] run ${run.id}: node auth ${Date.now() - tNodeAuth}ms ` +
+              `(fromCache=${nodeSession.fromCache}) · +${msSince()}ms from claim`,
+          );
+
+          // ── Fresh validate of the EXACT cart (boundary gate inside) ──
+          const tSubmitPhaseStart = Date.now();
+          let engineResult;
+          try {
+            engineResult = await buildAndValidateViaApi(
+              { transport: nodeSession.transport },
+              engineItems,
+              {
+                username,
+                password,
+                preauth: {
+                  token: nodeSession.token,
+                  groupId: nodeSession.groupId,
+                  subscriptionId: nodeSession.subscriptionId,
+                },
+                includeRaw: true,
+              },
+            );
+          } catch (engineError) {
+            invalidateNodeMiloSession(storeId, "engine_failure");
+            console.error(
+              `[node-submit] FAILED run ${run.id} (pre-dispatch validate): ${engineError?.code ?? "UNKNOWN"} — ${engineError?.message ?? "no message"}`,
+            );
+            captureRunFailure(engineError, { stage: "engine_submit", runId: run.id, storeId });
+            const failure = summarizeFailure(
+              engineError?.message ?? "Engine validate before submit failed",
+              engineError?.code ?? FAILURE_TYPE.UNKNOWN,
+              { stage: "engine_submit", transport: "node", phase: "pre_dispatch_validate" },
+            );
+            await finalizeRun({
+              apiBaseUrl,
+              runId: run.id,
+              storeId,
+              status: "failed",
+              workerNotes: "Node engine submit: pre-dispatch validate failed (nothing submitted)",
+              errorMessage: failure.message,
+              failureType: failure.failureType,
+              failureDetails: failure.details,
+              evidence: [
+                ...stepEvidence,
+                buildNoSubmitAttestationEvidence("engine_submit", "rpa_run"),
+              ],
+            });
+            return {
+              success: false,
+              claimed: true,
+              failed: true,
+              runId: run.id,
+              stage: "engine_submit",
+              error: engineError?.code ?? FAILURE_TYPE.UNKNOWN,
+            };
+          }
+
+          // ── Hard gate: MILO must bless the cart RIGHT NOW ──
+          if (engineResult.canCheckout !== true) {
+            const oosCount = Array.isArray(engineResult.outOfStockItems)
+              ? engineResult.outOfStockItems.length
+              : null;
+            await finalizeRun({
+              apiBaseUrl,
+              runId: run.id,
+              storeId,
+              status: "failed",
+              workerNotes: "Node engine submit refused: MILO did not bless the cart (canCheckout false) — nothing submitted",
+              errorMessage: `Refusing submit: MILO validate returned canCheckout=false (${oosCount ?? "?"} out-of-stock line(s))`,
+              failureType: "MILO_STAGE5_CART_NOT_CHECKOUTABLE",
+              failureDetails: {
+                stage: "engine_submit",
+                transport: "node",
+                can_checkout: engineResult.canCheckout ?? null,
+                out_of_stock_count: oosCount,
+              },
+              evidence: [
+                ...stepEvidence,
+                buildNoSubmitAttestationEvidence("engine_submit", "rpa_run"),
+              ],
+            });
+            return {
+              success: false,
+              claimed: true,
+              failed: true,
+              runId: run.id,
+              stage: "engine_submit",
+              error: "MILO_STAGE5_CART_NOT_CHECKOUTABLE",
+            };
+          }
+
+          // ── Duplicate-submit tripwire (same helper as the browser path) ──
+          if (allowOrderSubmission) {
+            const { error: tripErr, ambiguousDeaths } = await fetchAmbiguousCheckoutDeaths(
+              workerSupabase,
+              storeId,
+            );
+            if (tripErr || (ambiguousDeaths ?? []).length > 0) {
+              const refusalMsg = tripErr
+                ? `Could not check recent submit history before live submission: ${tripErr}`
+                : `Refusing live submit: ${ambiguousDeaths.length} submit attempt(s) for this store died at checkout within the last 30 minutes with an ambiguous outcome. Check MILO's order history — the order may already exist.`;
+              await finalizeRun({
+                apiBaseUrl,
+                runId: run.id,
+                storeId,
+                status: "failed",
+                workerNotes: "Node engine submit refused by duplicate-submit tripwire",
+                errorMessage: refusalMsg,
+                failureType: "MLCC_POSSIBLE_DUPLICATE_SUBMIT",
+                failureDetails: {
+                  stage: "engine_submit",
+                  tripwire_error: tripErr ?? null,
+                  ambiguous_runs: (ambiguousDeaths ?? []).map((r) => ({
+                    run_id: r.id,
+                    finished_at: r.finished_at,
+                    failure_type: r.failure_type,
+                  })),
+                  window_minutes: 30,
+                },
+                evidence: [
+                  ...stepEvidence,
+                  buildNoSubmitAttestationEvidence("engine_submit", "rpa_run"),
+                ],
+              });
+              return {
+                success: false,
+                claimed: true,
+                failed: true,
+                runId: run.id,
+                stage: "engine_submit",
+                error: "MLCC_POSSIBLE_DUPLICATE_SUBMIT",
+              };
+            }
+          }
+
+          // ── THE POST (or the gate-refused dry-run shadow) ──
+          await heartbeatRun({
+            apiBaseUrl,
+            runId: run.id,
+            storeId,
+            workerId,
+            progressStage: "rpa_checkout",
+            progressMessage:
+              stage5Mode === "submit" ? "Placing your order with MLCC" : "Practice checkout (no order will be placed)",
+          });
+          stepEvidence.push(
+            buildWorkerStepEvidence("rpa_checkout_started", "Engine submit started (node transport)", {
+              stage: 5,
+              mode: stage5Mode,
+              transport: "node",
+            }),
+          );
+
+          const dispatchedAtIso = new Date().toISOString();
+          let submitResult;
+          try {
+            submitResult = await submitCartViaApi(
+              { transport: nodeSession.transport },
+              {
+                token: nodeSession.token,
+                groupId: nodeSession.groupId,
+                pricedCart: engineResult.raw.pricedCart,
+                deliveries: engineResult.raw.deliveries,
+                allowLiveSubmission: allowOrderSubmission === true,
+              },
+            );
+          } catch (payloadError) {
+            // Thrown ONLY pre-dispatch (payload build fails closed before any
+            // network write) — safe, honest failure.
+            console.error(
+              `[node-submit] FAILED run ${run.id} (payload build, nothing dispatched): ${payloadError?.message ?? payloadError}`,
+            );
+            captureRunFailure(payloadError, { stage: "engine_submit", runId: run.id, storeId });
+            await finalizeRun({
+              apiBaseUrl,
+              runId: run.id,
+              storeId,
+              status: "failed",
+              workerNotes: "Node engine submit: checkout payload failed closed (nothing dispatched)",
+              errorMessage: String(payloadError?.message ?? payloadError),
+              failureType: "MLCC_SUBMIT_PAYLOAD_INVALID",
+              failureDetails: { stage: "engine_submit", transport: "node" },
+              evidence: [
+                ...stepEvidence,
+                buildNoSubmitAttestationEvidence("engine_submit", "rpa_run"),
+              ],
+            });
+            return {
+              success: false,
+              claimed: true,
+              failed: true,
+              runId: run.id,
+              stage: "engine_submit",
+              error: "MLCC_SUBMIT_PAYLOAD_INVALID",
+            };
+          }
+
+          // ── Dry-run shadow outcome: full rehearsal, no POST issued ──
+          if (submitResult.dispatched !== true) {
+            stepEvidence.push(
+              buildWorkerStepEvidence("rpa_checkout_complete", "Engine submit dry-run complete (no POST issued)", {
+                mode: "dry_run",
+                submitted: false,
+                transport: "node",
+                reason: submitResult.reason ?? null,
+              }),
+            );
+            await finalizeRun({
+              apiBaseUrl,
+              runId: run.id,
+              storeId,
+              status: "succeeded",
+              workerNotes: "RPA run completed in dry_run mode; cart prepared but NOT submitted",
+              evidence: [
+                ...stepEvidence,
+                buildEvidenceEntry({
+                  kind: "rpa_run_summary",
+                  stage: "rpa_complete",
+                  message: "Engine submit pipeline completed in dry_run mode (node transport)",
+                  attributes: {
+                    mode: "dry_run",
+                    submitted: false,
+                    transport: "node",
+                    dry_run_reason: submitResult.reason ?? null,
+                    engine_timings: engineResult.engineTimings ?? null,
+                    stage5_duration_ms: Date.now() - tSubmitPhaseStart,
+                  },
+                }),
+                buildNoSubmitAttestationEvidence("rpa_complete", "rpa_run"),
+              ],
+            });
+            console.log(
+              `[node-submit] run ${run.id} dry-run shadow complete — validate green, payload built, POST refused by gate (correct)`,
+            );
+            runSucceeded = true;
+            return {
+              success: true,
+              claimed: true,
+              runId: run.id,
+              mode: "dry_run",
+              submitted: false,
+              confirmationNumbers: null,
+              dryRunReason: submitResult.reason ?? null,
+              stage5DurationMs: Date.now() - tSubmitPhaseStart,
+              sessionReused: false,
+              transport: "node",
+            };
+          }
+
+          /*
+           * ── POINT OF NO RETURN CROSSED — dispatched === true ──
+           * Everything below runs inside its own catch-all: NO exception may
+           * escape into a "failed" finalize past this line (truth rule).
+           */
+          console.log(
+            `[node-submit] run ${run.id}: checkout POST dispatched at ${dispatchedAtIso} (status ${submitResult.status ?? "?"})`,
+          );
+          try {
+            const inlineNumbers = Array.isArray(submitResult.confirmationNumbers)
+              ? submitResult.confirmationNumbers
+              : [];
+
+            /*
+             * Confirmations from GET /users/orders. On 7/16 MILO stamped
+             * placedOn ~40s AFTER the submit click, so early polls will
+             * legitimately miss — the schedule stretches to ~2 min before
+             * settling at unconfirmed. expectedCount = ADAs that actually
+             * carry items in the validated cart.
+             */
+            const expectedCount = Math.max(
+              1,
+              (Array.isArray(engineResult.adaOrders) ? engineResult.adaOrders : []).filter(
+                (a) => (a?.items?.length ?? 0) > 0,
+              ).length || 1,
+            );
+            const POLL_DELAYS_MS = [3_000, 5_000, 8_000, 10_000, 12_000, 15_000, 15_000, 15_000, 15_000, 15_000];
+            let selected = [];
+            let lastOrdersStatus = null;
+            for (const delayMs of POLL_DELAYS_MS) {
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+              const ordersRes = await fetchMiloOrders(nodeSession.transport, {
+                token: nodeSession.token,
+                groupId: nodeSession.groupId,
+              });
+              lastOrdersStatus = ordersRes.status ?? null;
+              if (!ordersRes.ok || !Array.isArray(ordersRes.body)) continue;
+              const normalized = ordersRes.body
+                .map((o) => normalizeMiloApiOrder(o))
+                .filter(Boolean);
+              selected = selectOrdersForSubmit(normalized, {
+                dispatchedAtIso,
+                expectedCount,
+                licenseNumber: normalizedLicenseNumber,
+              });
+              if (selected.length >= expectedCount) break;
+            }
+
+            const confirmationMap = buildConfirmationMapFromOrders(selected);
+            const haveOrderConfirmations = selected.length > 0 && Object.keys(confirmationMap).length > 0;
+            const confirmed = haveOrderConfirmations || inlineNumbers.length > 0;
+
+            if (confirmed) {
+              const checkedOutLike = {
+                submitted: true,
+                mode: "submit",
+                confirmationNumbers: haveOrderConfirmations ? confirmationMap : {},
+                historyOrders: selected,
+                submittedTimestamp: selected[0]?.placedIso ?? dispatchedAtIso,
+              };
+              // Persist — same service, same best-effort law as the browser path.
+              try {
+                const persistResult = await persistMiloOrderConfirmations({
+                  supabase: workerSupabase,
+                  storeId,
+                  executionRunId: run.id,
+                  checkedOut: checkedOutLike,
+                  sessionAdaOrders: engineResult.adaOrders,
+                });
+                stepEvidence.push(
+                  buildWorkerStepEvidence(
+                    "milo_confirmations_persisted",
+                    persistResult.error
+                      ? `Confirmation persist completed with note: ${persistResult.error}`
+                      : `Persisted ${persistResult.persisted} confirmation row(s) to milo_order_confirmations`,
+                    {
+                      persisted: persistResult.persisted,
+                      skipped: persistResult.skipped,
+                      error: persistResult.error,
+                    },
+                  ),
+                );
+              } catch (persistErr) {
+                const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+                console.warn(`[node-submit] confirmation persist threw (continuing): ${msg}`);
+                stepEvidence.push(
+                  buildWorkerStepEvidence(
+                    "milo_confirmations_persist_failed",
+                    "Confirmation persist threw — run still succeeds, evidence has the raw data",
+                    { error: msg },
+                  ),
+                );
+              }
+
+              const partial = haveOrderConfirmations && selected.length < expectedCount;
+              if (partial) {
+                console.error(
+                  `[node-submit] run ${run.id}: PARTIAL confirmations — found ${selected.length}/${expectedCount} expected ADA order(s). Verify the missing ADA on MILO.`,
+                );
+              }
+              stepEvidence.push(
+                buildEvidenceEntry({
+                  kind: "submit_click_attestation",
+                  stage: "engine_submit",
+                  message: partial
+                    ? `Checkout POST dispatched and PARTIALLY confirmed (${selected.length}/${expectedCount} ADA orders found) — verify the remainder on MILO`
+                    : "Checkout POST dispatched and confirmed via /users/orders",
+                  attributes: {
+                    submit_clicked: true,
+                    submit_clicked_at: dispatchedAtIso,
+                    transport: "node",
+                    post_status: submitResult.status ?? null,
+                    confirmations_found: selected.length,
+                    confirmations_expected: expectedCount,
+                    inline_confirmation_numbers: inlineNumbers,
+                  },
+                }),
+              );
+              await finalizeRun({
+                apiBaseUrl,
+                runId: run.id,
+                storeId,
+                status: "succeeded",
+                workerNotes: "RPA run completed with live submission",
+                evidence: [
+                  ...stepEvidence,
+                  buildEvidenceEntry({
+                    kind: "rpa_run_summary",
+                    stage: "rpa_complete",
+                    message: "Engine submit completed with live submission (node transport)",
+                    attributes: {
+                      mode: "submit",
+                      submitted: true,
+                      confirmation_numbers: haveOrderConfirmations ? confirmationMap : inlineNumbers,
+                      history_orders: selected,
+                      stage5_duration_ms: Date.now() - tSubmitPhaseStart,
+                      transport: "node",
+                      partial_confirmations: partial,
+                      engine_timings: engineResult.engineTimings ?? null,
+                    },
+                  }),
+                ],
+              });
+              console.log(
+                `[node-submit] run ${run.id} finalized succeeded — confirmations: ${JSON.stringify(confirmationMap)}${inlineNumbers.length ? ` inline: ${inlineNumbers.join(",")}` : ""}`,
+              );
+              runSucceeded = true;
+              return {
+                success: true,
+                claimed: true,
+                runId: run.id,
+                mode: "submit",
+                submitted: true,
+                confirmationNumbers: haveOrderConfirmations ? confirmationMap : inlineNumbers,
+                dryRunReason: null,
+                stage5DurationMs: Date.now() - tSubmitPhaseStart,
+                sessionReused: false,
+                transport: "node",
+              };
+            }
+
+            // ── No confirmation captured → THE TRUTH RULE settles it ──
+            captureSubmittedUnconfirmed({
+              runId: run.id,
+              storeId,
+              submitClickedAt: dispatchedAtIso,
+              stage5ErrorCode: "ENGINE_SUBMIT_CONFIRMATION_PENDING",
+            });
+            console.error(
+              `[node-submit] UNCONFIRMED run ${run.id}: POST dispatched (status ${submitResult.status ?? "?"}); ` +
+                `no confirmation on /users/orders within the poll budget (last read status ${lastOrdersStatus ?? "?"}). ` +
+                `NOT failed, NOT retryable — verify MILO Orders / MLCC email.`,
+            );
+            await finalizeRun({
+              apiBaseUrl,
+              runId: run.id,
+              storeId,
+              status: "submitted_unconfirmed",
+              workerNotes:
+                "Engine submit POST dispatched; confirmation not captured before the poll budget ended. Verify MILO Orders page / MLCC email. Never auto-retried.",
+              errorMessage:
+                submitResult.submitted === false
+                  ? `checkout POST returned ${submitResult.status ?? "?"} and no order appeared on /users/orders yet`
+                  : undefined,
+              failureDetails: {
+                submit_clicked: true,
+                submit_clicked_at: dispatchedAtIso,
+                stage5_error_code: "ENGINE_SUBMIT_CONFIRMATION_PENDING",
+                post_status: submitResult.status ?? null,
+                last_orders_read_status: lastOrdersStatus,
+                transport: "node",
+              },
+              evidence: [
+                ...stepEvidence,
+                buildEvidenceEntry({
+                  kind: "submit_click_attestation",
+                  stage: "engine_submit",
+                  message:
+                    "Checkout POST DISPATCHED in submit mode; no confirmation captured from the POST response or /users/orders before the run ended",
+                  attributes: {
+                    submit_clicked: true,
+                    submit_clicked_at: dispatchedAtIso,
+                    transport: "node",
+                    post_status: submitResult.status ?? null,
+                    last_orders_read_status: lastOrdersStatus,
+                  },
+                }),
+              ],
+            });
+            return {
+              success: false,
+              claimed: true,
+              failed: false,
+              runId: run.id,
+              stage: "engine_submit",
+              submittedUnconfirmed: true,
+              transport: "node",
+            };
+          } catch (postDispatchError) {
+            // ANY unexpected error after dispatch resolves to unconfirmed —
+            // never a plain failure, never a retry (truth rule, worker half).
+            captureSubmittedUnconfirmed({
+              runId: run.id,
+              storeId,
+              submitClickedAt: dispatchedAtIso,
+              stage5ErrorCode: postDispatchError?.code ?? "ENGINE_SUBMIT_POST_DISPATCH_ERROR",
+            });
+            console.error(
+              `[node-submit] UNCONFIRMED run ${run.id} (post-dispatch error): ${postDispatchError?.message ?? postDispatchError} — settling as submitted_unconfirmed`,
+            );
+            await finalizeRun({
+              apiBaseUrl,
+              runId: run.id,
+              storeId,
+              status: "submitted_unconfirmed",
+              workerNotes:
+                "Engine submit POST dispatched; an error interrupted confirmation capture. Verify MILO Orders page / MLCC email. Never auto-retried.",
+              errorMessage: String(postDispatchError?.message ?? postDispatchError),
+              failureDetails: {
+                submit_clicked: true,
+                submit_clicked_at: dispatchedAtIso,
+                stage5_error_code: postDispatchError?.code ?? "ENGINE_SUBMIT_POST_DISPATCH_ERROR",
+                transport: "node",
+              },
+              evidence: [
+                ...stepEvidence,
+                buildEvidenceEntry({
+                  kind: "submit_click_attestation",
+                  stage: "engine_submit",
+                  message:
+                    "Checkout POST DISPATCHED in submit mode; confirmation capture was interrupted by an error before completing",
+                  attributes: {
+                    submit_clicked: true,
+                    submit_clicked_at: dispatchedAtIso,
+                    transport: "node",
+                    error_code: postDispatchError?.code ?? null,
+                  },
+                }),
+              ],
+            });
+            return {
+              success: false,
+              claimed: true,
+              failed: false,
+              runId: run.id,
+              stage: "engine_submit",
+              submittedUnconfirmed: true,
+              transport: "node",
+            };
+          }
+        }
+      } finally {
+        clearInterval(submitKeepalive);
+      }
+    }
+    // ─── END NODE ENGINE SUBMIT (fallthrough = browser pipeline below) ────
 
     // ─── Phase A reuse path ──────────────────────────────────────────
     // If persist is enabled AND we have a warm session for THIS store
@@ -2354,19 +3038,10 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       so only the failed-ambiguous window matters.
     */
     if (allowOrderSubmission) {
-      const SAFE_CHECKOUT_FAILURES = new Set([
-        "MILO_STAGE5_ERROR_TOAST",
-        "MILO_STAGE5_SAFETY_GATE_VIOLATION",
-        "MLCC_CART_MISMATCH_BEFORE_SUBMIT",
-      ]);
-      const tripwireCutoffIso = new Date(Date.now() - 30 * 60_000).toISOString();
-      const { data: recentFailed, error: tripwireErr } = await workerSupabase
-        .from("execution_runs")
-        .select("id, finished_at, progress_stage, failure_type")
-        .eq("store_id", storeId)
-        .eq("status", "failed")
-        .gte("finished_at", tripwireCutoffIso)
-        .eq("progress_stage", "rpa_checkout");
+      // Shared tripwire query (extracted 2026-07-22 — same helper the node
+      // engine-submit branch uses; behavior identical to the inline block).
+      const { error: tripwireErr, ambiguousDeaths: tripwireDeaths } =
+        await fetchAmbiguousCheckoutDeaths(workerSupabase, storeId);
       if (tripwireErr) {
         // Fail SAFE: if we cannot evaluate the tripwire, refuse the live
         // submit rather than risk a double order (doctrine: loud > wrong).
@@ -2376,9 +3051,9 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
           storeId,
           status: "failed",
           workerNotes: "Stage 5 refused: duplicate-submit tripwire could not be evaluated",
-          errorMessage: `Could not check recent submit history before live submission: ${tripwireErr.message}`,
+          errorMessage: `Could not check recent submit history before live submission: ${tripwireErr}`,
           failureType: "MLCC_POSSIBLE_DUPLICATE_SUBMIT",
-          failureDetails: { tripwire_error: tripwireErr.message },
+          failureDetails: { tripwire_error: tripwireErr },
           evidence: [
             ...stepEvidence,
             buildNoSubmitAttestationEvidence("stage5_dup_tripwire", "rpa_run"),
@@ -2393,9 +3068,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
           error: "MLCC_POSSIBLE_DUPLICATE_SUBMIT",
         };
       }
-      const ambiguousDeaths = (recentFailed ?? []).filter(
-        (r) => !SAFE_CHECKOUT_FAILURES.has(String(r.failure_type ?? "")),
-      );
+      const ambiguousDeaths = tripwireDeaths ?? [];
       if (ambiguousDeaths.length > 0) {
         await finalizeRun({
           apiBaseUrl,

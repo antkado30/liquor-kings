@@ -4,6 +4,17 @@
 MILO's own Angular bundle. Engine submit built behind the triple-gate;
 live arming pending one real order-day confirmation.
 
+**2026-07-22 UPDATE:** worker-wired behind `LK_SUBMIT_ENGINE=api` (default
+`browser`; see the go-live runbook's ENGINE SUBMIT section). Confirmation
+source upgraded from the orders-page DOM scrape to **`GET
+/users/orders?groupid=` — structured JSON, shape probed live on the worker**:
+`confirmationNumber`, `orderNumber`, `placedOn` (ISO), ADA number structured
+at `distributor.referenceNumber`, line items under `items[].product`, and
+at-placement money truth in `originalTotal` / `originalNetTotalAmt` (bare
+`total`/`netTotalAmt` drift when the ADA edits — `updatedByAda:true` observed
+on the real 7/16 order). Both 7/16 confirmations verified present via the
+probe. The `groupid` query param is REQUIRED (400 without).
+
 ## Why this document exists
 
 Order Day 2026-07-16 the RPA submit took **10+ minutes** (browser drives

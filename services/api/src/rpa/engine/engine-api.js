@@ -205,7 +205,7 @@ function safeBody(r) {
  *   no /account. Without preauth, username+password are required as before.
  * @returns {Promise<object>} parseMiloValidate result + engineTimings.
  */
-export async function buildAndValidateViaApi(session, cartItems, { username, password, preauth } = {}) {
+export async function buildAndValidateViaApi(session, cartItems, { username, password, preauth, includeRaw = false } = {}) {
   const transport = resolveMiloTransport(session);
   if (!transport) throw new Error("buildAndValidateViaApi: session.page or session.transport is required");
   if (!Array.isArray(cartItems) || cartItems.length === 0) throw new Error("buildAndValidateViaApi: cartItems must be non-empty");
@@ -415,6 +415,16 @@ export async function buildAndValidateViaApi(session, cartItems, { username, pas
   const totalApiMs = perCallMs.reduce((s, c) => s + c.ms, 0);
   return {
     ...result,
+    /*
+     * includeRaw (2026-07-22, engine submit): the checkout POST needs the
+     * PRICED cart (items[].product.id / quantity / available) and the raw
+     * deliveries array — exactly what MILO's own checkout() reads. Only
+     * attached when explicitly requested so the parser-parity contract
+     * (engine output === parseMiloValidate output) stays byte-stable for
+     * every existing consumer, and raw MILO payloads never leak into run
+     * evidence by accident. NEVER serialize `raw` into evidence/DB.
+     */
+    ...(includeRaw === true ? { raw: { pricedCart, deliveries: deliveriesArr } } : {}),
     engineTimings: {
       loginMs,
       perCallMs,

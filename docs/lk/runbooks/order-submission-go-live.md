@@ -41,3 +41,38 @@ Each gate is enforced independently: the API stamps `mode:"submit"` only if env(
 
 ## Note
 Keep the API and worker env in sync. If they diverge, the button may say "Place Order" while the worker dry-runs (or vice versa) — confusing, though never unsafe.
+
+---
+
+## ENGINE SUBMIT (2026-07-22) — the seconds-fast path, fifth switch
+
+Built behind `LK_SUBMIT_ENGINE` on the **worker** (default `browser` = the
+proven Stage-5 browser path, unchanged). Setting it to `api` routes armed
+submits through the node engine: fresh MILO validate → same gates + the
+duplicate-submit tripwire → ONE `POST /users/cart/checkout` → confirmations
+read from `GET /users/orders` (structured JSON, shape probed 2026-07-22) →
+same `milo_order_confirmations` rows. Truth rule enforced: a dispatched POST
+without captured confirmations finalizes `submitted_unconfirmed`, never
+retried.
+
+**Shadow first (any time, DISARMED):**
+```
+fly secrets set LK_SUBMIT_ENGINE=api -a liquor-kings-worker
+```
+Then run a practice Place from the app. Logs show `[node-submit] … dry-run
+shadow complete — validate green, payload built, POST refused by gate
+(correct)`. That is the full live path minus the POST.
+
+**Go-live (order day):** arm the four locks per this runbook as always. With
+`LK_SUBMIT_ENGINE=api` already set, the armed Place fires the engine submit —
+watch `fly logs -a liquor-kings-worker` for `checkout POST dispatched` then
+`finalized succeeded — confirmations: {...}`. Cross-check the numbers against
+the MLCC email exactly as before.
+
+**Rollback (instant, no deploy):**
+```
+fly secrets set LK_SUBMIT_ENGINE=browser -a liquor-kings-worker
+```
+Armed submits return to browser Stage 5. The engine also falls back to the
+browser pipeline BY ITSELF (loudly) if MILO/Cloudflare blocks the node
+transport at login.

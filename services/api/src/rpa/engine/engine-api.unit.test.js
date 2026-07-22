@@ -306,6 +306,18 @@ describe("buildAndValidateViaApi (preauth + transport, 2026-07-18)", () => {
     expect(page.calls).toHaveLength(0); // nothing fired before the guard
   });
 
+  it("INCLUDE RAW: returns priced cart + deliveries only when asked (engine-submit handoff)", async () => {
+    const page = makeMockPage();
+    const withRaw = await buildAndValidateViaApi({ page }, cachedCartItems(), {
+      ...CREDS,
+      includeRaw: true,
+    });
+    expect(withRaw.raw.pricedCart).toEqual(cartFixture);
+    expect(withRaw.raw.deliveries).toHaveLength(3);
+    const withoutRaw = await buildAndValidateViaApi({ page }, cachedCartItems(), CREDS);
+    expect(withoutRaw.raw).toBeUndefined(); // parity contract stays byte-stable by default
+  });
+
   it("TRANSPORT: the full pipeline runs over a bare { transport } with no page", async () => {
     const page = makeMockPage(); // reuse the router as the transport backend
     const transport = {
