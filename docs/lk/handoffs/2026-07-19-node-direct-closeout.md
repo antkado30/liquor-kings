@@ -1,5 +1,9 @@
 # Handoff — 2026-07-18 EOD (node-direct engine SHIPPED; next: engine submit)
 
+> **⚠️ SUPERSEDED 2026-07-22: engine submit is BUILT + deployed (tests
+> 632/0). Current truth + the Thu 7/23 order-day script live in
+> `2026-07-22-engine-submit-closeout.md`.**
+
 Paste this whole file into a new chat to pick up exactly where we left off.
 It supersedes `2026-07-19-BOOT-PROMPT.md` (that mission's first half is DONE —
 numbers below are the new truth). Phase 0 of that boot prompt (the 24-file
