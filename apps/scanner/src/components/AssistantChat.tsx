@@ -45,6 +45,19 @@ const STARTER_PROMPTS = [
   "What's the 9 liter rule?",
 ] as const;
 
+/**
+ * One-tap prompts that appear the moment photos are attached (Tony,
+ * 2026-07-23: "when someone adds photos lets add a couple of quick chats").
+ * These are the real occasions photos get sent: a Notes/handwritten order
+ * list, a shelf of bottles to price, stock questions, or review-only reads.
+ */
+const PHOTO_PROMPTS = [
+  "Add all of these to cart — no duplicates",
+  "Price-check these",
+  "Which of these are in stock at MLCC?",
+  "Read this list — don't add anything yet",
+] as const;
+
 function formatFileSize(bytes: number): string {
   if (bytes >= 1024 * 1024) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -533,6 +546,23 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
         <p className="banner banner-err assistant-composer__banner" role="alert">
           {imageError}
         </p>
+      ) : null}
+
+      {pendingImages.length > 0 && !isAsking ? (
+        <div className="assistant-photo-chips" role="list" aria-label="Quick actions for attached photos">
+          {PHOTO_PROMPTS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              className="assistant-suggestion assistant-suggestion--chip"
+              role="listitem"
+              onClick={() => submit(p)}
+              disabled={isAsking || imageBusy}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       ) : null}
 
       {pendingImages.length > 0 ? (

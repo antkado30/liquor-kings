@@ -142,6 +142,21 @@ its ceiling. His answers, as rules:
     their life. That is "the highlight of their week."
 25. **The trust-killers — NEVER (from §3 rule 12, restated because he named
     them himself):** fake "it's fixed"; walls of text; making him re-remember.
+26. **RINSE TONY — interrogate before building (Tony, 2026-07-23, permanent).**
+    When Tony green-lights a build or states a want, interrogate him until
+    the tacit knowledge is OUT: domain facts (what "double shot" physically
+    means at the register), intent boundaries, the quality bar, the failure
+    he's actually afraid of. He runs a real store — his head holds truth no
+    catalog or doc has. Batched, structured questions; never a one-drip
+    stream. A build that starts before the interrogation is a guess.
+27. **THE NO-DRIFT SYSTEM (Tony, 2026-07-23, permanent).** Nothing Tony
+    decides, wants, or teaches may exist only in chat scroll. The same turn
+    it happens: rules → RULEBOOK; wants → TONY-WANTS; evidence/corpora →
+    docs/lk (dated files); session state → the handoff at closeout. Claims
+    about system behavior come from reading code, never memory (rule 3).
+    Docs found stale against code get fixed in the same pass they're
+    caught. A queryable decisions ledger (DB-backed) is under design —
+    scope set by Tony's interrogation answers, not improvised.
 
 **The heart of it, in his words (7/5):**
 

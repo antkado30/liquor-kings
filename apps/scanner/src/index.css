@@ -1817,6 +1817,25 @@ select {
   margin-bottom: 0;
 }
 
+/* Photo quick-chips (2026-07-23): one-tap prompts shown while photos are
+   attached — horizontal scroll, same chip look as suggestions. */
+.assistant-photo-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 16px 0;
+  scrollbar-width: none;
+}
+
+.assistant-photo-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.assistant-suggestion--chip {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 /* Legacy aliases */
 .assistant-msg--loading {
   color: var(--text-muted);

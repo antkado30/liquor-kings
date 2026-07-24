@@ -23,6 +23,10 @@ export const FLAVOR_WORDS = [
   "caramel", "ginger", "mint", "peppermint", "clementine", "zombie", "hurricane",
   "limon", "cream", "apricot", "salted", "toasted", "spiced", "cake", "punch",
   "melon", "strawberry", "grapefruit", "tamarind", "berry",
+  // 2026-07-23 corpus additions — seasonal/line extensions that escaped the
+  // penalty and beat flagships on the length tiebreak (Skrewball EGGNOG over
+  // Peanut Butter, Carolans COLD BREW over Irish Cream):
+  "eggnog", "nog", "pumpkin", "smores", "horchata", "peanut",
   // Premium / limited editions — always step-ups, never a base bottle. (We do
   // NOT include "black"/"gold"/"collectors"/"edition": those can BE the regular
   // product for some brands, so penalizing them could hide a real base.)
@@ -45,6 +49,10 @@ export function sizeFromText(text) {
   if (/\b(fifth|1\/5|750\s*ml?|750)\b/.test(t)) return 750;
   if (/\b(liter|litre|1\s*l\b|1000\s*ml?|1000)\b/.test(t)) return 1000;
   if (/\b(pint|375\s*ml?|375)\b/.test(t)) return 375;
+  // "double shot" = the 100ml bottle — Tony's own register vocabulary,
+  // confirmed 2026-07-23 ("Tito's double shot x case" = Tito's 100ml by the
+  // case). Was unmapped and produced cognac nonsense.
+  if (/\b(double\s*shot|100\s*ml)\b/.test(t)) return 100;
   if (/\b(50\s*ml|mini|airplane)\b/.test(t)) return 50;
   if (/\b200\s*ml?\b/.test(t)) return 200;
   return null;
@@ -87,6 +95,36 @@ const GENERIC_WORDS = new Set([
 // standard bottle. Demoted so the plain product wins.
 const VARIANT_RE = /\b(\d+\s*(yr|year)s?|variety)\b/;
 
+/*
+ * FLAGSHIP ALIASES (Tony's law, 2026-07-23): a BARE brand on an order list
+ * means the flagship plain bottle — "Bacardi rum" is Superior, "Skrewball"
+ * is the Peanut Butter, "Carolans" is the Irish Cream, "Fireball" is the
+ * Cinnamon. Without this, the length tiebreak crowned seasonal
+ * line-extensions (SKREWBALL EGGNOG over the flagship) and the flagship
+ * itself sometimes ate a flavor penalty for containing its own name
+ * (CAROLANS IRISH CREAM). A query is "bare" when its only non-generic
+ * token IS the alias key — any extra distinctive word ("bacardi spiced")
+ * disables the alias. Injecting the flagship's own words into the terms
+ * also waives their flavor penalties naturally.
+ * In-code map for now; graduates to the per-store memory table with the
+ * no-drift build (a store's own usuals will refine flagship choice).
+ */
+export const FLAGSHIP_ALIASES = {
+  bacardi: ["bacardi", "superior"],
+  skrewball: ["skrewball", "peanut", "butter"],
+  carolans: ["carolans", "irish", "cream"],
+  fireball: ["fireball", "cinnamon"],
+};
+
+/** Bare-brand → flagship terms; anything more specific passes through. */
+export function applyFlagshipAlias(terms) {
+  const distinctive = (terms || []).filter((t) => !GENERIC_WORDS.has(t));
+  if (distinctive.length === 1 && FLAGSHIP_ALIASES[distinctive[0]]) {
+    return FLAGSHIP_ALIASES[distinctive[0]];
+  }
+  return terms;
+}
+
 // Penalty per DISTINCTIVE user term the candidate is MISSING. The brand words
 // matter most; a candidate missing one is probably a different product. Set
 // BELOW the flavor penalty (100) so an abbreviated standard ("J DANIELS",
@@ -107,7 +145,7 @@ const CONFLICT_CATS = ["vodka", "gin", "rum", "tequila", "brandy"];
  * DISTINCTIVE (non-generic) words — each one it's missing is penalized. Then
  * plain beats flavored/aged/variety, packaging preference, then brevity.
  */
-export function scoreCandidate(name, terms, prefer) {
+export function scoreCandidate(name, terms, prefer, extra = {}) {
   const lname = String(name || "").toLowerCase();
   const lterms = (terms || []).map((t) => String(t).toLowerCase());
 
@@ -145,6 +183,23 @@ export function scoreCandidate(name, terms, prefer) {
   if (prefer === "plastic" && !isPL) score += 30;
   if (prefer === "glass" && isPL) score += 30;
 
+  /*
+   * 2026-07-23 corpus penalties (both via the optional `extra` arg — the
+   * signature stays back-compatible for every existing caller/test):
+   *  - Combo/gift packs ("W/ 2 GLS", 50ml-rider sleeves) are never the
+   *    intent of a plain order line. Demoted below real bottles; they
+   *    survive as alternates.
+   *  - Proof-line variants (the SMIRNOFF 100 class): a bare proof number
+   *    the owner did NOT write is a step-up, not the flagship. Checked
+   *    against the RAW line text because tokenizeName strips "100" as a
+   *    size number, so the terms can't carry the waiver.
+   */
+  if (extra?.row?.is_combo === true) score += 45;
+  const proofMatch = lname.match(/\b(100|101|151|190)\b/);
+  if (proofMatch && !String(extra?.rawText || "").includes(proofMatch[1])) {
+    score += 25;
+  }
+
   // Category conflict: user named a distinct spirit category and the candidate
   // is a different one (McCormick Vodka vs McCormick Gin). Word-boundary so
   // "gin" doesn't match VIRGINIA/ORIGINAL; categories absent from the name
@@ -169,7 +224,7 @@ export function scoreCandidate(name, terms, prefer) {
 // a 12-pack of minis and a single mini share size+material but are different
 // orderable products; the AI's verify screen must say which one it matched.
 const SELECT_COLS =
-  "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price,container,pack_count";
+  "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price,container,pack_count,is_combo";
 
 /**
  * Resolve one parsed order line to MLCC candidates.
@@ -204,30 +259,55 @@ export function preciseTermSets(terms) {
 export function fallbackTermSets(terms) {
   const t = terms.slice(0, 6);
   const sets = [];
+  // Typo tolerance (2026-07-23, the "Glenfidich" whiff): the brand lead's
+  // 5-char prefix alone — %glenf% reaches GLENFIDDICH past the missing
+  // double-d. Wide pool, but the size filter, age-waiver scoring, and the
+  // review confidence flag keep it honest. FIRST so it outranks the
+  // brand-dropping sets that caused cross-brand junk.
+  if (t[0] && t[0].length >= 6) sets.push([t[0].slice(0, 5)]);
   if (t.length > 1) sets.push(t.slice(1)); // drop the brand lead entirely
   if (t.length > 1) sets.push([[...t].sort((a, b) => b.length - a.length)[0]]); // longest token
   return sets;
 }
 
 async function queryByTerms(supabase, terms) {
+  /*
+   * 2026-07-23 corpus fixes (audit-corpus-2026-07-23.mjs evidence):
+   *  - GENERIC category words are NOT ANDed into the SQL when a distinctive
+   *    term exists. "bacardi rum" used to REQUIRE %rum% in the candidate
+   *    name, which excluded BACARDI SUPERIOR entirely (no "RUM" in its
+   *    name) and left only Spiced/Punch in the pool; "three olives cherry
+   *    vodka" excluded THREE OLIVES CHERRY the same way and handed the
+   *    owner VEIL. Scoring still uses generics (category-conflict check) —
+   *    they just can't veto the pool anymore.
+   *  - Terms ≥6 chars match by PREFIX (first len-2 chars): MLCC truncates
+   *    words ("STOLI VANIL"), so %vanilla% missed it while %vanil% hits
+   *    both spellings. Slightly wider pools; scoring decides.
+   */
+  const distinctive = terms.filter((t) => !GENERIC_WORDS.has(String(t).toLowerCase()));
+  const queryTerms = distinctive.length > 0 ? distinctive : terms;
   let q = supabase.from("mlcc_items").select(SELECT_COLS);
-  for (const t of terms) {
+  for (const t of queryTerms) {
+    const ts = String(t);
+    const qt = ts.length >= 6 ? ts.slice(0, ts.length - 2) : ts;
     // Match the raw name OR the punct/space-free `name_searchable` column, so a
     // typed "titos" finds "TITO'S HANDMADE VODKA" and "rumchata" finds
     // "RUM CHATA" — apostrophes/spaces no longer break the match.
-    const stripped = String(t).replace(/[^a-z0-9]/gi, "");
+    const stripped = qt.replace(/[^a-z0-9]/gi, "");
     q = stripped
-      ? q.or(`name.ilike.%${t}%,name_searchable.ilike.%${stripped}%`)
-      : q.ilike("name", `%${t}%`);
+      ? q.or(`name.ilike.%${qt}%,name_searchable.ilike.%${stripped}%`)
+      : q.ilike("name", `%${qt}%`);
   }
   return q.limit(80);
 }
 
 export async function resolveOrderLine(supabase, line) {
+  // Explicit operator-authored terms pass through untouched; tokenized
+  // free text gets the bare-brand → flagship expansion (Tony's law).
   const baseTerms =
     Array.isArray(line.terms) && line.terms.length
       ? line.terms.map((t) => String(t).toLowerCase()).slice(0, 6)
-      : tokenizeName(line.name);
+      : applyFlagshipAlias(tokenizeName(line.name));
   if (baseTerms.length === 0) {
     return { best: null, alternates: [], exactHit: false, total: 0, terms: baseTerms, confidence: "none" };
   }
@@ -261,10 +341,24 @@ export async function resolveOrderLine(supabase, line) {
 
   // Score against the user's ORIGINAL terms so the flavor penalty reflects intent.
   const exact = line.sizeMl ? all.filter((c) => c.bottle_size_ml === line.sizeMl) : all;
+  /*
+   * SIZE HONESTY (2026-07-23, the Platinum 7X law): when the owner asked
+   * for a size and NO candidate exists at that size, the resolver may
+   * still surface the closest product — but it must SAY SO and can never
+   * wear a confident badge. Silently handing a 100ml where a 1750 was
+   * asked is a size lie, the exact class the 7/11 photo-truth mandate
+   * bans. sizeMismatch rides the return so the tool result, the model's
+   * words, and the card all tell the same truth.
+   */
+  const sizeMismatch = Boolean(line.sizeMl) && all.length > 0 && exact.length === 0;
   const pool = line.sizeMl && exact.length > 0 ? exact : all;
+  // rawText: the line as the human wrote it (proof-number waivers read it —
+  // "Smirnoff 100" typed deliberately must not demote SMIRNOFF 100).
+  const rawText = String(line.rawText ?? line.name ?? "").toLowerCase();
   pool.sort(
     (a, b) =>
-      scoreCandidate(a.name, baseTerms, line.prefer) - scoreCandidate(b.name, baseTerms, line.prefer) ||
+      scoreCandidate(a.name, baseTerms, line.prefer, { row: a, rawText }) -
+        scoreCandidate(b.name, baseTerms, line.prefer, { row: b, rawText }) ||
       a.name.localeCompare(b.name),
   );
 
@@ -272,8 +366,10 @@ export async function resolveOrderLine(supabase, line) {
   const exactHit = line.sizeMl ? exact.length > 0 : null;
   // Confidence: exactly one exact-size hit = high; multiple (ambiguous) or
   // no exact-size = review/medium so the UI flags it for the user's eye.
+  // A size mismatch is ALWAYS review — never a quiet substitute.
   let confidence = "review";
   if (ranked.length === 0) confidence = "none";
+  else if (sizeMismatch) confidence = "review";
   else if (exactHit && exact.length === 1) confidence = "high";
   else if (exactHit) confidence = "medium";
 
@@ -284,5 +380,7 @@ export async function resolveOrderLine(supabase, line) {
     total: all.length,
     terms: baseTerms,
     confidence,
+    sizeMismatch,
+    requestedSizeMl: line.sizeMl ?? null,
   };
 }

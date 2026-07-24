@@ -86,8 +86,14 @@ describe("fallbackTermSets (only used if precise finds nothing)", () => {
       ["daniels"],
     ]);
   });
-  it("a single term has no fallback", () => {
-    expect(fallbackTermSets(["belvedere"])).toEqual([]);
+  it("a single long term falls back to its own 5-char prefix ONLY (2026-07-23 typo tolerance)", () => {
+    // Changed 2026-07-23: was [] ("no fallback for single terms" — the intent
+    // was avoiding CROSS-BRAND noise). A prefix of the SAME brand is not
+    // cross-brand noise; it's what rescues a typo'd lone brand ("Glenfidich").
+    expect(fallbackTermSets(["belvedere"])).toEqual([["belve"]]);
+    // Short single terms still get no fallback — a prefix of a 5-char word
+    // would be pure noise.
+    expect(fallbackTermSets(["skyy"])).toEqual([]);
   });
 });
 
@@ -165,5 +171,139 @@ describe("scoreCandidate (lower = better)", () => {
     const glassWantsGlass = scoreCandidate("JIM BEAM", terms, "glass");
     const plWantsGlass = scoreCandidate("JIM BEAM PL", terms, "glass");
     expect(glassWantsGlass).toBeLessThan(plWantsGlass);
+  });
+});
+
+/*
+ * ── 2026-07-23 CORPUS PINS — Tony's real weekly list, live-card misses ──
+ * Every case below was a CONFIRMED wrong answer on order night (see
+ * docs/lk/assistant-resolver-corpus-2026-07-23.md). These pins make each
+ * one structurally impossible to regress.
+ */
+import { applyFlagshipAlias, FLAGSHIP_ALIASES, resolveOrderLine } from "../src/lib/resolve-order-lines.js";
+
+describe("sizeFromText — 2026-07-23 additions", () => {
+  it("maps 'double shot' to 100ml (Tony's register vocabulary)", () => {
+    expect(sizeFromText("Tito's double shot x case")).toBe(100);
+    expect(sizeFromText("double shot fireball")).toBe(100);
+    expect(sizeFromText("100 ml")).toBe(100);
+  });
+  it("does not confuse double shot with the 50ml mini", () => {
+    expect(sizeFromText("mini")).toBe(50);
+    expect(sizeFromText("50 ml")).toBe(50);
+  });
+});
+
+describe("applyFlagshipAlias — bare brand = flagship plain (Tony's law)", () => {
+  it("expands bare brands to their flagship terms", () => {
+    expect(applyFlagshipAlias(["bacardi", "rum"])).toEqual(["bacardi", "superior"]);
+    expect(applyFlagshipAlias(["skrewball"])).toEqual(["skrewball", "peanut", "butter"]);
+    expect(applyFlagshipAlias(["carolans"])).toEqual(["carolans", "irish", "cream"]);
+    expect(applyFlagshipAlias(["fireball"])).toEqual(["fireball", "cinnamon"]);
+  });
+  it("does NOT fire when the user asked for a specific variant", () => {
+    expect(applyFlagshipAlias(["bacardi", "spiced", "rum"])).toEqual(["bacardi", "spiced", "rum"]);
+    expect(applyFlagshipAlias(["fireball", "apple"])).toEqual(["fireball", "apple"]);
+  });
+  it("passes non-alias brands through untouched", () => {
+    expect(applyFlagshipAlias(["tito", "vodka"])).toEqual(["tito", "vodka"]);
+    expect(Object.keys(FLAGSHIP_ALIASES)).toContain("bacardi");
+  });
+});
+
+describe("fallbackTermSets — typo tolerance (the Glenfidich whiff)", () => {
+  it("leads with the brand's 5-char prefix so one dropped letter still lands", () => {
+    const sets = fallbackTermSets(["glenfidich", "18", "year"]);
+    expect(sets[0]).toEqual(["glenf"]);
+  });
+});
+
+describe("scoreCandidate — 2026-07-23 corpus pins", () => {
+  it("SKREWBALL: flagship Peanut Butter beats the Eggnog seasonal (was lost to the length tiebreak)", () => {
+    const terms = applyFlagshipAlias(["skrewball"]);
+    expect(scoreCandidate("SKREWBALL PEANUT BUTTER WHISKY", terms, null)).toBeLessThan(
+      scoreCandidate("SKREWBALL EGGNOG", terms, null),
+    );
+  });
+  it("CAROLANS: Irish Cream flagship beats Cold Brew, no self-inflicted cream penalty", () => {
+    const terms = applyFlagshipAlias(["carolans"]);
+    expect(scoreCandidate("CAROLANS IRISH CREAM LIQ (IRE)", terms, null)).toBeLessThan(
+      scoreCandidate("CAROLANS COLD BREW", terms, null),
+    );
+  });
+  it("FIREBALL: the real Fireball beats CATCH FIRE (cross-brand cinnamon)", () => {
+    const terms = applyFlagshipAlias(["fireball"]);
+    expect(scoreCandidate("FIREBALL CINNAMON PL", terms, null)).toBeLessThan(
+      scoreCandidate("CATCH FIRE CINNAMON WHISKY", terms, null),
+    );
+  });
+  it("BACARDI: Superior (flagship white) beats Spiced on a bare 'bacardi rum' line", () => {
+    const terms = applyFlagshipAlias(["bacardi", "rum"]);
+    expect(scoreCandidate("BACARDI SUPERIOR", terms, null)).toBeLessThan(
+      scoreCandidate("BACARDI SPICED RUM", terms, null),
+    );
+  });
+  it("SMIRNOFF 100 (proof line) is demoted unless the owner typed the proof", () => {
+    const terms = ["smirnoff"];
+    const plain = scoreCandidate("SMIRNOFF VODKA PL", terms, null, { rawText: "smirnoff half pint" });
+    const proof = scoreCandidate("SMIRNOFF 100", terms, null, { rawText: "smirnoff half pint" });
+    expect(plain).toBeLessThan(proof);
+    // Waiver: typing the proof number keeps it un-penalized.
+    const waived = scoreCandidate("SMIRNOFF 100", terms, null, { rawText: "smirnoff 100 half pint" });
+    expect(waived).toBeLessThan(proof);
+  });
+  it("combo/gift packs are demoted below the plain bottle", () => {
+    const terms = ["ketel", "one"];
+    const plain = scoreCandidate("KETEL ONE (HOL)", terms, null, { row: { is_combo: false } });
+    const combo = scoreCandidate("KETEL ONE W/2 COUPE GLS W/", terms, null, { row: { is_combo: true } });
+    expect(plain).toBeLessThan(combo);
+  });
+  it("stays back-compatible with the 3-arg call shape", () => {
+    expect(() => scoreCandidate("JIM BEAM", ["jim", "beam"], null)).not.toThrow();
+  });
+});
+
+describe("resolveOrderLine — SIZE HONESTY (the Platinum 7X law)", () => {
+  /** Minimal thenable fake supabase: every query returns the given rows. */
+  const fakeSupabase = (rows) => ({
+    from: () => ({
+      select: () => {
+        const builder = {
+          or: () => builder,
+          ilike: () => builder,
+          limit: () => Promise.resolve({ data: rows, error: null }),
+        };
+        return builder;
+      },
+    }),
+  });
+
+  it("a requested size with no candidate NEVER returns a confident different-size best", async () => {
+    const rows = [
+      { code: "6937", name: "PLATINUM 7X", bottle_size_ml: 100, is_combo: false },
+      { code: "2080", name: "PLATINUM 7X PL", bottle_size_ml: 750, is_combo: false },
+      { code: "2082", name: "PLATINUM 7X PL", bottle_size_ml: 1000, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), {
+      name: "Platinum 7x plastic",
+      sizeMl: 1750,
+      prefer: "plastic",
+    });
+    expect(r.sizeMismatch).toBe(true);
+    expect(r.requestedSizeMl).toBe(1750);
+    expect(r.confidence).toBe("review"); // never high/medium on a size substitute
+    expect(r.best).toBeTruthy(); // closest product still surfaces — honestly flagged
+  });
+
+  it("an exact single-size hit stays high confidence with no mismatch flag", async () => {
+    const rows = [{ code: "2081", name: "PLATINUM 7X PL", bottle_size_ml: 1750, is_combo: false }];
+    const r = await resolveOrderLine(fakeSupabase(rows), {
+      name: "Platinum 7x plastic",
+      sizeMl: 1750,
+      prefer: "plastic",
+    });
+    expect(r.sizeMismatch).toBe(false);
+    expect(r.confidence).toBe("high");
+    expect(r.best.code).toBe("2081");
   });
 });
