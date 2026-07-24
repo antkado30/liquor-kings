@@ -191,11 +191,11 @@ async function locateCheckoutButton(page) {
   return matched[0];
 }
 
-function buildDryRunReason(mode, allowOrderSubmission, envAllowSubmission) {
+function buildDryRunReason(mode, allowOrderSubmission, envKilled) {
   const failed = [];
   if (mode !== "submit") failed.push("mode must be 'submit'");
-  if (allowOrderSubmission !== true) failed.push("allowOrderSubmission must be true");
-  if (envAllowSubmission !== "yes") failed.push("LK_ALLOW_ORDER_SUBMISSION must equal 'yes'");
+  if (allowOrderSubmission !== true) failed.push("allowOrderSubmission must be true (store not enabled for real orders)");
+  if (envKilled === true) failed.push("LK_ALLOW_ORDER_SUBMISSION break-glass kill is engaged ('no')");
   return failed.join("; ");
 }
 
@@ -860,14 +860,18 @@ export async function checkoutOnMilo(session, options = {}) {
     });
 
     const requestedMode = options.mode === "submit" ? "submit" : "dry_run";
-    const envGateValue = process.env.LK_ALLOW_ORDER_SUBMISSION;
+    // 2026-07-23: env is now a break-glass KILL, not a required arm. Submit is
+    // allowed unless LK_ALLOW_ORDER_SUBMISSION === "no". The real gate is the
+    // upstream mode==="submit" (post-confirm) + allowOrderSubmission (store is
+    // a real-ordering store). See docs/lk/architecture/submit-arming-model.md.
+    const envKilled = process.env.LK_ALLOW_ORDER_SUBMISSION === "no";
     const liveSubmissionAllowed =
       requestedMode === "submit" &&
       options.allowOrderSubmission === true &&
-      envGateValue === "yes";
+      !envKilled;
 
     if (!liveSubmissionAllowed) {
-      const dryRunReason = buildDryRunReason(requestedMode, options.allowOrderSubmission, envGateValue);
+      const dryRunReason = buildDryRunReason(requestedMode, options.allowOrderSubmission, envKilled);
       await appendAction(outputDir, {
         stage: "stage5",
         mode: "dry_run",

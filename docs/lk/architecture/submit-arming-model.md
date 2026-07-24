@@ -56,16 +56,26 @@ with real steps, exactly Tony's ask.
 
 ## Sequencing (money path — prove before trust)
 
-- **Done 2026-07-23:** the fail-closed guard + test (the invariant floor).
-- **Build (careful, testable, safe to deploy):** drop env from the gate
-  logic; make the client Submit always-available with the confirm steps;
-  keep `stores.allow_order_submission` as the per-store real-ordering setting.
-  Safe to ship because the per-store flag (false until deliberately set) still
-  holds the line — nothing goes live on deploy.
-- **First real submit under the new model = SUPERVISED once** (rule 5 / rule
-  19 / prove-before-trust): watch the first real order place under the new
-  flow, `fly logs` open, confirm the numbers vs the MLCC email. After that,
-  it's just the product. No deadline pressure — next order day is a week out.
+- **Done 2026-07-23 (guard):** the fail-closed guard + test (the invariant floor).
+- **Done 2026-07-23 (env retired to break-glass):** every active gate site
+  now treats `LK_ALLOW_ORDER_SUBMISSION` as a KILL (only `"no"` blocks), not a
+  required arm. Sites converted: `resolve-run-mode.js`, `execution-run.service.js`,
+  `execution-worker.js` (stage5Mode), `checkout.js` (+ dry-run reason),
+  `home.routes.js` (armed state to client). `submitCartViaApi` inherits via
+  `allowLiveSubmission`. **Deploy is INERT:** `stores.allow_order_submission`
+  is false for Colony, so the app is unchanged (Check only) until a store is
+  deliberately enabled. Gate tests updated (`resolve-run-mode.unit.test.js`).
+- **To go live for a store (deliberate, one-time):** set
+  `stores.allow_order_submission = true` for that store. Then the app shows the
+  Place/Submit button with the confirm flow, phone-armable, no env/laptop per
+  order. (A phone-side Settings toggle to flip this is a future nicety; SQL/
+  admin sets it once today.)
+- **Still open (daylight + device):** optionally always-show Submit as a
+  "preview" button even for not-yet-enabled stores; the phone toggle for the
+  store flag; and — non-negotiable — the FIRST real submit under the new model
+  SUPERVISED once (rule 5 / 19 / prove-before-trust): watch it place, `fly
+  logs` open, numbers vs MLCC email. Then it's just the product. No deadline —
+  next order day is a week out.
 
 ## Non-negotiables carried forward
 

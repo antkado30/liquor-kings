@@ -728,13 +728,13 @@ export const createExecutionRunFromCart = async (
   //                          gates also align downstream.
   let metadata;
   if (mode === "submit") {
-    // DORMANT submit path (2026-06-26). The scanner still sends "rpa_run";
-    // nothing calls this yet. Real submission is triple-gated: this creation
-    // layer stamps mode="submit" ONLY when env + store are BOTH armed, else
-    // it downgrades to dry_run. The worker re-reads both gates at runtime and
-    // checkout.js gates a third time — defense in depth. env is OFF in prod,
-    // so every run dry-runs until P2 wires a client "submit" request.
-    const envArmed = process.env.LK_ALLOW_ORDER_SUBMISSION === "yes";
+    // Real submission gate at run creation (2026-07-23 arming model). This
+    // layer stamps mode="submit" ONLY when the store is a real-ordering store
+    // AND the break-glass kill is not engaged. The worker re-reads both at
+    // runtime and checkout.js / submitCartViaApi gate again — defense in depth.
+    // The store flag holds the line: until a store is deliberately enabled for
+    // real orders, every submit request downgrades to a harmless dry_run.
+    const envKilled = process.env.LK_ALLOW_ORDER_SUBMISSION === "no";
     let storeArmed = false;
     try {
       const { data: storeRow, error: storeErr } = await supabase
@@ -756,7 +756,7 @@ export const createExecutionRunFromCart = async (
     }
     const { mode: stampedMode, downgradedFromSubmit } = resolveFromCartRunMode({
       requestedMode: "submit",
-      envArmed,
+      envKilled,
       storeArmed,
     });
     metadata = {

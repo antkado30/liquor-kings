@@ -510,11 +510,12 @@ export function extractConfirmationNumbers(body) {
  * crawl. One POST to /users/cart/checkout with the priced cart the engine
  * already holds (docs/lk/milo-checkout-endpoint.md).
  *
- * TRIPLE-GATE, defense in depth: this function REFUSES to POST unless
- * `allowLiveSubmission === true`. The worker passes that only when
- * mode==="submit" AND LK_ALLOW_ORDER_SUBMISSION==="yes" AND
- * stores.allow_order_submission===true — the exact same three-key arming as
- * the browser path. Without it, returns a dry-run result (no network write).
+ * GATED, defense in depth: this function REFUSES to POST unless
+ * `allowLiveSubmission === true`. The worker passes that only when its
+ * stage5Mode==="submit" — i.e. mode==="submit" (post-confirm) AND
+ * stores.allow_order_submission===true AND the break-glass kill
+ * LK_ALLOW_ORDER_SUBMISSION!=="no" (2026-07-23 arming model). Without it,
+ * returns a dry-run result (no network write).
  *
  * TRUTH RULE (2026-07-16): the caller must treat any post-dispatch failure as
  * submitted_unconfirmed, never a retry. This function marks `dispatched:true`

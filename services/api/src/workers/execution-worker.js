@@ -1134,21 +1134,21 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     return result;
   };
 
-  // Stage 5 arming is defense-in-depth:
-  //   1. Caller must request mode='submit' in execution run metadata
-  //   2. Process env LK_ALLOW_ORDER_SUBMISSION must equal "yes"
-  //      (kill-switch — flipping back to "no" disables all submission)
-  //   3. The specific store row must have allow_order_submission=true
-  //      (per-store arming via migration 20260517210000)
+  // Stage 5 arming (2026-07-23 — env retired from a required arm to a
+  // break-glass KILL; see docs/lk/architecture/submit-arming-model.md):
+  //   1. Caller must request mode='submit' in execution run metadata (only
+  //      set after the deliberate check → place-gate → confirm flow).
+  //   2. The store row must have allow_order_submission=true ("this is a real
+  //      store, not a demo" — set once per store, the real gate).
+  //   3. env LK_ALLOW_ORDER_SUBMISSION must NOT equal "no" — it is now an
+  //      EMERGENCY BREAK-GLASS kill only. Absent/anything-but-"no" permits;
+  //      set it to "no" on Fly to instantly hard-disable ALL submission fleet-
+  //      wide with no deploy. You never need it to arm; you can hit it to kill.
   //
-  // ALL THREE must align or Stage 5 falls back to dry_run. This prevents
-  // accidental submission when:
-  //   - A dev forgets to flip the env back to no after testing
-  //   - A new store is onboarded but operator hasn't explicitly armed it
-  //   - A code path requests mode='submit' for a store the operator
-  //     never intended to enable real orders for
+  // Bias stays toward dry_run: any ambiguity (mode not submit, store not
+  // enabled, or the kill set) falls back to a harmless practice run.
   const requestedMode = payload?.metadata?.mode ?? "dry_run";
-  const envAllow = process.env.LK_ALLOW_ORDER_SUBMISSION === "yes";
+  const envKilled = process.env.LK_ALLOW_ORDER_SUBMISSION === "no";
 
   // Per-store check. If the column read fails (network error, RLS
   // surprise, table not migrated yet), default to disarmed — safest
@@ -1175,14 +1175,14 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
   }
 
   const stage5Mode =
-    requestedMode === "submit" && envAllow && storeAllowsSubmission
+    requestedMode === "submit" && !envKilled && storeAllowsSubmission
       ? "submit"
       : "dry_run";
   const allowOrderSubmission = stage5Mode === "submit";
 
   // Loud log line so the audit trail in Fly logs makes the decision obvious.
   console.log(
-    `[worker] Stage 5 arming: requestedMode=${requestedMode}, envAllow=${envAllow}, storeAllowsSubmission=${storeAllowsSubmission}, finalMode=${stage5Mode}`,
+    `[worker] Stage 5 arming: requestedMode=${requestedMode}, envKilled=${envKilled}, storeAllowsSubmission=${storeAllowsSubmission}, finalMode=${stage5Mode}`,
   );
   console.log(
     `[timing] run ${run.id}: claim→arming ${msSince()}ms (payload + credentials + readiness)`,

@@ -332,7 +332,7 @@ async function loadStoreVerificationMeta(supabase, storeId) {
      * about this for trust + liability reasons — no surprise dry-runs.
      */
     allow_order_submission:
-      process.env.LK_ALLOW_ORDER_SUBMISSION === "yes" &&
+      process.env.LK_ALLOW_ORDER_SUBMISSION !== "no" &&
       data.allow_order_submission === true,
   };
 }
