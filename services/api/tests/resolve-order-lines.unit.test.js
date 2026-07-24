@@ -363,4 +363,16 @@ describe("resolveOrderLine — SIZE HONESTY (the Platinum 7X law)", () => {
     expect(r.confidence).toBe("high");
     expect(r.best.code).toBe("2081");
   });
+
+  it("bare brand picks the plain 80-proof over the 100-proof step-up (Smirnoff)", async () => {
+    // Both real 200ml SKUs (probe-catalog-size.mjs, 2026-07-23). The proof
+    // penalty demotes SMIRNOFF 100; the 80 must win. (The live miss was the
+    // 80 being TRUNCATED from the pool by the old limit — see queryByTerms.)
+    const rows = [
+      { code: "85800", name: "SMIRNOFF 100", bottle_size_ml: 200, is_combo: false },
+      { code: "61102", name: "SMIRNOFF 80 PL", bottle_size_ml: 200, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "Smirnoff", sizeMl: 200 });
+    expect(r.best.code).toBe("61102");
+  });
 });

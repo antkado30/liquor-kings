@@ -121,7 +121,12 @@ tolerance), Carolans (→ IRISH CREAM), Bacardi ×3 (→ SUPERIOR), Platinum 7X
 1750 (→ real 1750, high conf — size-lie dead), Olive cherry (→ THREE OLIVES
 CHERRY — the exact bottle Tony meant), Jameson + Ketel One held correct.
 
-### SURGERY ROUND 2 (the deep bug — same audit exposed it)
+### SURGERY ROUND 2 (the deep bug — same audit exposed it) — ✅ CONFIRMED (deployed f80f8a6)
+
+Re-ran the audit after deploy: **Skrewball → SKREWBALL PEANUT BUTTER WHISKY**
+and **all three Stoli vanilla sizes → STOLICHNAYA VANIL**, against real prod.
+Both fixed. Corpus is now essentially fully correct (see the final scoreboard
+at the bottom).
 
 Two remaining misses shared ONE root cause: the brand-initial shortcut
 (built for "jack"→"J DANIELS") was matching the possessive **'s** in
@@ -152,3 +157,21 @@ the queried brand. Fixed 2026-07-23 (uncommitted at time of writing):
   than the audit shows. Verify on the phone, not the audit.
 - **Limoncello / Ocho / Casamigos** ambiguity (multiple real brands or
   aged expressions) is FAIR "needs your eye" — not a bug.
+
+### FINAL SCOREBOARD (2026-07-23, after 2 surgery rounds)
+
+Of the 37-line corpus: **~35 resolve to the correct bottle.** Remaining:
+- **Smirnoff half-pint → RESOLVED as a bug (round 3).** probe-catalog-size.mjs
+  proved BOTH SMIRNOFF 80 PL (61102, the red-label default Tony meant) and
+  SMIRNOFF 100 (85800) exist at 200ml. The 80 was being TRUNCATED out of the
+  candidate pool by the 80-row search cap before scoring — a broad brand's
+  own flagship crowded out by its flavor SKUs. Fixed: search limit 80 → 400
+  (`queryByTerms`); the proof penalty then correctly picks the 80. Pinned.
+- **2 audit-only artifacts:** the "double shot" lines look wrong in the
+  audit script (it passes the whole phrase as the name); the real assistant
+  tool splits name + raw and derives size=100ml, resolving them correctly —
+  verify on the phone, not the audit.
+
+The night's arc: the resolver went from ~half wrong on Tony's real weekly
+list to essentially correct, every fix pinned as a regression test
+(654 passing).

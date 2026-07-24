@@ -331,7 +331,17 @@ async function queryByTerms(supabase, terms) {
       ? q.or(`name.ilike.%${qt}%,name_searchable.ilike.%${stripped}%`)
       : q.ilike("name", `%${qt}%`);
   }
-  return q.limit(80);
+  /*
+   * 2026-07-23: limit raised 80 → 400. A broad brand with many flavor SKUs
+   * (Smirnoff, Absolut, New Amsterdam…) can exceed 80 rows, and the cap
+   * TRUNCATED the flagship out of the pool BEFORE scoring — "Smirnoff" half
+   * pint returned SMIRNOFF 100 at high confidence only because SMIRNOFF 80 PL
+   * (the real default, confirmed present via probe-catalog-size.mjs) got cut.
+   * The plain bottle can never be crowded out by its own flavors again.
+   * 400 comfortably exceeds any single brand's SKU count; scoring still picks
+   * the winner, so a bigger pool only helps.
+   */
+  return q.limit(400);
 }
 
 export async function resolveOrderLine(supabase, line) {
