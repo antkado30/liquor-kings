@@ -55,11 +55,45 @@ Casamigos→high, Limoncello→medium, Stoli vanilla→high via synonym+VANIL
 prefix, TITO'S apostrophe coverage). Harness now prints EVERY HIGH-WRONG
 (first run's 2 fell off a shared cap).
 
-## AFTER (fill in on re-run, same command/seed)
+## AFTER round 1 of the calibration (same seed) — honest verdict: mixed
 
-`node scripts/stress-catalog-2026-07-24.mjs 200` — paste new table here.
-Expect: HIGH-WRONG → 0.0% everywhere; med-wrong on typo drops (cross-brand
-→ review, i.e. honest-miss rises); full stays ~97/0.
+| phrasing | right | honest-miss | med-wrong | HIGH-WRONG | top-5 |
+|---|---|---|---|---|---|
+| full   | 97.0% | 0.0% | 3.0% | 0.0% | 100% |
+| short  | 44.7% | 9.2% | 44.1% | **2.0%** | 78.9% |
+| typo   | 57.1% | **39.0%** ↑ | **2.8%** ↓↓ | 1.1% | 71.2% |
+| nosize | 55.5% | 44.5% | 0.0% | 0.0% | 75.5% |
+| TOTAL  | 65.0% | 23.6% | **10.7%** ↓ | **0.7%** ↑ | 81.9% |
+
+Typo cross-brand junk collapsed (20.3→2.8) — but **HIGH-WRONG rose 2→5**:
+the margin rule widened green and let new wrongs in. All 5 captured
+(harness now prints every one). Root causes:
+1. **Brand-initial bug (2)**: the initial shortcut fired on stray single
+   letters ANYWHERE in a name — "camesi" "covered" by the "C&D" in
+   CODIGO … C&D; "damore" by "D' ARGENT". Real pattern is J DANIELS: the
+   initial is the name's FIRST token.
+2. **Harness mislabels (3)**: "evan williams" → EW Black Label (truth: EW
+   Cherry), "traverse city" → plain (truth: 3PK), "play like" → plain
+   (truth: 8-YR). That's the flagship law working — same brand family,
+   variant word never given.
+
+## Round 2 fixes (same day)
+
+- `firstNameToken()` — the brand-initial shortcut in BOTH scoring and
+  coverage (kept mirrored) counts ONLY when the initial is the name's first
+  token. Bonus: fixed the RANKING too — "the damore-25 yr" now picks THE
+  DALMORE itself (review badge). 3 new pins (camesi, damore, J DANIELS
+  regression guard).
+- Harness: new **brand-fair** bucket (best shares the truth's first two
+  name tokens) so flagship-law picks stop polluting the wrong columns —
+  med-wrong/HIGH-WRONG now show only true cross-brand errors.
+
+## AFTER round 2 (fill in on re-run, same command/seed)
+
+`node scripts/stress-catalog-2026-07-24.mjs 200` — paste table here.
+Expect: HIGH-WRONG ~0.0% (the 3 flagship cases move to brand-fair, the 2
+initial-bug cases to review/right); short's med-wrong roughly halves as
+intra-brand ambiguity (blanco/anejo, VS/VSOP) reclassifies to brand-fair.
 
 ## What this does NOT solve (known, next)
 

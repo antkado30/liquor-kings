@@ -166,6 +166,13 @@ const CONFLICT_CATS = ["vodka", "gin", "rum", "tequila", "brandy"];
 // names the material, not the product).
 const PACKAGING_WORDS = new Set(["plastic", "glass", "pl"]);
 
+/** First token of a lowercased product name ("j daniels…" → "j"). Used by the
+    brand-initial shortcut in BOTH scoring and coverage (kept mirrored). */
+function firstNameToken(lname) {
+  const m = String(lname).match(/[a-z0-9]+/);
+  return m ? m[0] : "";
+}
+
 /**
  * termCoverage — which of the user's DISTINCTIVE words the candidate name
  * actually contains (2026-07-24 confidence calibration). Presence semantics
@@ -189,7 +196,11 @@ export function termCoverage(name, terms) {
         lname.includes(t.slice(0, 5)) || strippedName.includes(st.slice(0, 5));
     }
     if (!present && idx === 0) {
-      present = new RegExp(`(?<!['’])\\b${t[0]}\\b`).test(lname);
+      // Brand-initial shortcut, FIRST TOKEN ONLY ("jack" → "J DANIELS").
+      // 2026-07-24 stress round 2: the anywhere-in-name version counted
+      // "camesi" as covered by the "C&D" in CODIGO … C&D and "damore" by the
+      // "D'" in HARDY NOCES D' ARGENT — wrong brands wearing green.
+      present = firstNameToken(lname) === t[0];
     }
     eligible.push(present);
   });
@@ -226,9 +237,13 @@ export function scoreCandidate(name, terms, prefer, extra = {}) {
       let present = lname.includes(t);
       if (!present && t.length >= 6 && lname.includes(t.slice(0, 5))) present = true;
       if (!present && idx === 0) {
-        // Negative lookbehind kills the possessive-'s match; \b keeps it to a
-        // standalone initial letter ("J DANIELS", not "JACKSON").
-        present = new RegExp(`(?<!['’])\\b${t[0]}\\b`).test(lname);
+        // Brand-initial shortcut, FIRST TOKEN ONLY (2026-07-24 stress round
+        // 2 tightening; was a whole-name \b-scan with a possessive-'s
+        // lookbehind). "jack" is covered by "J DANIELS…" because the name
+        // STARTS with the initial — but the "C&D" tail of CODIGO … C&D must
+        // not cover "camesi", nor "D' ARGENT" cover "damore". A brand
+        // initial is only ever the leading token of a product name.
+        present = firstNameToken(lname) === t[0];
       }
       if (!present) score += MISSING_TERM_PENALTY;
     }

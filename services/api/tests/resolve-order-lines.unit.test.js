@@ -445,4 +445,37 @@ describe("confidence calibration (2026-07-24)", () => {
     expect(cov.leadCovered).toBe(true);
     expect(cov.allCovered).toBe(true);
   });
+
+  // ── Round 2 (2026-07-24 stress re-run): the brand-initial shortcut fired on
+  // stray single letters ANYWHERE in a name — "C&D", "D' ARGENT" — putting
+  // wrong brands in green. Initial now counts ONLY as the name's FIRST token.
+  it("a stray 'C&D' tail can never satisfy the brand initial (camesi ↛ CODIGO … C&D)", async () => {
+    const rows = [
+      { code: "34199", name: "CODIGO 1530 GS ANEJO C&D", bottle_size_ml: 750, is_combo: false },
+      { code: "28829", name: "CARMESI ANEJO", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "camesi anejo", sizeMl: 750 });
+    expect(r.best.code).toBe("28829"); // right family wins the tiebreak now
+    expect(r.confidence).toBe("review"); // typo'd brand still honestly flagged
+  });
+
+  it("a mid-name \"D'\" can never satisfy the brand initial (damore ↛ HARDY NOCES D' ARGENT)", async () => {
+    const rows = [
+      { code: "16171", name: "HARDY NOCES D' ARGENT-25 YR", bottle_size_ml: 750, is_combo: false },
+      { code: "11088", name: "THE DALMORE-25 YR", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "the damore-25 yr", sizeMl: 750 });
+    expect(r.confidence).not.toBe("high"); // never green on a typo'd brand
+  });
+
+  it("the REAL brand-initial pattern still works (jack → J DANIELS, first token)", () => {
+    const cov = termCoverage("J DANIELS TENNESSEE HONEY PL", ["jack", "daniels", "honey"]);
+    expect(cov.leadCovered).toBe(true);
+    expect(cov.allCovered).toBe(true);
+    // …and scoring agrees: no missing-term penalty on the lead. (Score is
+    // never literally 0 — the name-length brevity tiebreak rides on top — so
+    // assert it's below a single MISSING_TERM_PENALTY.)
+    const s = scoreCandidate("j daniels tennessee honey pl", ["jack", "daniels", "honey"]);
+    expect(s).toBeLessThan(60);
+  });
 });

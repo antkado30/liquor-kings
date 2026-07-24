@@ -163,8 +163,20 @@ async function runOne(sku, v) {
     r.confidence === "review" || r.confidence === "none" || r.sizeMismatch === true;
   // For nosize, the right bottle at ANY size is a win (family counts as right).
   const right = exact || (v.kind === "nosize" && family) || family;
+  // BRAND-FAIR (round 2, 2026-07-24): same brand family, different variant —
+  // "evan williams" → EW BLACK LABEL when the sampled truth was EW CHERRY.
+  // The phrase never carried the variant word, so the plain/flagship pick is
+  // Tony's law working, not a miss. Separated so the wrong-columns show ONLY
+  // true cross-brand errors.
+  const fam = (s) =>
+    norm(s)
+      .split(" ")
+      .slice(0, 2)
+      .join(" ");
+  const brandFair = !right && best && fam(best.name) === fam(sku.name);
   let bucket;
   if (right) bucket = "right";
+  else if (brandFair) bucket = "brand_fair";
   else if (honest) bucket = "honest_miss";
   else if (r.confidence === "high") bucket = "HIGH_CONF_WRONG";
   else bucket = "medium_wrong";
@@ -205,6 +217,7 @@ const main = async () => {
         const s = (stats[v.kind] ??= {
           n: 0,
           right: 0,
+          brandFair: 0,
           honest: 0,
           medWrong: 0,
           highWrong: 0,
@@ -214,6 +227,7 @@ const main = async () => {
         s.n += 1;
         if (r.top5) s.top5 += 1;
         if (r.bucket === "right") s.right += 1;
+        else if (r.bucket === "brand_fair") s.brandFair += 1;
         else if (r.bucket === "honest_miss") s.honest += 1;
         else if (r.bucket === "medium_wrong") s.medWrong += 1;
         else if (r.bucket === "HIGH_CONF_WRONG") s.highWrong += 1;
@@ -231,18 +245,18 @@ const main = async () => {
 
   console.log(`\n===== SCORECARD (N=${N} seed=${SEED}, ${((Date.now() - t0) / 1000).toFixed(0)}s) =====`);
   const kinds = ["full", "short", "typo", "nosize"];
-  let T = { n: 0, right: 0, honest: 0, medWrong: 0, highWrong: 0, top5: 0, error: 0 };
+  let T = { n: 0, right: 0, brandFair: 0, honest: 0, medWrong: 0, highWrong: 0, top5: 0, error: 0 };
+  const row = (label, s) =>
+    console.log(
+      `${label.padEnd(7)} n=${String(s.n).padStart(4)}  right=${pct(s.right, s.n).padStart(6)}  brand-fair=${pct(s.brandFair, s.n).padStart(6)}  honest-miss=${pct(s.honest, s.n).padStart(6)}  med-wrong=${pct(s.medWrong, s.n).padStart(6)}  HIGH-WRONG=${pct(s.highWrong, s.n).padStart(6)}  truth-in-top5=${pct(s.top5, s.n).padStart(6)}${s.error ? `  errors=${s.error}` : ""}`,
+    );
   for (const k of kinds) {
     const s = stats[k];
     if (!s) continue;
     for (const key of Object.keys(T)) T[key] += s[key];
-    console.log(
-      `${k.padEnd(7)} n=${String(s.n).padStart(4)}  right=${pct(s.right, s.n).padStart(6)}  honest-miss=${pct(s.honest, s.n).padStart(6)}  med-wrong=${pct(s.medWrong, s.n).padStart(6)}  HIGH-WRONG=${pct(s.highWrong, s.n).padStart(6)}  truth-in-top5=${pct(s.top5, s.n).padStart(6)}${s.error ? `  errors=${s.error}` : ""}`,
-    );
+    row(k, s);
   }
-  console.log(
-    `${"TOTAL".padEnd(7)} n=${String(T.n).padStart(4)}  right=${pct(T.right, T.n).padStart(6)}  honest-miss=${pct(T.honest, T.n).padStart(6)}  med-wrong=${pct(T.medWrong, T.n).padStart(6)}  HIGH-WRONG=${pct(T.highWrong, T.n).padStart(6)}  truth-in-top5=${pct(T.top5, T.n).padStart(6)}${T.error ? `  errors=${T.error}` : ""}`,
-  );
+  row("TOTAL", T);
   console.log(
     `\nTHE metric: HIGH-WRONG must be ~0 (a wrong bottle wearing the green badge).` +
       `\nmed-wrong is flagged "check" in the UI — survivable, but drives alarm fatigue.` +
