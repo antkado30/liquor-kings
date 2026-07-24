@@ -112,3 +112,43 @@ and card must never disagree.
 - Next: run `scripts/audit-corpus-2026-07-23.mjs` (Tony's Mac, read-only)
   → paste output → scoring surgery with each miss pinned as a regression
   test.
+
+### SURGERY ROUND 1 (deployed b81f0f8) — audit verdict
+
+Ran the audit against the fixed resolver. **10 lines flipped correct:**
+Fireball (→ FIREBALL CINNAMON), Glenfidich (→ GLENFIDDICH-18 YR, typo
+tolerance), Carolans (→ IRISH CREAM), Bacardi ×3 (→ SUPERIOR), Platinum 7X
+1750 (→ real 1750, high conf — size-lie dead), Olive cherry (→ THREE OLIVES
+CHERRY — the exact bottle Tony meant), Jameson + Ketel One held correct.
+
+### SURGERY ROUND 2 (the deep bug — same audit exposed it)
+
+Two remaining misses shared ONE root cause: the brand-initial shortcut
+(built for "jack"→"J DANIELS") was matching the possessive **'s** in
+"RAM**'S**" and "BURNETT**'S**", so a wrong brand scored as if it contained
+the queried brand. Fixed 2026-07-23 (uncommitted at time of writing):
+- **Possessive-'s false match** — the initial heuristic now (a) applies ONLY
+  to the brand-lead term and (b) excludes a possessive 's via negative
+  lookbehind. Kills Skrewball→Ram's and Stoli→Burnett's.
+- **"peanut" removed from FLAVOR_WORDS** — it's Skrewball's flagship, not a
+  flavor; Carolans Peanut Butter stays demoted via the alias's missing-term
+  penalty instead.
+- **BRAND_SYNONYMS** — `stoli → stolichnaya` (Tony's store fact), applied
+  per-token so "Stoli vanilla" expands.
+- **VANIL truncation** — a 5-char prefix of a long distinctive term now
+  counts as present (MLCC truncates "VANILLA"→"VANIL", "REPOSADO"→"REPOS").
+- Pins added for all four.
+
+### KNOWN / DEFERRED after round 2
+
+- **Smirnoff half-pint → SMIRNOFF 100** (high conf): improved from the live
+  card's TITO'S (fully wrong brand) to the right brand. Whether 80-proof vs
+  100-proof is correct at 200ml is a **Tony-confirm** — the plain 80 may
+  simply not be stocked at half-pint. Not forced.
+- **"double shot" lines in the AUDIT SCRIPT look wrong** (cognac) — an
+  artifact: the audit passes the whole "Fireball double shot" as the name,
+  while the real assistant tool splits name="Fireball" + raw="…double shot"
+  and derives size=100ml from the raw. Production resolves these far better
+  than the audit shows. Verify on the phone, not the audit.
+- **Limoncello / Ocho / Casamigos** ambiguity (multiple real brands or
+  aged expressions) is FAIR "needs your eye" — not a bug.

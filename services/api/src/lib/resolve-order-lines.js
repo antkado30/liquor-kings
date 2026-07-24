@@ -25,8 +25,12 @@ export const FLAVOR_WORDS = [
   "melon", "strawberry", "grapefruit", "tamarind", "berry",
   // 2026-07-23 corpus additions — seasonal/line extensions that escaped the
   // penalty and beat flagships on the length tiebreak (Skrewball EGGNOG over
-  // Peanut Butter, Carolans COLD BREW over Irish Cream):
-  "eggnog", "nog", "pumpkin", "smores", "horchata", "peanut",
+  // Peanut Butter, Carolans COLD BREW over Irish Cream). NOTE: "peanut" is
+  // deliberately NOT here — Skrewball's FLAGSHIP is Peanut Butter Whiskey, so
+  // penalizing "peanut" would demote the real bottle. Carolans Peanut Butter
+  // is instead demoted by the flagship alias's irish+cream missing-term
+  // penalty, not by a flavor penalty.
+  "eggnog", "nog", "pumpkin", "smores", "horchata",
   // Premium / limited editions — always step-ups, never a base bottle. (We do
   // NOT include "black"/"gold"/"collectors"/"edition": those can BE the regular
   // product for some brands, so penalizing them could hide a real base.)
@@ -125,6 +129,23 @@ export function applyFlagshipAlias(terms) {
   return terms;
 }
 
+/*
+ * BRAND SYNONYMS (Tony's store facts, 2026-07-23): a token the owner types
+ * that maps to how MLCC actually spells the brand. Unlike flagship aliases,
+ * these apply PER-TOKEN regardless of the other words on the line, so
+ * "Stoli vanilla" and "Stoli razz" both expand the "stoli" token. Confirmed
+ * facts only — graduates to the per-store memory table with the no-drift build.
+ */
+export const BRAND_SYNONYMS = {
+  stoli: "stolichnaya",
+  stolis: "stolichnaya",
+};
+
+/** Expand any known brand-synonym tokens; leaves everything else untouched. */
+export function applyBrandSynonyms(terms) {
+  return (terms || []).map((t) => BRAND_SYNONYMS[String(t).toLowerCase()] ?? t);
+}
+
 // Penalty per DISTINCTIVE user term the candidate is MISSING. The brand words
 // matter most; a candidate missing one is probably a different product. Set
 // BELOW the flavor penalty (100) so an abbreviated standard ("J DANIELS",
@@ -150,17 +171,29 @@ export function scoreCandidate(name, terms, prefer, extra = {}) {
   const lterms = (terms || []).map((t) => String(t).toLowerCase());
 
   let score = 0;
-  // Missing distinctive-term penalty. A term counts as PRESENT if the name
-  // includes it OR includes its initial as a standalone letter — MLCC
-  // abbreviates first-name brand leads ("Jack" → "J DANIELS"), so "jack"
-  // shouldn't read as missing from "J DANIELS". A genuinely different brand
-  // ("CANADIAN LAKE" for a "kirkland" query) has neither → still penalized.
-  for (const t of lterms) {
+  // Missing distinctive-term penalty. A term counts as PRESENT if:
+  //   (a) the name includes it outright, OR
+  //   (b) the name includes its 5-char prefix (MLCC truncates long words —
+  //       "VANILLA" → "VANIL", "REPOSADO" → "REPOS"), OR
+  //   (c) ONLY for the brand-lead term: the name has the initial as a
+  //       standalone letter ("Jack" → "J DANIELS").
+  // (c) is restricted to the lead AND excludes a possessive-'s, because that
+  // was falsely satisfying a wrong brand: "skrewball" read as present in
+  // "RAM'S POINT" and "stolichnaya" in "BURNETT'S" via the trailing 's
+  // (2026-07-23 corpus — Skrewball→Ram's, Stoli→Burnett's). A genuinely
+  // different brand ("CANADIAN LAKE" for "kirkland") still has none → penalized.
+  lterms.forEach((t, idx) => {
     if (t.length >= 3 && !GENERIC_WORDS.has(t)) {
-      const present = lname.includes(t) || new RegExp(`\\b${t[0]}\\b`).test(lname);
+      let present = lname.includes(t);
+      if (!present && t.length >= 6 && lname.includes(t.slice(0, 5))) present = true;
+      if (!present && idx === 0) {
+        // Negative lookbehind kills the possessive-'s match; \b keeps it to a
+        // standalone initial letter ("J DANIELS", not "JACKSON").
+        present = new RegExp(`(?<!['’])\\b${t[0]}\\b`).test(lname);
+      }
       if (!present) score += MISSING_TERM_PENALTY;
     }
-  }
+  });
 
   let flavorPenalty = 0;
   for (const f of FLAVOR_WORDS) {
@@ -303,11 +336,13 @@ async function queryByTerms(supabase, terms) {
 
 export async function resolveOrderLine(supabase, line) {
   // Explicit operator-authored terms pass through untouched; tokenized
-  // free text gets the bare-brand → flagship expansion (Tony's law).
+  // free text gets brand-synonym expansion (stoli→stolichnaya) THEN the
+  // bare-brand → flagship expansion (Tony's law). Synonyms run first so a
+  // synonym'd bare brand can still hit a flagship alias if one exists.
   const baseTerms =
     Array.isArray(line.terms) && line.terms.length
-      ? line.terms.map((t) => String(t).toLowerCase()).slice(0, 6)
-      : applyFlagshipAlias(tokenizeName(line.name));
+      ? applyBrandSynonyms(line.terms.map((t) => String(t).toLowerCase()).slice(0, 6))
+      : applyFlagshipAlias(applyBrandSynonyms(tokenizeName(line.name)));
   if (baseTerms.length === 0) {
     return { best: null, alternates: [], exactHit: false, total: 0, terms: baseTerms, confidence: "none" };
   }

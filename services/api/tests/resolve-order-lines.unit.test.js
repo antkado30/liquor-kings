@@ -180,7 +180,13 @@ describe("scoreCandidate (lower = better)", () => {
  * docs/lk/assistant-resolver-corpus-2026-07-23.md). These pins make each
  * one structurally impossible to regress.
  */
-import { applyFlagshipAlias, FLAGSHIP_ALIASES, resolveOrderLine } from "../src/lib/resolve-order-lines.js";
+import {
+  applyFlagshipAlias,
+  applyBrandSynonyms,
+  FLAGSHIP_ALIASES,
+  BRAND_SYNONYMS,
+  resolveOrderLine,
+} from "../src/lib/resolve-order-lines.js";
 
 describe("sizeFromText — 2026-07-23 additions", () => {
   it("maps 'double shot' to 100ml (Tony's register vocabulary)", () => {
@@ -260,6 +266,57 @@ describe("scoreCandidate — 2026-07-23 corpus pins", () => {
   });
   it("stays back-compatible with the 3-arg call shape", () => {
     expect(() => scoreCandidate("JIM BEAM", ["jim", "beam"], null)).not.toThrow();
+  });
+});
+
+describe("scoreCandidate — possessive-'s false match (2026-07-23, the deep bug)", () => {
+  it("a possessive 's does NOT satisfy a different brand's initial", () => {
+    // "skrewball" must read as MISSING from "RAM'S POINT" — the trailing 's in
+    // ram's used to count as the brand initial and zero out the penalty.
+    const terms = ["skrewball", "peanut", "butter"];
+    const real = scoreCandidate("SKREWBALL PEANUT BUTTER WHISKY", terms, null);
+    const imposter = scoreCandidate("RAM'S POINT PEANUT BUTTER", terms, null);
+    expect(real).toBeLessThan(imposter);
+  });
+  it("Stoli(chnaya) is missing from BURNETT'S despite the possessive 's", () => {
+    const terms = ["stolichnaya", "vanilla"];
+    const real = scoreCandidate("STOLICHNAYA VANIL", terms, null);
+    const imposter = scoreCandidate("BURNETT'S VANILLA VODKA", terms, null);
+    expect(real).toBeLessThan(imposter);
+  });
+  it("still matches a real brand-lead abbreviation (jack → J DANIELS)", () => {
+    const terms = ["jack", "daniels"];
+    // J DANIELS: 'jack' present via the standalone 'J' initial (not possessive).
+    const abbrev = scoreCandidate("J DANIELS TENNESSEE WHISKEY", terms, null);
+    const wrong = scoreCandidate("GORDONS LONDON DRY", terms, null);
+    expect(abbrev).toBeLessThan(wrong);
+  });
+  it("VANIL truncation: a 5-char prefix of a long term counts as present", () => {
+    // MLCC truncates 'VANILLA' -> 'VANIL'; the term must not read as missing.
+    const withTrunc = scoreCandidate("STOLICHNAYA VANIL", ["stolichnaya", "vanilla"], null);
+    const missingIt = scoreCandidate("STOLICHNAYA GARBAGE", ["stolichnaya", "vanilla"], null);
+    expect(withTrunc).toBeLessThan(missingIt);
+  });
+});
+
+describe("applyBrandSynonyms — store-fact brand spelling (Tony, 2026-07-23)", () => {
+  it("expands stoli → stolichnaya per-token, regardless of other words", () => {
+    expect(applyBrandSynonyms(["stoli", "vanilla"])).toEqual(["stolichnaya", "vanilla"]);
+    expect(applyBrandSynonyms(["stoli"])).toEqual(["stolichnaya"]);
+    expect(BRAND_SYNONYMS.stoli).toBe("stolichnaya");
+  });
+  it("leaves unknown tokens untouched", () => {
+    expect(applyBrandSynonyms(["tito", "vodka"])).toEqual(["tito", "vodka"]);
+  });
+});
+
+describe("scoreCandidate — Skrewball flagship after removing 'peanut' from flavors", () => {
+  it("Skrewball Peanut Butter (the flagship) is NOT flavor-penalized", () => {
+    // 'peanut' must not be a flavor word — it's Skrewball's core product.
+    const terms = ["skrewball", "peanut", "butter"];
+    const flagship = scoreCandidate("SKREWBALL PEANUT BUTTER WHISKY", terms, null);
+    const eggnog = scoreCandidate("SKREWBALL EGGNOG", terms, null);
+    expect(flagship).toBeLessThan(eggnog);
   });
 });
 
