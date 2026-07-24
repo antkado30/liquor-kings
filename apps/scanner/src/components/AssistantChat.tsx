@@ -16,7 +16,13 @@ type Message = {
   id: number;
   role: "user" | "assistant";
   text: string;
-  imagePreview?: string;
+  /**
+   * ALL attached photos (2026-07-23). Was a single `imagePreview` holding
+   * only images[0] — the API sent every photo but the bubble showed ONE,
+   * so a multi-photo send looked like the app dropped the rest. The bubble
+   * must show exactly what was sent (doctrine: the app never lies).
+   */
+  imagePreviews?: string[];
   /** Bottles the assistant resolved → renders an inline Add-to-cart card. */
   resolvedOrder?: ResolvedOrderLine[];
 };
@@ -376,7 +382,7 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
           id: nextIdRef.current++,
           role: "user",
           text: displayText,
-          ...(images.length > 0 ? { imagePreview: images[0] } : {}),
+          ...(images.length > 0 ? { imagePreviews: images } : {}),
         },
       ]);
     }
@@ -457,12 +463,17 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
           messages.map((m) => (
             <div key={m.id} className={`assistant-msg assistant-msg--${m.role}`}>
               <div className="assistant-msg__bubble">
-                {m.imagePreview ? (
-                  <img
-                    src={m.imagePreview}
-                    alt=""
-                    className="assistant-msg-image"
-                  />
+                {m.imagePreviews && m.imagePreviews.length > 0 ? (
+                  <div className="assistant-msg-images">
+                    {m.imagePreviews.map((src, idx) => (
+                      <img
+                        key={idx}
+                        src={src}
+                        alt=""
+                        className="assistant-msg-image"
+                      />
+                    ))}
+                  </div>
                 ) : null}
                 {m.role === "assistant" ? (
                   <AssistantMarkdown text={m.text} />

@@ -1802,6 +1802,21 @@ select {
   border-color: rgba(255, 255, 255, 0.25);
 }
 
+/* Multi-photo bubble strip (2026-07-23): every attached photo renders —
+   the bubble must show exactly what was sent. */
+.assistant-msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.assistant-msg-images .assistant-msg-image {
+  max-width: 120px;
+  max-height: 120px;
+  margin-bottom: 0;
+}
+
 /* Legacy aliases */
 .assistant-msg--loading {
   color: var(--text-muted);

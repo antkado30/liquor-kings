@@ -47,7 +47,20 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
 // Safety cap on the tool-use loop so a misbehaving model can't spin forever.
 const MAX_TOOL_ITERATIONS = 8;
-const MAX_TOKENS = 1024;
+/*
+ * Output-token budget (2026-07-23, THE GHOST FIX). 1024 was the root cause of
+ * the worst assistant bug we've shipped: on a big "add all of these" list the
+ * model starts a huge resolve_bottles tool call, gets GUILLOTINED at
+ * max_tokens mid-call, and the old loop treated the decapitated reply as a
+ * finished answer — shipping "I'll resolve all of these — give me a second!"
+ * with the tool call silently discarded. The assistant PROMISED work and
+ * never did it (caught live 2026-07-23 on Tony's real weekly list).
+ * 4096 fits a ~150-line resolve call; the loop below also ESCALATES once to
+ * MAX_TOKENS_RETRY and, if even that truncates, answers honestly instead of
+ * shipping a cut-off turn. A truncated turn is NEVER a final answer.
+ */
+const MAX_TOKENS = 4096;
+const MAX_TOKENS_RETRY = 8192;
 
 const SYSTEM_PROMPT = `You are the Liquor Kings assistant — a knowledgeable liquor expert AND an in-app helper for the owner or manager of a Michigan liquor store.
 
@@ -107,6 +120,8 @@ HOW THE OWNER USES LIQUOR KINGS (so you can help them use the app — when someo
 - Check Order: tap once and Liquor Kings checks the cart against MLCC live (real-time stock + all the rules), IN THE BACKGROUND. The operator does NOT wait or watch — a status pill shows progress on every screen and a result sheet shows in-stock / out-of-stock / real totals when it's done; they can keep scanning or leave the screen meanwhile. A live MLCC check can take a minute or two (MLCC's speed, not the app's), but because it's non-blocking nobody sits on a spinner. Whether it places a real order or previews it depends on whether live ordering is enabled for the store — the confirm screen states it before they commit.
 
 ADDING TO CART: when the user names bottles to order or add, just call resolve_bottles — the app renders an inline card from your results with an "Add to cart" button the owner taps. You don't need to send them to "Paste an order" for this; resolve cleanly and the card handles it.
+
+NEVER PROMISE FUTURE WORK — THE MOST IMPORTANT BEHAVIORAL RULE: you cannot do anything after your reply ends. There is no "give me a second", no "I'll resolve these now", no "working on it" — announcing work you intend to do is a LIE to the owner, because nothing happens after your turn. Either make the tool call IN THIS TURN, or state plainly what you can and cannot do. Big lists are not an exception: call resolve_bottles with every line you extracted (it handles up to 150 items in one call) in this same turn. If a list genuinely exceeds what you can emit, say exactly how many lines you CAN handle and tell the owner to send the rest as a second message — an honest limit beats a fake promise, every time.
 
 FOLLOW-UP ORDER EDITS: when the user adjusts an order you already resolved in this conversation ("make that 6", "add 3 more Tito's", "drop the Svedka", "actually 2 cases of the Jack"), treat it as an edit to the RUNNING order. Re-call resolve_bottles with the COMPLETE updated order — every item at its FINAL quantity after applying the change, not just the changed item — so the new card shows the full current order. (The card sets quantities, so always emit the full final order.) Then confirm the change in one short sentence.
 
@@ -181,7 +196,7 @@ const TOOLS = [
   {
     name: "resolve_bottles",
     description:
-      "Find the correct MLCC code for one or many specific bottles the user named. Pass the items you parsed from their message. Returns the best-match code per item + alternates + a confidence flag, in ONE call. ALWAYS prefer this over query_catalog when the user names specific bottles, pastes an order list, or asks for codes — it handles MLCC's abbreviated names (e.g. 'Jack Daniel's' is stored as 'J DANIELS', 'Seagram's 7' as 'SEAGRAM'S 7') and picks the plain bottle over flavored variants, so it won't falsely miss a standard the way a raw name search does. If a result's confidence is 'review' or 'none', tell the user and show the alternates rather than guessing.",
+      "Find the correct MLCC code for one or many specific bottles the user named. Pass the items you parsed from their message — up to 150 in ONE call (a whole weekly order or a photographed list fits in a single call; never split a list you can see in full, and never announce that you will resolve items without calling this tool in the same turn). Returns the best-match code per item + alternates + a confidence flag. ALWAYS prefer this over query_catalog when the user names specific bottles, pastes an order list, or asks for codes — it handles MLCC's abbreviated names (e.g. 'Jack Daniel's' is stored as 'J DANIELS', 'Seagram's 7' as 'SEAGRAM'S 7') and picks the plain bottle over flavored variants, so it won't falsely miss a standard the way a raw name search does. If a result's confidence is 'review' or 'none', tell the user and show the alternates rather than guessing. If the response says truncated, you MUST relay exactly how many items were not processed.",
     input_schema: {
       type: "object",
       properties: {
@@ -644,7 +659,17 @@ async function toolValidateCart(input, { supabase }) {
  * whenever the user names specific bottles or asks for codes.
  */
 async function toolResolveBottles(input, { supabase }) {
-  const items = Array.isArray(input.items) ? input.items.slice(0, 60) : [];
+  /*
+   * 2026-07-23: cap raised 60 → 150 (a real weekly order photographed from
+   * Notes ran ~45 lines; 60 left no headroom and TRUNCATED SILENTLY — half
+   * of a big list just vanished with no trace). If the model somehow sends
+   * more than 150, the response now says so LOUDLY so the model must relay
+   * it — nothing is ever dropped without a word (doctrine: never silent).
+   */
+  const MAX_RESOLVE_ITEMS = 150;
+  const allItems = Array.isArray(input.items) ? input.items : [];
+  const items = allItems.slice(0, MAX_RESOLVE_ITEMS);
+  const droppedCount = allItems.length - items.length;
   if (items.length === 0) return { error: "resolve_bottles requires items: [{name, size?, qty?}]" };
   // Full enough for the client to build a valid cart line (id/ada/size/case),
   // plus the human-readable size string the model uses when it talks.
@@ -666,22 +691,43 @@ async function toolResolveBottles(input, { supabase }) {
           proof: c.proof,
         }
       : null;
-  const results = await Promise.all(
-    items.map(async (it) => {
-      const name = String(it?.name || "").trim();
-      if (!name) return { requested: it, error: "missing name" };
-      const sizeMl = sizeFromText(String(it?.size || "")) ?? sizeFromText(name) ?? null;
-      const r = await resolveOrderLine(supabase, { name, sizeMl, prefer: preferFromText(name) });
-      return {
-        requested: { name, size: it?.size ?? null, qty: it?.qty ?? null },
-        confidence: r.confidence,
-        best: fmt(r.best),
-        alternates: (r.alternates || []).slice(0, 4).map(fmt),
-        match_count: r.total,
-      };
-    }),
-  );
-  return { count: results.length, results };
+  /*
+   * Chunked execution (2026-07-23): 150 concurrent resolveOrderLine calls
+   * would burst-hammer Supabase (each is multiple queries). 20 at a time
+   * keeps the wall time low (~8 sequential waves ≈ a few seconds) without
+   * the thundering herd.
+   */
+  const RESOLVE_CHUNK = 20;
+  const results = [];
+  for (let i = 0; i < items.length; i += RESOLVE_CHUNK) {
+    const wave = await Promise.all(
+      items.slice(i, i + RESOLVE_CHUNK).map(async (it) => {
+        const name = String(it?.name || "").trim();
+        if (!name) return { requested: it, error: "missing name" };
+        const sizeMl = sizeFromText(String(it?.size || "")) ?? sizeFromText(name) ?? null;
+        const r = await resolveOrderLine(supabase, { name, sizeMl, prefer: preferFromText(name) });
+        return {
+          requested: { name, size: it?.size ?? null, qty: it?.qty ?? null },
+          confidence: r.confidence,
+          best: fmt(r.best),
+          alternates: (r.alternates || []).slice(0, 4).map(fmt),
+          match_count: r.total,
+        };
+      }),
+    );
+    results.push(...wave);
+  }
+  return {
+    count: results.length,
+    results,
+    ...(droppedCount > 0
+      ? {
+          truncated: true,
+          dropped_count: droppedCount,
+          note: `ONLY the first ${items.length} items were resolved — ${droppedCount} more were NOT processed. You MUST tell the user exactly this and ask them to send the remaining ${droppedCount} lines as a follow-up message.`,
+        }
+      : {}),
+  };
 }
 
 const TOOL_IMPL = {
@@ -933,15 +979,47 @@ export async function askAssistant({
   ];
 
   let iterations = 0;
+  let maxTokens = MAX_TOKENS;
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations += 1;
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: MAX_TOKENS,
+      max_tokens: maxTokens,
       system: SYSTEM_PROMPT,
       tools: TOOLS,
       messages,
     });
+
+    /*
+     * THE GHOST FIX (2026-07-23): a turn cut off at max_tokens is NOT an
+     * answer — it's a decapitated reply, usually a giant tool call that
+     * never finished (the "I'll resolve all of these — give me a second!"
+     * lie). Never ship it. Escalate the budget ONCE and re-run the same
+     * turn; if even the big budget truncates, tell the owner the honest
+     * truth instead of a promise. The truncated response is discarded —
+     * nothing half-built ever enters `messages`.
+     */
+    if (response.stop_reason === "max_tokens") {
+      if (maxTokens < MAX_TOKENS_RETRY) {
+        console.warn(
+          `[assistant] turn truncated at ${maxTokens} output tokens — escalating to ${MAX_TOKENS_RETRY} and retrying the turn`,
+        );
+        maxTokens = MAX_TOKENS_RETRY;
+        iterations -= 1; // the discarded turn doesn't count against the loop
+        continue;
+      }
+      console.warn(
+        `[assistant] turn truncated even at ${maxTokens} output tokens — returning an honest limit answer (never a promise)`,
+      );
+      return {
+        answer:
+          "That's a bigger list than I can handle in one chat reply. Nothing was added to your cart. Split it roughly in half and send each part, or tap Paste an order — it handles long lists reliably.",
+        toolCalls,
+        model: MODEL,
+        iterations,
+        truncated: true,
+      };
+    }
 
     if (response.stop_reason === "tool_use") {
       messages.push({ role: "assistant", content: response.content });

@@ -210,6 +210,27 @@ starts after the order lands. Context: same session as the assistant
 timeout fix (ask 30s→90s, resolve-order 30s→60s) that unblocked the
 big paste.
 
+**🔥🔥 RE-FIRED 2026-07-23 night (Tony: "1000000x better"). THE GHOST
+CAUGHT LIVE:** two Notes screenshots + "Add all of these to cart" → the
+assistant replied "I'll resolve all of these at once — give me a second!"
+and did NOTHING. Root cause found in code: MAX_TOKENS=1024 guillotined
+the giant resolve_bottles tool call mid-emission and the loop shipped the
+decapitated turn as a final answer — a promise with the action silently
+discarded. **FIXED same night (in tree):** (a) 1024→4096 output budget +
+one-shot escalation to 8192 + truncated turns can NEVER ship as answers
+(honest limit message instead); (b) resolve_bottles cap 60→150 with
+chunked execution + LOUD truncation the model must relay — nothing drops
+silently; (c) prompt law: never promise future work — act in-turn or
+state the limit; (d) multi-photo bubble now shows EVERY attached photo
+(was showing only the first, making multi-send look broken — the send
+path itself was already correct). **Daylight queue, in order:** resolver
+accuracy pass driven by Tony's REAL 7/23 list (gaps already mapped:
+"double shot"/100ml sizes unmapped, "x case" quantities unhandled,
+multi-product lines, open-ended "whatever flavors they have"); image
+input for the Paste-an-order pipeline; streaming (also kills the ~60s
+platform ceiling on monster asks); model bump eval. Tony's list becomes
+the resolver regression corpus.
+
 **More live 7/16 input (same order, from the check-result sheet):**
 0. **🔥 ONE-TAP "Remove out-of-stock + re-check" (the big one).** A red
    check with OOS lines currently strands the operator: MILO answers
