@@ -26,6 +26,7 @@ import {
   selectOrdersForSubmit,
   buildConfirmationMapFromOrders,
 } from "../rpa/engine/engine-orders.js";
+import { assertSubmitMachineryAllowed } from "./submit-guard.js";
 import {
   acquireSession,
   attachFreshSession,
@@ -1747,6 +1748,8 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
           const dispatchedAtIso = new Date().toISOString();
           let submitResult;
           try {
+            // Fail-closed: a check/preview can never reach the submit machinery.
+            assertSubmitMachineryAllowed({ runType, site: "engine_submit(node)" });
             submitResult = await submitCartViaApi(
               { transport: nodeSession.transport },
               {
@@ -3269,6 +3272,8 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
       // order-night MILO eats the rest. Hang-stop, not pace-setter — and
       // post-click expiry now resolves to submitOutcome:"unconfirmed"
       // inside checkout.js instead of throwing (the truth rule).
+      // Fail-closed: a check/preview can never reach the submit machinery.
+      assertSubmitMachineryAllowed({ runType, site: "stage5_checkout(browser)" });
       checkedOut = await checkoutOnMilo(session, {
         mode: stage5Mode,
         allowOrderSubmission,
