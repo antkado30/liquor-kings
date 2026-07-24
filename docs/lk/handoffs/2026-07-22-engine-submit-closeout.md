@@ -1,5 +1,10 @@
 # Handoff — 2026-07-22 EOD (engine submit SHIPPED + armed-for-shadow; order day TOMORROW)
 
+> **⚠️ SUPERSEDED 2026-07-23: the mega session shipped the AI resolver rebuild,
+> the promise-and-ghost fix, and retired money-path arming to a break-glass
+> kill. Current truth + next mission: `2026-07-23-mega-session-closeout.md`.
+> (The 7/22 order-day script here is stale — arming model changed.)**
+
 Paste this whole file into a new chat to pick up exactly where we left off.
 Supersedes `2026-07-19-node-direct-closeout.md` (its "next mission" — engine
 submit — is now BUILT and deployed). For a fresh chat, the Phase-0 reading

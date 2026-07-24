@@ -4,6 +4,23 @@ Founder's log. Milestone entries — the moments that mattered.
 
 ---
 
+## Entry #5 — The mega session (2026-07-23)
+
+One night, an absurd amount of ground. Cold check landed at the MILO floor
+(~3s, browserless — node-direct proven the week prior). Engine submit built
+and shadow-ready. The AI assistant, which had been LYING ("I'll add all these
+— give me a second!" then doing nothing), got its promise-and-ghost bug killed
+and its resolver rebuilt from ~half-wrong to ~35/37 correct on Tony's real
+weekly order — three evidence-driven surgery rounds, every fix pinned. Then the
+money path itself modernized: env-var arming retired to a break-glass kill
+(Submit is now a real button with deliberate steps, phone-armable, no laptop),
+and a fail-closed guard made "a check never submits" a hard law. RINSE + no-drift
+became permanent rules; Obsidian stood up as the knowledge base. 661 tests, 0
+failed. Full detail: `handoffs/2026-07-23-mega-session-closeout.md`. Tony:
+"amazing day." It was.
+
+---
+
 ## Entry #4 — The catalog got honest (the 48-hour truth pass)
 
 **July 12–14, 2026 — EOD closeout, written by Fable**
