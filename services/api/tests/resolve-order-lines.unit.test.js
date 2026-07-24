@@ -6,6 +6,7 @@ import {
   scoreCandidate,
   preciseTermSets,
   fallbackTermSets,
+  termCoverage,
 } from "../src/lib/resolve-order-lines.js";
 
 describe("sizeFromText", () => {
@@ -374,5 +375,74 @@ describe("resolveOrderLine — SIZE HONESTY (the Platinum 7X law)", () => {
     ];
     const r = await resolveOrderLine(fakeSupabase(rows), { name: "Smirnoff", sizeMl: 200 });
     expect(r.best.code).toBe("61102");
+  });
+});
+
+/**
+ * EVIDENCE-BASED CONFIDENCE (2026-07-24 calibration — stress-catalog run
+ * N=200 seed=20260724). The old "exactly one exact-size row = high" rule
+ * failed both ways: perfect matches wore amber (27 CHECKs on Tony's
+ * near-perfect live order) and a single wrong-brand fallback row wore HIGH
+ * (the stress run's only catastrophic class: "smrnoff citrus" → PINNACLE
+ * CITRUS). New ladder: lead-word-missing → review; all words covered + clear
+ * margin → high; contested → medium.
+ */
+describe("confidence calibration (2026-07-24)", () => {
+  const fakeSupabase = (rows) => ({
+    from: () => ({
+      select: () => {
+        const builder = {
+          or: () => builder,
+          ilike: () => builder,
+          limit: () => Promise.resolve({ data: rows, error: null }),
+        };
+        return builder;
+      },
+    }),
+  });
+
+  it("typo'd brand cross-match can NEVER wear a confident badge (was HIGH)", async () => {
+    // The stress run's HIGH-CONF-WRONG class: brand typo'd, fallback found a
+    // single exact-size row of a DIFFERENT brand → old rule crowned it high.
+    const rows = [{ code: "12582", name: "PINNACLE CITRUS", bottle_size_ml: 1000, is_combo: false }];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "smrnoff citrus", sizeMl: 1000 });
+    expect(r.best.code).toBe("12582"); // still surfaces as the closest thing
+    expect(r.confidence).toBe("review"); // but honestly flagged — brand word absent
+  });
+
+  it("an evidenced clear winner is GREEN even with brand-mates in the pool (was check)", async () => {
+    const rows = [
+      { code: "9795", name: "CASAMIGOS REPOSADO", bottle_size_ml: 750, is_combo: false },
+      { code: "17160", name: "CENOTE REPOSADO", bottle_size_ml: 750, is_combo: false },
+      { code: "31289", name: "VOLCAN REPOSADO", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "Casamigos reposado", sizeMl: 750 });
+    expect(r.best.code).toBe("9795");
+    expect(r.confidence).toBe("high"); // every word covered + clear margin over CENOTE
+  });
+
+  it("a genuinely contested line stays amber (bare Limoncello across brands)", async () => {
+    const rows = [
+      { code: "26792", name: "LIM LIMONCELLO", bottle_size_ml: 750, is_combo: false },
+      { code: "22553", name: "CRAZ LIMONCELLO", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "Limoncello", sizeMl: 750 });
+    expect(r.confidence).toBe("medium"); // rivals inside the margin — a human should glance
+  });
+
+  it("synonym + MLCC truncation still count as covered (Stoli vanilla → green)", async () => {
+    const rows = [
+      { code: "95996", name: "STOLICHNAYA VANIL", bottle_size_ml: 750, is_combo: false },
+      { code: "35355", name: "SVEDKA VANILLA", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "Stoli vanilla", sizeMl: 750 });
+    expect(r.best.code).toBe("95996");
+    expect(r.confidence).toBe("high"); // stolichnaya via synonym, vanilla via VANIL prefix
+  });
+
+  it("termCoverage: apostrophes never break coverage (TITO'S ↔ titos)", () => {
+    const cov = termCoverage("TITO'S HANDMADE VODKA", ["titos"]);
+    expect(cov.leadCovered).toBe(true);
+    expect(cov.allCovered).toBe(true);
   });
 });

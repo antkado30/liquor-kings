@@ -161,6 +161,45 @@ const VARIANT_PENALTY = 40;
 // is a DIFFERENT one, it's the wrong product (McCormick Vodka vs McCormick Gin).
 const CONFLICT_CATS = ["vodka", "gin", "rum", "tequila", "brandy"];
 
+// Packaging descriptors — handled by `prefer` scoring, never treated as a
+// distinctive identity word for coverage ("Platinum 7x plastic" — "plastic"
+// names the material, not the product).
+const PACKAGING_WORDS = new Set(["plastic", "glass", "pl"]);
+
+/**
+ * termCoverage — which of the user's DISTINCTIVE words the candidate name
+ * actually contains (2026-07-24 confidence calibration). Presence semantics
+ * mirror scoreCandidate's missing-term check (substring, 5-char prefix for
+ * ≥6-char words, lead-initial with the possessive-'s lookbehind) PLUS a
+ * punctuation-stripped compare ("tito's" ↔ TITO'S, matching the
+ * name_searchable behavior of the SQL layer). Used by the confidence ladder
+ * only — scoring is intentionally untouched (calibration, not re-ranking).
+ */
+export function termCoverage(name, terms) {
+  const lname = String(name || "").toLowerCase();
+  const strippedName = lname.replace(/[^a-z0-9]/g, "");
+  const eligible = [];
+  (terms || []).forEach((raw, idx) => {
+    const t = String(raw).toLowerCase();
+    if (t.length < 3 || GENERIC_WORDS.has(t) || PACKAGING_WORDS.has(t)) return;
+    const st = t.replace(/[^a-z0-9]/g, "");
+    let present = lname.includes(t) || (st.length >= 3 && strippedName.includes(st));
+    if (!present && t.length >= 6) {
+      present =
+        lname.includes(t.slice(0, 5)) || strippedName.includes(st.slice(0, 5));
+    }
+    if (!present && idx === 0) {
+      present = new RegExp(`(?<!['’])\\b${t[0]}\\b`).test(lname);
+    }
+    eligible.push(present);
+  });
+  return {
+    hasEligible: eligible.length > 0,
+    leadCovered: eligible.length > 0 ? eligible[0] : true,
+    allCovered: eligible.every(Boolean),
+  };
+}
+
 /**
  * Lower is better. Dominant signal: the candidate should contain the user's
  * DISTINCTIVE (non-generic) words — each one it's missing is penalized. Then
@@ -409,14 +448,43 @@ export async function resolveOrderLine(supabase, line) {
 
   const ranked = pool.slice(0, 6);
   const exactHit = line.sizeMl ? exact.length > 0 : null;
-  // Confidence: exactly one exact-size hit = high; multiple (ambiguous) or
-  // no exact-size = review/medium so the UI flags it for the user's eye.
-  // A size mismatch is ALWAYS review — never a quiet substitute.
+  /*
+   * EVIDENCE-BASED CONFIDENCE (2026-07-24 calibration — stress-catalog run,
+   * N=200 seed=20260724, docs/lk/stress-catalog-2026-07-24.md). The old rule
+   * was purely structural ("exactly one exact-size row = high") and failed
+   * both directions:
+   *   - A perfect match with brand-mates in the pool wore "check" — 27 amber
+   *     badges on Tony's near-perfect live order = alarm fatigue.
+   *   - A single wrong-brand fallback row wore high — the stress run's only
+   *     HIGH-CONF-WRONG class ("smrnoff citrus" → PINNACLE CITRUS).
+   * New ladder, read from what the match actually EVIDENCES:
+   *   review — size mismatch (never a quiet substitute), OR the user's LEAD
+   *            (brand) word appears nowhere in the best match: a cross-brand
+   *            guess must never wear a confident badge.
+   *   high   — exact size + EVERY distinctive user word present in the match
+   *            + a clear lead (≥ VARIANT_PENALTY) over the nearest different-
+   *            name rival (or no rival at all). "Casamigos reposado" beating
+   *            CENOTE REPOSADO is green: the win is evidenced, not lucky.
+   *   medium — exact size, brand present, but contested (different-name
+   *            rivals inside the margin — bare "Limoncello" across brands)
+   *            or some distinctive word unmatched. Amber MEANS something now.
+   */
   let confidence = "review";
   if (ranked.length === 0) confidence = "none";
   else if (sizeMismatch) confidence = "review";
-  else if (exactHit && exact.length === 1) confidence = "high";
-  else if (exactHit) confidence = "medium";
+  else if (exactHit) {
+    const cov = termCoverage(ranked[0].name, baseTerms);
+    if (cov.hasEligible && !cov.leadCovered) {
+      confidence = "review";
+    } else {
+      const rival = ranked.find((c) => c.name !== ranked[0].name);
+      const margin = rival
+        ? scoreCandidate(rival.name, baseTerms, line.prefer, { row: rival, rawText }) -
+          scoreCandidate(ranked[0].name, baseTerms, line.prefer, { row: ranked[0], rawText })
+        : Infinity;
+      confidence = cov.allCovered && margin >= VARIANT_PENALTY ? "high" : "medium";
+    }
+  }
 
   return {
     best: ranked[0] || null,
