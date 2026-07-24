@@ -142,11 +142,21 @@ export interface ResolvedCandidate {
 
 /** One line from the chat's resolve_bottles tool (in-chat add-to-cart card). */
 export interface ResolvedOrderLine {
-  requested: { name: string; size: string | null; qty: number | null };
+  requested: { name: string; size: string | null; qty: number | null; raw?: string };
   confidence: "high" | "medium" | "review" | "none";
   best: ResolvedCandidate | null;
   alternates: ResolvedCandidate[];
   match_count: number;
+  /** Size honesty (2026-07-23): the requested size doesn't exist for this
+      product — `best` is a DIFFERENT size. The card must say so loudly. */
+  size_mismatch?: boolean;
+  requested_size_ml?: number | null;
+  size_note?: string;
+  /** Case intent (2026-07-23): the line said "case" — suggested_qty is one
+      full case of the matched bottle. The card prefills qty with it. */
+  case_intent?: boolean;
+  suggested_qty?: number;
+  qty_note?: string;
 }
 
 export interface ResolvedLine {

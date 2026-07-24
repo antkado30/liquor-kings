@@ -6307,6 +6307,113 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   background: rgba(192, 57, 43, 0.1);
 }
 
+/* Glanceable resolve card (2026-07-24): the matched bottle is the headline —
+   name + size/price/code visible AT REST, no tap needed to see the match. */
+.bulkadd-match-name {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bulkadd-match-name--skipped {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  font-weight: 600;
+}
+.bulkadd-truth {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  font-size: 0.8125rem;
+  margin-top: 2px;
+}
+.bulkadd-truth-size {
+  font-weight: 700;
+}
+.bulkadd-truth-price {
+  font-weight: 700;
+  color: #7ee2a8;
+}
+.bulkadd-truth-code {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.bulkadd-truth-dot {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.bulkadd-said {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bulkadd-flag {
+  margin-top: 6px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.bulkadd-flag--size {
+  background: rgba(183, 121, 31, 0.18);
+  border: 1px solid rgba(183, 121, 31, 0.45);
+  color: #ffd98a;
+}
+.bulkadd-flag--case {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+/* Swap chip: visible custom label; the REAL native <select> sits invisibly on
+   top (full-size tap target) so iOS opens its reliable native picker. */
+.bulkadd-swap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  margin-top: 8px;
+}
+.bulkadd-row-controls .bulkadd-swap {
+  margin-top: 0;
+}
+.bulkadd-swap-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bulkadd-swap-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  font-size: 16px; /* prevents iOS zoom-on-focus */
+}
+/* Scoped to the chat card only — BulkAddSheet shares .bulkadd-row-controls. */
+.ordercard .bulkadd-row-controls {
+  margin-top: 8px;
+}
+
 /* In-chat resolved-order card (reuses the bulkadd row/button styles). */
 .ordercard {
   margin-top: 10px;
