@@ -86,6 +86,8 @@ interface Row {
   caseIntent: boolean;
   /** Store memory (2026-07-24): the match IS this store's saved choice. */
   remembered: boolean;
+  /** 2026-07-25: brand matched nothing — likely not in the current book. */
+  brandAbsent: boolean;
   /** The resolver's original pick — a different final choice = a correction
       worth teaching the store's memory (learn-on-swap). */
   originalBestCode: string | null;
@@ -140,6 +142,7 @@ export function ResolvedOrderCard({
             typeof l.requested_size_ml === "number" ? l.requested_size_ml : null,
           caseIntent: l.case_intent === true,
           remembered: l.remembered === true,
+          brandAbsent: l.brand_absent === true,
           originalBestCode: l.best?.code ?? null,
           originalBestSizeMl: l.best?.bottle_size_ml ?? null,
           sizes: Array.isArray(l.sizes) ? l.sizes : [],
@@ -328,6 +331,13 @@ export function ResolvedOrderCard({
                     <span className="bulkadd-truth-code">#{chosen.code}</span>
                   </div>
                   <div className="bulkadd-said">You said: {saidBits.join(" · ")}</div>
+                  {r.brandAbsent && (
+                    <div className="bulkadd-flag bulkadd-flag--size">
+                      ⚠ Likely NOT in the current MLCC book (allocated, seasonal, or
+                      discontinued) — this is only the closest different product.
+                      Don't add it blind.
+                    </div>
+                  )}
                   {r.sizeMismatch && (
                     <div className="bulkadd-flag bulkadd-flag--size">
                       ⚠ No {r.requestedSizeMl ? `${r.requestedSizeMl} ml` : "requested size"}{" "}

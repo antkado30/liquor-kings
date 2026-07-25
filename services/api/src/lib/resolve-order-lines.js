@@ -173,6 +173,64 @@ function firstNameToken(lname) {
   return m ? m[0] : "";
 }
 
+/*
+ * 2026-07-25 (the connoisseur-list live test): "Blanton's Single Barrel" →
+ * CRUZAN SINGLE BARREL because missing the BRAND cost the same 60 as missing
+ * one descriptor — so a wrong brand carrying the descriptors outvoted the
+ * right brand missing them. The brand word IS the product; descriptors only
+ * narrow it. Lead-missing now costs 150 (> two descriptors), so a brand hit
+ * always beats a descriptor hit.
+ */
+const LEAD_MISSING_PENALTY = 150;
+
+/** ONE presence truth shared by scoring AND confidence coverage (mirror law,
+    2026-07-25 — they had drifted: coverage knew stripped-punctuation compare,
+    scoring didn't, so TITO'S ate a penalty from its own apostrophe). Pure
+    numbers match on word boundaries only ("10" never hides inside "100"). */
+/** Consonant skeleton: lowercase letters, vowels out, doubled consonants
+    collapsed — the shape MLCC's abbreviations keep. single→sngl, barrel→brl,
+    BRRL→brl, year→yr. Equality of skeletons = the same word abbreviated. */
+function consonantSkeleton(word) {
+  return String(word)
+    .toLowerCase()
+    .replace(/[^a-z]/g, "")
+    .replace(/[aeiou]/g, "")
+    .replace(/(.)\1+/g, "$1");
+}
+
+function termPresentIn(lname, strippedName, t, idx) {
+  if (/^\d+$/.test(t)) return new RegExp(`\\b${t}\\b`).test(lname);
+  const st = t.replace(/[^a-z0-9]/g, "");
+  let present = lname.includes(t) || (st.length >= 3 && strippedName.includes(st));
+  if (!present && t.length >= 6) {
+    present = lname.includes(t.slice(0, 5)) || strippedName.includes(st.slice(0, 5));
+  }
+  if (!present && st.length >= 3) {
+    // MLCC abbreviation match (2026-07-25, the Michter's-10 whiff): "SNGL
+    // BRL BBN-10 YR" must satisfy "single barrel". Exact skeleton equality
+    // against whole name tokens only — never substrings — keeps this tight.
+    const sk = consonantSkeleton(t);
+    if (sk.length >= 2) {
+      present = lname
+        .split(/[^a-z0-9]+/)
+        .some((tok) => tok.length >= 2 && consonantSkeleton(tok) === sk);
+    }
+  }
+  if (!present && idx === 0) present = firstNameToken(lname) === t[0];
+  return present;
+}
+
+/** Which terms get present-checked: distinctive words ≥3 chars OR pure
+    numbers ≥2 digits — "Michter's 10 Year" / "Sazerac 18": the age IS the
+    identity in whiskey (2026-07-25; small numbers were invisible before). */
+function termEligible(t) {
+  return (
+    (t.length >= 3 || /^\d{2,}$/.test(t)) &&
+    !GENERIC_WORDS.has(t) &&
+    !PACKAGING_WORDS.has(t)
+  );
+}
+
 /**
  * termCoverage — which of the user's DISTINCTIVE words the candidate name
  * actually contains (2026-07-24 confidence calibration). Presence semantics
@@ -188,21 +246,8 @@ export function termCoverage(name, terms) {
   const eligible = [];
   (terms || []).forEach((raw, idx) => {
     const t = String(raw).toLowerCase();
-    if (t.length < 3 || GENERIC_WORDS.has(t) || PACKAGING_WORDS.has(t)) return;
-    const st = t.replace(/[^a-z0-9]/g, "");
-    let present = lname.includes(t) || (st.length >= 3 && strippedName.includes(st));
-    if (!present && t.length >= 6) {
-      present =
-        lname.includes(t.slice(0, 5)) || strippedName.includes(st.slice(0, 5));
-    }
-    if (!present && idx === 0) {
-      // Brand-initial shortcut, FIRST TOKEN ONLY ("jack" → "J DANIELS").
-      // 2026-07-24 stress round 2: the anywhere-in-name version counted
-      // "camesi" as covered by the "C&D" in CODIGO … C&D and "damore" by the
-      // "D'" in HARDY NOCES D' ARGENT — wrong brands wearing green.
-      present = firstNameToken(lname) === t[0];
-    }
-    eligible.push(present);
+    if (!termEligible(t)) return;
+    eligible.push(termPresentIn(lname, strippedName, t, idx));
   });
   return {
     hasEligible: eligible.length > 0,
@@ -232,20 +277,17 @@ export function scoreCandidate(name, terms, prefer, extra = {}) {
   // "RAM'S POINT" and "stolichnaya" in "BURNETT'S" via the trailing 's
   // (2026-07-23 corpus — Skrewball→Ram's, Stoli→Burnett's). A genuinely
   // different brand ("CANADIAN LAKE" for "kirkland") still has none → penalized.
+  // 2026-07-25: presence + eligibility now SHARED with termCoverage
+  // (termPresentIn/termEligible — one truth, mirror law). The LEAD (brand)
+  // term missing costs 150 so descriptors can never outvote the brand
+  // ("Blanton's Single Barrel" must not lose to CRUZAN SINGLE BARREL), and
+  // pure-number ages ("10", "18") are now scored on word boundaries.
+  const strippedName = lname.replace(/[^a-z0-9]/g, "");
   lterms.forEach((t, idx) => {
-    if (t.length >= 3 && !GENERIC_WORDS.has(t)) {
-      let present = lname.includes(t);
-      if (!present && t.length >= 6 && lname.includes(t.slice(0, 5))) present = true;
-      if (!present && idx === 0) {
-        // Brand-initial shortcut, FIRST TOKEN ONLY (2026-07-24 stress round
-        // 2 tightening; was a whole-name \b-scan with a possessive-'s
-        // lookbehind). "jack" is covered by "J DANIELS…" because the name
-        // STARTS with the initial — but the "C&D" tail of CODIGO … C&D must
-        // not cover "camesi", nor "D' ARGENT" cover "damore". A brand
-        // initial is only ever the leading token of a product name.
-        present = firstNameToken(lname) === t[0];
+    if (termEligible(t)) {
+      if (!termPresentIn(lname, strippedName, t, idx)) {
+        score += idx === 0 ? LEAD_MISSING_PENALTY : MISSING_TERM_PENALTY;
       }
-      if (!present) score += MISSING_TERM_PENALTY;
     }
   });
 
@@ -486,11 +528,17 @@ export async function resolveOrderLine(supabase, line) {
    *            rivals inside the margin — bare "Limoncello" across brands)
    *            or some distinctive word unmatched. Amber MEANS something now.
    */
+  // Coverage of the BEST match, computed once: drives confidence AND the
+  // leadMissing signal (2026-07-25 — "Blanton's" in July: when the brand
+  // word matches NOTHING, the bottle is likely not in the current book at
+  // all; the UI/model must say that instead of headlining a stranger).
+  const bestCov = ranked.length > 0 ? termCoverage(ranked[0].name, baseTerms) : null;
+  const leadMissing = Boolean(bestCov && bestCov.hasEligible && !bestCov.leadCovered);
   let confidence = "review";
   if (ranked.length === 0) confidence = "none";
   else if (sizeMismatch) confidence = "review";
   else if (exactHit) {
-    const cov = termCoverage(ranked[0].name, baseTerms);
+    const cov = bestCov;
     if (cov.hasEligible && !cov.leadCovered) {
       confidence = "review";
     } else {
@@ -512,5 +560,6 @@ export async function resolveOrderLine(supabase, line) {
     confidence,
     sizeMismatch,
     requestedSizeMl: line.sizeMl ?? null,
+    leadMissing,
   };
 }

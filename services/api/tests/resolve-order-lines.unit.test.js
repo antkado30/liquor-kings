@@ -446,6 +446,68 @@ describe("confidence calibration (2026-07-24)", () => {
     expect(cov.allCovered).toBe(true);
   });
 
+  // ── 2026-07-25: the connoisseur-list live failures, pinned ────────────────
+  it("the BRAND outranks descriptors (Blanton's must not lose to CRUZAN SINGLE BARREL)", async () => {
+    const rows = [
+      { code: "92286", name: "CRUZAN SINGLE BARREL", bottle_size_ml: 750, is_combo: false },
+      { code: "18116", name: "BLANTON'S BOURBON", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), {
+      name: "Blanton's single barrel bourbon",
+      sizeMl: 750,
+    });
+    // Brand hit missing two descriptors (120) beats descriptor hit missing
+    // the brand (150) — the wrong-brand rum can never headline again.
+    expect(r.best.code).toBe("18116");
+    expect(r.leadMissing).toBe(false);
+  });
+
+  it("when the brand matches NOTHING, leadMissing flags it (likely not in the book)", async () => {
+    const rows = [{ code: "92286", name: "CRUZAN SINGLE BARREL", bottle_size_ml: 750, is_combo: false }];
+    const r = await resolveOrderLine(fakeSupabase(rows), {
+      name: "Blanton's single barrel bourbon",
+      sizeMl: 750,
+    });
+    expect(r.leadMissing).toBe(true); // → tool ships brand_absent, card warns
+    expect(r.confidence).toBe("review");
+  });
+
+  it("small-number ages are scored — WhistlePig 10 finds the 10 YR, not FarmStock", async () => {
+    const rows = [
+      { code: "32170", name: "WHISTLEPIG FARMSTOCK RYE", bottle_size_ml: 750, is_combo: false },
+      { code: "20648", name: "WHISTLEPIG STRAIGHT RYE-10 YR", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), {
+      name: "WhistlePig 10 year rye",
+      sizeMl: 750,
+      rawText: "WhistlePig 10 Year Rye",
+    });
+    expect(r.best.code).toBe("20648");
+  });
+
+  it("MLCC abbreviations satisfy their full words (SNGL BRL ≡ single barrel) — Michter's 10 finds the 10 YR", async () => {
+    const rows = [
+      { code: "10857", name: "MICHTER'S SINGLE BARREL ST BBN", bottle_size_ml: 750, is_combo: false },
+      { code: "31234", name: "MICHTER'S SNGL BRL BBN-10 YR", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), {
+      name: "Michter's 10 year single barrel bourbon",
+      sizeMl: 750,
+      rawText: "Michter's 10 Year Single Barrel Bourbon",
+    });
+    expect(r.best.code).toBe("31234");
+  });
+
+  it('number terms match on word boundaries — "10" never hides inside "100"', () => {
+    expect(termCoverage("SMIRNOFF 100", ["smirnoff", "10"]).allCovered).toBe(false);
+    expect(termCoverage("WHISTLEPIG STRAIGHT RYE-10 YR", ["whistlepig", "10"]).allCovered).toBe(true);
+  });
+
+  it("scoring now shares coverage's stripped compare (TITO'S no longer penalized by its own apostrophe)", () => {
+    const s = scoreCandidate("tito's handmade vodka", ["titos", "handmade", "vodka"]);
+    expect(s).toBeLessThan(60); // length tiebreak only — zero missing-term penalties
+  });
+
   // ── Round 2 (2026-07-24 stress re-run): the brand-initial shortcut fired on
   // stray single letters ANYWHERE in a name — "C&D", "D' ARGENT" — putting
   // wrong brands in green. Initial now counts ONLY as the name's FIRST token.

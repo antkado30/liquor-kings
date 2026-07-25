@@ -165,6 +165,9 @@ export interface ResolvedOrderLine {
   /** Size flip (2026-07-24): every size MLCC carries of the matched
       bottle's family — the card can flip the line between them. */
   sizes?: ResolvedCandidate[];
+  /** 2026-07-25: the BRAND word matched nothing — the bottle is likely not
+      in the current MLCC book; `best` is only the closest DIFFERENT product. */
+  brand_absent?: boolean;
 }
 
 /** One learned correction: what the owner SAID → the code they chose. */

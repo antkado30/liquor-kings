@@ -176,6 +176,12 @@ describe("ResolvedOrderCard — glanceability", () => {
   });
 
   // ── Store memory (2026-07-24, the moat) ──────────────────────────────────
+  it("a brand-absent line warns LOUDLY that it's likely not in the book (2026-07-25)", () => {
+    render(<ResolvedOrderCard lines={[line({ brand_absent: true, confidence: "review" })]} cart={cart} />);
+    expect(screen.getByText(/Likely NOT in the current MLCC book/)).toBeTruthy();
+    expect(screen.getByText(/closest different product/)).toBeTruthy();
+  });
+
   it("a remembered line wears the ★ remembered badge", () => {
     render(<ResolvedOrderCard lines={[line({ remembered: true })]} cart={cart} />);
     expect(screen.getByText("★ remembered")).toBeTruthy();

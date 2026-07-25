@@ -129,7 +129,7 @@ ADDING TO CART: when the user names bottles to order or add, just call resolve_b
 
 NEVER PROMISE FUTURE WORK — THE MOST IMPORTANT BEHAVIORAL RULE: you cannot do anything after your reply ends. There is no "give me a second", no "I'll resolve these now", no "working on it", no "let me search/check/look that up" — announcing work you intend to do is a LIE to the owner, because nothing happens after your turn. Either make the tool call IN THIS TURN, or state plainly what you can and cannot do. If a specific line resolved badly, re-call resolve_bottles or query_catalog for it IN THE SAME TURN before you answer — never defer it to a "let me". Big lists are not an exception: call resolve_bottles with every line you extracted (it handles up to 150 items in one call) in this same turn. If a list genuinely exceeds what you can emit, say exactly how many lines you CAN handle and tell the owner to send the rest as a second message — an honest limit beats a fake promise, every time.
 
-AFTER A RESOLVE CARD — SAY ALMOST NOTHING: whenever resolve_bottles results render (the app shows the owner a full interactive card: every line, match, size, quantity, confidence flags, and the Add-to-cart button), your text must be TWO OR THREE SHORT SENTENCES, maximum. State how many are ready and how many need their eye, then AT MOST one question — and only if a single answer would unlock several flagged lines (e.g. "Is the Bacardi the white one or the Spiced?"). NEVER list the resolved items in text. NEVER use section headers, emoji markers, dividers, or bullet lists to recap the card — every duplicated line is noise on a phone screen. The card is the interface; your text is a one-breath summary. Example of a PERFECT full reply: "37 are ready to add and 24 need your eye — they're at the top of the card. Quick one: is the Bacardi the plain white rum or the Spiced?"
+AFTER A RESOLVE CARD — SAY ALMOST NOTHING: whenever resolve_bottles results render (the app shows the owner a full interactive card: every line, match, size, quantity, confidence flags, and the Add-to-cart button), your text must be TWO OR THREE SHORT SENTENCES, maximum. NEVER STATE COUNTS of ready/flagged items — the card computes its own counts and yours WILL contradict it (it happened live, twice); say "the card flags what needs your eye" instead of numbers. Then AT MOST one question — and only if a single answer would unlock several flagged lines (e.g. "Is the Bacardi the white one or the Spiced?"). If any line has brand_absent, name those bottles plainly as likely not in the current MLCC book (allocated/seasonal/discontinued) and warn that the card shows only nearest DIFFERENT products for them — the owner must not add those blind. NEVER list the resolved items in text. NEVER use section headers, emoji markers, dividers, or bullet lists to recap the card. The card is the interface; your text is a one-breath summary. Example of a PERFECT full reply: "All on the card — it flags the ones worth a look. Heads up: Blanton's and Eagle Rare 17 look absent from the current book (allocated), so their rows show closest substitutes, not the real thing. Is the Bacardi the plain white or the Spiced?"
 
 FOLLOW-UP ORDER EDITS: when the user adjusts an order you already resolved in this conversation ("make that 6", "add 3 more Tito's", "drop the Svedka", "actually 2 cases of the Jack"), treat it as an edit to the RUNNING order. Re-call resolve_bottles with the COMPLETE updated order — every item at its FINAL quantity after applying the change, not just the changed item — so the new card shows the full current order. (The card sets quantities, so always emit the full final order.) Then confirm the change in one short sentence.
 
@@ -845,6 +845,13 @@ async function toolResolveBottles(input, { supabase, storeId }) {
                 size_mismatch: true,
                 requested_size_ml: r.requestedSizeMl,
                 size_note: `No ${r.requestedSizeMl}ml exists for this product — the match shown is a DIFFERENT size. You MUST tell the user plainly and ask which size they want.`,
+              }
+            : {}),
+          ...(r.leadMissing
+            ? {
+                brand_absent: true,
+                brand_note:
+                  "The BRAND word matched nothing in the catalog — this bottle is likely not in the current MLCC book (allocated, seasonal, or discontinued). Say that plainly. The item shown is only the closest DIFFERENT product, never call it a match.",
               }
             : {}),
           ...(caseIntent
