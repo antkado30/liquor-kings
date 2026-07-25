@@ -88,12 +88,27 @@ the margin rule widened green and let new wrongs in. All 5 captured
   name tokens) so flagship-law picks stop polluting the wrong columns —
   med-wrong/HIGH-WRONG now show only true cross-brand errors.
 
-## AFTER round 2 (fill in on re-run, same command/seed)
+## AFTER round 2 (same seed) — the answer
 
-`node scripts/stress-catalog-2026-07-24.mjs 200` — paste table here.
-Expect: HIGH-WRONG ~0.0% (the 3 flagship cases move to brand-fair, the 2
-initial-bug cases to review/right); short's med-wrong roughly halves as
-intra-brand ambiguity (blanco/anejo, VS/VSOP) reclassifies to brand-fair.
+| phrasing | right | brand-fair | honest-miss | med-wrong | HIGH-WRONG | top-5 |
+|---|---|---|---|---|---|---|
+| full   | 97.0% | 3.0% | 0.0% | **0.0%** | **0.0%** | 100% |
+| short  | 45.4% | 42.1% | 5.3% | 7.2% | **0.0%** | 78.9% |
+| typo   | 55.9% | 1.7% | 41.2% | 1.1% | **0.0%** | 69.5% |
+| nosize | 56.0% | 34.5% | 9.5% | 0.0% | **0.0%** | 75.5% |
+| TOTAL  | 65.0% | 19.5% | 13.7% | **1.8%** | **0.0%** | 81.5% |
+
+**Verdict: 98.2% of all resolves are correct behavior** (right + flagship-
+fair + honest flag). Wrong-with-a-badge fell 15.6% → 1.8% — and those 13 are
+intra-brand near-misses (KOMOS extra añejo vs añejo reserva) with truth in
+top-5, wearing the amber they deserve. **A wrong bottle can no longer wear
+green anywhere in the catalog** (measured, seeded, reproducible).
+
+Known residue (accepted, not worth more static rules): substring false
+positive ("row" inside "cROWn" satisfied the lead for WHISKEY ROW → CROWN
+ROYAL at medium), symbol brands dissolving at tokenization ("G&W" → no lead
+term). Both amber-flagged, both rare, both better solved by the per-store
+memory (a store that orders G&W teaches the system its own vocabulary).
 
 ## What this does NOT solve (known, next)
 
