@@ -105,6 +105,42 @@ absent-brand/partial unchanged. 5 pins.
 Known catalog oddity (not ours): "MYERS'S GEORGE T. STAGG" #34470 appears to
 be MLCC's real listing name (stable across runs) — probe if curious.
 
+## ADDENDUM 2 — 2026-07-25 evening: worker incident (RESOLVED) + no-size confidence (`860337f`)
+
+**Incident:** Tony's 2:41 PM check orphaned ("no worker heartbeat 3 min").
+Logs showed the WORKER→API route (public URL claim-next/heartbeat calls)
+timing out from ~9 AM, hard-degraded by 1 PM — while external health checks
+passed. Orphan detector + honest UX worked exactly as designed. **Fix:**
+`fly apps restart liquor-kings` + `npm run deploy:worker`. Post-fix check:
+claimed instantly, node engine 7.1s, oos=6, push fired. If it recurs:
+restart both apps first; durable fix queued = point worker at the API's
+INTERNAL Fly address instead of the public URL.
+
+**Learnings (now law):**
+- **Worker-touching changes ⇒ deploy BOTH apps.** The worker sat on 7/22
+  code for 3 days because every batch said `npm run deploy` only (Fable
+  process miss, owned). `npm run deploy:worker` exists — use it whenever
+  `src/workers/**`, `src/rpa/**`, or shared libs change.
+- **Worker deploys take ~10 min BY DESIGN**: SIGINT → "won't claim new
+  runs, letting in-flight finish" → 5-min kill window → SIGTERM → ~5-min
+  machine create. Never panic, never ctrl-C the deploy.
+- **⚠ THURSDAY GO-LIVE PREREQ:** worker log proves `envKilled=true` —
+  `LK_ALLOW_ORDER_SUBMISSION="no"` is SET on the worker (old disarm ritual),
+  i.e. the break-glass kill is ENGAGED. Under the new arming model this
+  hard-blocks submission even with the store flag on. Go-live must
+  `fly secrets unset LK_ALLOW_ORDER_SUBMISSION` on BOTH apps (verify API's
+  value too via ssh printenv) alongside the store-flag flip.
+- Worker now on `860337f` v65: submit-guard + new arming live on the worker
+  for the first time; MILO confirmed the allocated bottles (Eagle Rare 17,
+  Blanton's, Stagg, WLW, Midwinter) as listed-but-zero-stock — the AI's
+  allocation story validated by the state's own system.
+
+**Also shipped (`860337f`):** no-size confidence — a phrase naming exactly
+one bottle earns high without a spoken size (≥2 covered terms + single-size
+family + margin); multi-size → medium; single-word capped; absent-brand
+unchanged. Stress same-seed: HIGH-WRONG 0.0% held (nosize honest 8.5→1.5,
+med-wrong 0→7.0 — wrongs now amber instead of review, truth in top-5).
+
 ## NOT proven yet (no code — just eyes)
 1. **Size-flip phone test**: "Add limoncello fifth" → ★ remembered Lucina →
    "Switch size" chip → flip → truth line updates → Add → receipt shows the

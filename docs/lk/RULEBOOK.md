@@ -49,6 +49,15 @@ if broken, cost real money, real trust, or a real order.
 
 ## 2. HOW WE WORK — the workflow (Tony + Fable)
 
+5b. **Two apps, two deploys (2026-07-25 incident):** `npm run deploy` ships
+   ONLY the API. Any change touching `src/workers/**`, `src/rpa/**`, or
+   shared libs the worker imports ALSO needs `npm run deploy:worker` — the
+   worker sat 3 days stale when this was missed. Worker deploys take ~10
+   minutes BY DESIGN (graceful in-flight window + SIGTERM + machine create):
+   never ctrl-C. If worker logs show claim-next/heartbeat timeouts to the
+   public API URL: `fly apps restart liquor-kings`, then redeploy/restart
+   the worker.
+
 6. **Tony does ALL git + deploys.** The sandbox cannot commit. Fable makes
    direct edits + self-audits; Tony runs every `git` and every deploy.
    **Sandbox git READS leave a stale lock (learned 7/5):** even `git status` /
