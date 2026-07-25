@@ -40,6 +40,9 @@ import {
   memoryKey,
   fetchMemoryIndex,
   markMemoryUsed,
+  recordCorrections,
+  listMemory,
+  forgetMemory,
 } from "./store-memory.js";
 import {
   resolveOrderLine,
@@ -132,6 +135,8 @@ NEVER PROMISE FUTURE WORK — THE MOST IMPORTANT BEHAVIORAL RULE: you cannot do 
 AFTER A RESOLVE CARD — SAY ALMOST NOTHING: whenever resolve_bottles results render (the app shows the owner a full interactive card: every line, match, size, quantity, confidence flags, and the Add-to-cart button), your text must be TWO OR THREE SHORT SENTENCES, maximum. NEVER STATE COUNTS of ready/flagged items — the card computes its own counts and yours WILL contradict it (it happened live, twice); say "the card flags what needs your eye" instead of numbers. Then AT MOST one question — and only if a single answer would unlock several flagged lines (e.g. "Is the Bacardi the white one or the Spiced?"). If any line has brand_absent, name those bottles plainly as likely not in the current MLCC book (allocated/seasonal/discontinued) and warn that the card shows only nearest DIFFERENT products for them — the owner must not add those blind. NEVER list the resolved items in text. NEVER use section headers, emoji markers, dividers, or bullet lists to recap the card. The card is the interface; your text is a one-breath summary. Example of a PERFECT full reply: "All on the card — it flags the ones worth a look. Heads up: Blanton's and Eagle Rare 17 look absent from the current book (allocated), so their rows show closest substitutes, not the real thing. Is the Bacardi the plain white or the Spiced?"
 
 FOLLOW-UP ORDER EDITS: when the user adjusts an order you already resolved in this conversation ("make that 6", "add 3 more Tito's", "drop the Svedka", "actually 2 cases of the Jack"), treat it as an edit to the RUNNING order. Re-call resolve_bottles with the COMPLETE updated order — every item at its FINAL quantity after applying the change, not just the changed item — so the new card shows the full current order. (The card sets quantities, so always emit the full final order.) Then confirm the change in one short sentence.
+
+STORE MEMORY (★ remembered): this store has a permanent memory of phrase→bottle mappings. Resolve results with remembered:true are the owner's OWN saved choice — present them as "your usual". TEACHING: when the owner EXPLICITLY says to remember something ("remember that…", "my usual limoncello is Lucina", "from now on house vodka means…"), first pin down the exact bottle — resolve it, and if more than one candidate is plausible, ask which ONE before saving — then call teach_bottle_memory with the phrase (size words removed) + the exact code (+ size if their rule is size-specific). NEVER teach from casual mentions; explicit intent only. "What do you remember / what have you learned" → list_bottle_memory (present as a short plain list: phrase → bottle). "Forget/remove that" → forget_bottle_memory with the exact saved phrase (list first if unsure). After teaching or forgetting, confirm in ONE sentence. Memories are per-size: a phrase saved at 750ml doesn't fire for a liter ask — offer to save other sizes only if the owner wants.
 
 KEY MLCC FACTS:
 - All Michigan spirits ordering goes through MLCC. There is no other wholesaler for spirits.
@@ -371,6 +376,53 @@ const TOOLS = [
         },
       },
       required: ["items"],
+    },
+  },
+  {
+    name: "teach_bottle_memory",
+    description:
+      "Save a phrase→bottle mapping to THIS STORE's permanent memory (the ★ remembered system). Use ONLY when the owner explicitly asks to remember/save/set a usual ('remember that…', 'my usual X is…', 'from now on X means…'). NEVER teach from casual conversation. Before calling: know the EXACT mlcc_code — resolve it first (resolve_bottles) and, if there was any ambiguity, confirm the specific bottle with the owner. Memory is size-specific: a phrase taught with a size only fires for that size; taught without a size it fires for size-less asks.",
+    input_schema: {
+      type: "object",
+      properties: {
+        phrase: {
+          type: "string",
+          description:
+            "The owner's phrase, as they say it (e.g. 'house vodka', 'limoncello'). Keep size words OUT of the phrase — pass size separately.",
+        },
+        mlcc_code: {
+          type: "string",
+          description: "The exact MLCC product code this phrase means.",
+        },
+        size: {
+          type: "string",
+          description:
+            "Size context if the owner's rule is size-specific ('fifth', '750ml', 'half gallon'). Omit for a size-less rule.",
+        },
+      },
+      required: ["phrase", "mlcc_code"],
+    },
+  },
+  {
+    name: "list_bottle_memory",
+    description:
+      "List everything this store has taught the assistant (the ★ remembered mappings) — phrase, size, bottle, how it was learned, times used. Use for 'what do you remember', 'what have you learned', 'show my saved matches'.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "forget_bottle_memory",
+    description:
+      "Delete ONE saved phrase→bottle memory for this store. Use when the owner says forget/remove/undo a remembered mapping. Phrase (+ size if the memory was size-specific) must match what list_bottle_memory shows.",
+    input_schema: {
+      type: "object",
+      properties: {
+        phrase: { type: "string", description: "The remembered phrase to forget." },
+        size: {
+          type: "string",
+          description: "The size of the specific memory, if it was size-specific.",
+        },
+      },
+      required: ["phrase"],
     },
   },
 ];
@@ -929,6 +981,91 @@ async function toolResolveBottles(input, { supabase, storeId }) {
   };
 }
 
+/*
+ * PHASE B CHAT TEACHING (2026-07-25, built while Tony was ON THE FLOOR at
+ * Colony): the owner teaches the store's memory in plain language. Teach
+ * verifies the code exists before saving (never memorize a phantom);
+ * list/forget make every learning auditable and reversible from chat.
+ */
+async function toolTeachBottleMemory(input, { supabase, storeId }) {
+  if (!storeId) return { error: "No store in context — open the app with a store selected." };
+  const phrase = String(input?.phrase || "").trim();
+  const code = String(input?.mlcc_code || "").trim();
+  if (!phrase || !code) return { error: "teach_bottle_memory requires phrase and mlcc_code" };
+  const { data: sku, error } = await supabase
+    .from("mlcc_items")
+    .select("code, name, bottle_size_ml, bottle_size_label")
+    .eq("code", code)
+    .maybeSingle();
+  if (error) return { error: `catalog lookup failed: ${error.message}` };
+  if (!sku) {
+    return { error: `No MLCC item with code ${code} — resolve the bottle first and use its exact code.` };
+  }
+  const sizeMl = sizeFromText(String(input?.size || "")) ?? sizeFromText(phrase) ?? null;
+  const r = await recordCorrections(supabase, storeId, [
+    { name: phrase, sizeMl, mlccCode: code, source: "chat" },
+  ]);
+  if (r.saved !== 1) return { error: r.errors[0] || "save failed" };
+  return {
+    saved: true,
+    phrase: normalizePhrase(phrase),
+    size_ml: sizeMl,
+    bottle: {
+      code: sku.code,
+      name: sku.name,
+      size: sku.bottle_size_label || (sku.bottle_size_ml ? `${sku.bottle_size_ml}ml` : null),
+    },
+    note:
+      "Saved to this store's permanent memory. Next time the owner says this phrase" +
+      (sizeMl ? ` at that size` : " without a size") +
+      ", it pins ★ remembered. Confirm to the owner in ONE short sentence naming the bottle.",
+  };
+}
+
+async function toolListBottleMemory(_input, { supabase, storeId }) {
+  if (!storeId) return { error: "No store in context." };
+  const rows = await listMemory(supabase, storeId, 50);
+  if (rows.length === 0) {
+    return {
+      memories: [],
+      note: "Nothing taught yet — swaps on the resolve card and explicit 'remember…' requests both teach.",
+    };
+  }
+  const codes = [...new Set(rows.map((r) => r.mlcc_code))];
+  const { data: skus } = await supabase
+    .from("mlcc_items")
+    .select("code, name, bottle_size_label, bottle_size_ml")
+    .in("code", codes);
+  const byCode = new Map((skus ?? []).map((s) => [s.code, s]));
+  return {
+    memories: rows.map((r) => ({
+      phrase: r.phrase,
+      size_ml: r.size_ml,
+      mlcc_code: r.mlcc_code,
+      bottle_name: byCode.get(r.mlcc_code)?.name ?? null,
+      learned_from: r.source,
+      times_used: r.times_used,
+    })),
+  };
+}
+
+async function toolForgetBottleMemory(input, { supabase, storeId }) {
+  if (!storeId) return { error: "No store in context." };
+  const phrase = String(input?.phrase || "").trim();
+  if (!phrase) return { error: "forget_bottle_memory requires phrase" };
+  const sizeMl = sizeFromText(String(input?.size || "")) ?? sizeFromText(phrase) ?? null;
+  const r = await forgetMemory(supabase, storeId, phrase, sizeMl);
+  return r.deleted
+    ? { deleted: true }
+    : {
+        deleted: false,
+        note:
+          "No memory matched that phrase" +
+          (sizeMl ? " at that size" : " (size-less)") +
+          ". Call list_bottle_memory and match the exact saved phrase/size.",
+      };
+}
+
 const TOOL_IMPL = {
   query_catalog: toolQueryCatalog,
   resolve_bottles: toolResolveBottles,
@@ -936,6 +1073,9 @@ const TOOL_IMPL = {
   price_quote: toolPriceQuote,
   query_order_history: toolQueryOrderHistory,
   query_inventory: toolQueryInventory,
+  teach_bottle_memory: toolTeachBottleMemory,
+  list_bottle_memory: toolListBottleMemory,
+  forget_bottle_memory: toolForgetBottleMemory,
   check_order_quantity: toolCheckOrderQuantity,
   validate_cart: toolValidateCart,
 };

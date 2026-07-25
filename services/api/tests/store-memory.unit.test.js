@@ -4,6 +4,8 @@ import {
   memoryKey,
   fetchMemoryIndex,
   recordCorrections,
+  listMemory,
+  forgetMemory,
 } from "../src/lib/store-memory.js";
 
 /**
@@ -119,5 +121,65 @@ describe("store-memory — recordCorrections (learn-on-swap)", () => {
     expect(r.saved).toBe(0);
     expect(r.errors).toHaveLength(0);
     expect(calls.inserts).toHaveLength(0);
+  });
+});
+
+/** Chainable fake for the Phase B list/forget shapes. */
+function fakePhaseBDb({ listRows = [], deleteMatches = [] } = {}) {
+  const calls = { deletes: [] };
+  const client = {
+    from: () => ({
+      select: () => {
+        const chain = {
+          eq: () => chain,
+          order: () => chain,
+          limit: () => Promise.resolve({ data: listRows, error: null }),
+        };
+        return chain;
+      },
+      delete: () => {
+        const rec = { eqs: {} };
+        calls.deletes.push(rec);
+        const chain = {
+          eq: (col, val) => {
+            rec.eqs[col] = val;
+            return chain;
+          },
+          is: (col, val) => {
+            rec.eqs[col] = val;
+            return chain;
+          },
+          select: () => Promise.resolve({ data: deleteMatches, error: null }),
+        };
+        return chain;
+      },
+    }),
+  };
+  return { client, calls };
+}
+
+describe("store-memory — Phase B chat teaching (list/forget)", () => {
+  it("listMemory returns rows; empty store → empty array, no store → no query", async () => {
+    const { client } = fakePhaseBDb({
+      listRows: [{ phrase: "limoncello", size_ml: 750, mlcc_code: "19366", source: "card_swap", times_used: 2 }],
+    });
+    const rows = await listMemory(client, "store-1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].mlcc_code).toBe("19366");
+    expect(await listMemory(client, null)).toEqual([]);
+  });
+
+  it("forgetMemory deletes by NORMALIZED phrase + size key and reports truthfully", async () => {
+    const { client, calls } = fakePhaseBDb({ deleteMatches: [{ id: "m1" }] });
+    const r = await forgetMemory(client, "store-1", "Tito's Minis", 50);
+    expect(r.deleted).toBe(true);
+    expect(calls.deletes[0].eqs.phrase).toBe("titos minis"); // apostrophe-proof key
+    expect(calls.deletes[0].eqs.size_ml).toBe(50);
+  });
+
+  it("forgetMemory on a non-existent memory reports deleted:false (never a false success)", async () => {
+    const { client } = fakePhaseBDb({ deleteMatches: [] });
+    const r = await forgetMemory(client, "store-1", "unicorn juice", null);
+    expect(r.deleted).toBe(false);
   });
 });

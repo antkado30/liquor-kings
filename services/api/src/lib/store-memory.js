@@ -122,6 +122,42 @@ export async function recordCorrections(supabase, storeId, corrections) {
 }
 
 /**
+ * List this store's remembered mappings (Phase B chat teaching, 2026-07-25).
+ * Newest first, capped. Read-only.
+ */
+export async function listMemory(supabase, storeId, limit = 50) {
+  if (!storeId) return [];
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select("phrase, size_ml, mlcc_code, source, times_used, updated_at")
+    .eq("store_id", storeId)
+    .order("updated_at", { ascending: false })
+    .limit(Math.min(Math.max(1, limit), 100));
+  if (error) {
+    console.warn(`[store-memory] list failed (soft): ${error.message}`);
+    return [];
+  }
+  return data ?? [];
+}
+
+/**
+ * Forget ONE remembered mapping (Phase B). Key = normalized phrase + size
+ * (null size targets the size-less memory). Returns { deleted: boolean }.
+ */
+export async function forgetMemory(supabase, storeId, name, sizeMl) {
+  const phrase = normalizePhrase(name);
+  if (!storeId || !phrase) return { deleted: false };
+  let q = supabase.from(TABLE).delete().eq("store_id", storeId).eq("phrase", phrase);
+  q = sizeMl == null ? q.is("size_ml", null) : q.eq("size_ml", sizeMl);
+  const { data, error } = await q.select("id");
+  if (error) {
+    console.warn(`[store-memory] forget failed: ${error.message}`);
+    return { deleted: false, error: error.message };
+  }
+  return { deleted: (data ?? []).length > 0 };
+}
+
+/**
  * Bump usage counters for memory rows that just fired (fire-and-forget —
  * callers must NOT await critical-path on this).
  */
