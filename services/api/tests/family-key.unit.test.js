@@ -115,7 +115,10 @@ describe("family-key — combos and safety rails", () => {
   });
 
   it("case- and whitespace-insensitive; empty-safe", () => {
-    expect(familyKeyOf("  tito's   handmade  vodka  750ml ")).toBe("TITO'S HANDMADE VODKA");
+    // 2026-07-25 canonicalization: apostrophes are stripped from keys, so
+    // Tito's-with-apostrophe and MLCC's usual TITOS spelling are ONE family
+    // (this exact class split D'USSE and DRAGON'S in the sibling audit).
+    expect(familyKeyOf("  tito's   handmade  vodka  750ml ")).toBe("TITOS HANDMADE VODKA");
     expect(familyKeyOf("")).toBe("");
     expect(familyKeyOf(null)).toBe("");
     expect(familyKeyOf(undefined)).toBe("");
@@ -124,5 +127,50 @@ describe("family-key — combos and safety rails", () => {
   it("keeps an audit trail of every stripped token", () => {
     const id = computeFamilyIdentity("JACK DANIELS OLD 7 BLACK PL PT");
     expect(id.strippedTokens).toEqual(["PT", "PL"]);
+  });
+});
+
+/**
+ * CANONICALIZATION (2026-07-25) — the sibling audit found 13 split families,
+ * every one a punctuation variant MLCC ITSELF typed two ways across sizes.
+ * Each observed class is pinned here so it can never split again, alongside
+ * the guarantees that canonicalization must never cost us.
+ */
+describe("canonicalizeFamilyKey — the 13 observed split classes", () => {
+  const same = (a, b) => expect(familyKeyOf(a)).toBe(familyKeyOf(b));
+
+  it("apostrophes never split a family (DRAGON'S, D'USSE, S'MOREGASM, BARTENDER'S)", () => {
+    same("DRAGON'S MILK OLD FASHIONED", "DRAGONS MILK OLD FASHIONED");
+    same("D'USSE VSOP", "DUSSE VSOP");
+    same("REVEL STOKE SMOREGASM TOASTED SMORES", "REVEL STOKE S'MOREGASM TOASTED SMORES");
+    same("BARTENDERS PINA COLADA", "BARTENDER'S PINA COLADA");
+    same("DR MCGILLICUDDYS WILD GRAPE", "DR MCGILLICUDDY'S WILD GRAPE");
+  });
+
+  it("periods never split (NO. 8) while decimals survive (1.75L)", () => {
+    same("STADE'S RUM BARBADOS BOND NO. 8", "STADE'S RUM BARBADOS BOND NO 8");
+    expect(familyKeyOf("TITOS HANDMADE VODKA 1.75L")).toBe("TITOS HANDMADE VODKA");
+  });
+
+  it("hyphens and age spacing never split (OLD-FASHIONED, -4 YR vs -4YR)", () => {
+    same("SLOW & LOW PROPER RYE OLD FASHIONED", "SLOW & LOW PROPER RYE OLD-FASHIONED");
+    same("OLE SMOKY STRAIGHT BOURBON-4 YR", "OLE SMOKY STRAIGHT BOURBON-4YR");
+  });
+
+  it("spaced single letters fuse (HENNESSY X O, MEUKOW V S, (P R))", () => {
+    same("HENNESSY XO", "HENNESSY X O");
+    same("MEUKOW VS", "MEUKOW V S");
+    same("CAPT MORGAN SPICED RUM (PR)", "CAPT MORGAN SPICED RUM (P R)");
+    same("CASTILLO SILVER LABEL(P R)", "CASTILLO SILVER LABEL (P R)");
+  });
+
+  it("canonicalization costs NOTHING pinned: proofs, ages, editions, flavors stay apart", () => {
+    expect(familyKeyOf("SMIRNOFF 80")).not.toBe(familyKeyOf("SMIRNOFF 100"));
+    expect(familyKeyOf("GLENFARCLAS 10 YR")).not.toBe(familyKeyOf("GLENFARCLAS 25 YR"));
+    expect(familyKeyOf("1800 SILVER LIONS EDITION")).not.toBe(familyKeyOf("1800 SILVER"));
+    expect(familyKeyOf("JACK DANIELS TENN HONEY PT")).not.toBe(
+      familyKeyOf("JACK DANIELS OLD 7 BLACK PT"),
+    );
+    expect(familyKeyOf("SEAGRAMS 7")).toBe("SEAGRAMS 7");
   });
 });

@@ -14,12 +14,14 @@
  * extracted `container` / `packCount` become DATA the UI must display on
  * each size chip so nobody ever orders glass and receives plastic.
  *
- * DELIBERATELY UNWIRED as of 2026-07-01: nothing imports this in production
- * yet. It ships to the live /items/:code/family path only after
- * scripts/audit-family-grouping.mjs grades it against the full prod catalog
- * (split-rate ≈ 0, zero eyeballed false merges). Never edit the live
- * mlcc-product-family.js in the same change that lands this — swap is its
- * own reviewed step.
+ * WIRED as of 2026-07-24 (stale note fixed 2026-07-25 per no-drift #27):
+ * the family_key COLUMN this module computes (via backfill + the price-book
+ * ingestor) is read by the browse-families RPCs and the assistant's
+ * size-flip sibling fetch. Changing this function therefore requires:
+ * tests green → deploy → re-run scripts/backfill-family-key.mjs --apply
+ * (Tony) → --verify → scripts/audit-family-siblings re-run (stale 0,
+ * splits 0). The live mlcc-product-family.js module remains separate —
+ * never edit it in the same change.
  *
  * Design notes:
  * - MLCC names are UPPERCASE-ish, space-separated, with trailing qualifier
@@ -197,7 +199,7 @@ export function computeFamilyIdentity(rawName) {
     if (s === before) break; // stable — nothing more to strip
   }
 
-  const familyKey = s.replace(/\s+/g, " ").trim().toUpperCase();
+  const familyKey = canonicalizeFamilyKey(s);
   return {
     familyKey,
     container: container ?? "glass",
@@ -205,6 +207,45 @@ export function computeFamilyIdentity(rawName) {
     isCombo,
     strippedTokens,
   };
+}
+
+/**
+ * canonicalizeFamilyKey — kill MLCC's OWN punctuation inconsistency
+ * (2026-07-25 sibling audit: 13 split families, every one a punctuation
+ * variant MLCC typed two ways across sizes):
+ *   apostrophes    DRAGON'S ≡ DRAGONS, D'USSE ≡ DUSSE, S'MOREGASM ≡ SMOREGASM
+ *   periods        "NO. 8" ≡ "NO 8"   (decimals like 1.75 are protected)
+ *   hyphens        OLD-FASHIONED ≡ OLD FASHIONED, "-4YR" ≡ "-4 YR"
+ *   letter pairs   "X O" ≡ "XO", "V S" ≡ "VS" (fused only when BOTH tokens
+ *                  are single letters — "MR B" is untouched)
+ *   age tokens     "4 YR" ≡ "4YR"
+ *   parens         "LABEL(P R)" ≡ "LABEL (P R)" ≡ "LABEL (PR)"
+ * Applied to the FINAL key only — the tail-strip loop above still sees the
+ * raw name, so size/container/pack detection is unchanged.
+ * @param {string | null | undefined} raw
+ */
+export function canonicalizeFamilyKey(raw) {
+  let s = String(raw ?? "");
+  // Protect decimal points, drop every other period, restore decimals.
+  s = s.replace(/(\d)\.(\d)/g, "$1__DOT__$2").replace(/\./g, " ").replace(/__DOT__/g, ".");
+  // Apostrophes vanish WITHOUT leaving a space (DRAGON'S → DRAGONS).
+  s = s.replace(/['’]/g, "");
+  // Hyphens are spaces.
+  s = s.replace(/-/g, " ");
+  // Parens get breathing room so their contents tokenize ("LABEL(P R)").
+  s = s.replace(/\(/g, " ( ").replace(/\)/g, " ) ");
+  s = s.replace(/\s+/g, " ").trim().toUpperCase();
+  // Fuse runs of single-letter tokens: "X O"→"XO", "P R"→"PR", "V S O P"→"VSOP".
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/\b([A-Z]) ([A-Z])\b/g, "$1$2");
+  } while (s !== prev);
+  // Age tokens fuse: "4 YR" → "4YR" (hyphen case arrives here as "4 YR" too).
+  s = s.replace(/\b(\d+) (YRS?)\b/g, "$1$2");
+  // Snug the parens back: "( PR )" → "(PR)".
+  s = s.replace(/\( /g, "(").replace(/ \)/g, ")");
+  return s.replace(/\s+/g, " ").trim();
 }
 
 /**
