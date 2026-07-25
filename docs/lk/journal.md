@@ -4,6 +4,27 @@ Founder's log. Milestone entries — the moments that mattered.
 
 ---
 
+## Entry #6 — MOAT DAY (2026-07-24→25)
+
+The day the app started LEARNING. Morning: the resolve card became a receipt
+— every matched bottle's name, size, price, code visible at a glance (the
+dropdown-tapping misery, dead). Afternoon: Tony asked THE question — "does
+this work for all 14,000 bottles or just mainstream ones?" — and got a
+measured answer: a seeded catalog-wide stress harness, two calibration
+rounds, and a final board reading HIGH-WRONG 0.0% in every phrasing class.
+A wrong bottle can no longer wear a green badge anywhere in the catalog.
+Night: THE MOAT went live — store_resolver_memory. Tony swapped Lim→Lucina
+limoncello once; the very next ask came back "LUCINA · ★ REMEMBERED — that's
+your usual." Colony's brain formed its first memory in production. Then the
+size-flip chip (every size the family carries, one tap), and at 1am a full
+catalog-integrity audit: 13 split families found (MLCC's own punctuation),
+canonicalization built + pinned, 2,611-row backfill applied and verified —
+final board all zeros, zero false merges, every bottle provably coded to one
+law. API 680/0, scanner 79/0. "We are not banking tn im feeling a late night
+baby" — and the late night delivered the whole moat.
+
+---
+
 ## Entry #5 — The mega session (2026-07-23)
 
 One night, an absurd amount of ground. Cold check landed at the MILO floor

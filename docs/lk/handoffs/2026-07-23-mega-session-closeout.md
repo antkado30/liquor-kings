@@ -1,5 +1,10 @@
 # Handoff — 2026-07-23 EOD (the mega session)
 
+> **⚠️ SUPERSEDED 2026-07-25: MOAT DAY shipped the glanceable card, the
+> catalog stress calibration (HIGH-WRONG 0.0%), store memory Phase A (live,
+> first ★ proven), size flip, and the family-integrity 100% board. Current
+> truth + next mission: `2026-07-24-moat-day-closeout.md`.**
+
 Paste this whole file into a new chat to pick up exactly where we left off.
 Supersedes `2026-07-22-engine-submit-closeout.md`. For a fresh chat, read the
 Phase-0 list in `2026-07-19-BOOT-PROMPT.md` first, then this, then

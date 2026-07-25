@@ -30,9 +30,22 @@ if broken, cost real money, real trust, or a real order.
 4. **Verify before deleting ANYTHING.** The system is more connected than it
    looks (proven 7/3 — "obviously dead" tables/scripts were live). Grep every
    usage first. Kill only what's provably unused.
-5. **A real order submit is a SUPERVISED go-live only** — triple-gate
-   (`mode==="submit"` && `store.allow_order_submission` && env
-   `LK_ALLOW_ORDER_SUBMISSION`) + the go-live runbook. Never arm casually.
+5. **A real order submit is a SUPERVISED go-live only.** Gates (2026-07-23
+   arming model — docs/lk/architecture/submit-arming-model.md): run_type
+   `rpa_run` + `mode==="submit"` (set only by the deliberate check →
+   place-gate → confirm flow) + `store.allow_order_submission===true` ("this
+   is a real store", set once). Env `LK_ALLOW_ORDER_SUBMISSION` is now a
+   BREAK-GLASS KILL only — `"no"` hard-disables fleet-wide; its absence
+   permits. A check/preview can NEVER reach the submit machinery
+   (`submit-guard.js`, fail-closed + pinned). First real order under any
+   changed model = watched once, fly logs open, numbers vs the MLCC email.
+6. **DB access discipline (amended 2026-07-25 after Tony's rules-check):**
+   ad-hoc/manual queries stay count-only or ≤1,000 rows, and every script
+   prints the target host first. DATED, READ-ONLY audit scripts
+   (audit-*/stress-*/probe-*) MAY page the full catalog — that is their job.
+   Writes NEVER happen ad-hoc: repo script or migration only, dry-run first
+   where supported, Tony runs it, verified after (the 2026-07-25 family
+   backfill — dry-run → --apply → --verify → re-audit — is the template).
 
 ## 2. HOW WE WORK — the workflow (Tony + Fable)
 
