@@ -4,6 +4,17 @@ import type { ResolvedOrderLine } from "../api/assistant";
 import { ResolvedOrderCard } from "./ResolvedOrderCard";
 import { downscaleImageFile } from "../lib/downscaleImage";
 import type { CartContextValue } from "../hooks/useCart";
+import { getCurrentStoreId } from "../lib/currentStore";
+import {
+  deleteChat,
+  listChats,
+  loadActiveChat,
+  openChat,
+  saveActiveChat,
+  startNewChat,
+  toStored,
+  type StoredChat,
+} from "../lib/assistant-chat-store";
 import {
   IconAlert,
   IconCamera,
@@ -23,6 +34,9 @@ type Message = {
    * must show exactly what was sent (doctrine: the app never lies).
    */
   imagePreviews?: string[];
+  /** Restored-from-history bubbles: photos were stripped on save (storage
+      budget) — show an honest "N photos" chip instead (2026-07-25). */
+  photoCount?: number;
   /** Bottles the assistant resolved → renders an inline Add-to-cart card. */
   resolvedOrder?: ResolvedOrderLine[];
 };
@@ -293,7 +307,21 @@ type AssistantChatProps = {
  * call to POST /assistant/ask; conversation is client-side only.
  */
 export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Persistence (2026-07-25): the chat survives tab switches and app
+  // restarts — restored from device storage per store on mount.
+  const storeIdRef = useRef<string | null>(null);
+  if (storeIdRef.current === null) {
+    try {
+      storeIdRef.current = getCurrentStoreId() ?? "";
+    } catch {
+      storeIdRef.current = "";
+    }
+  }
+  const [messages, setMessages] = useState<Message[]>(
+    () => loadActiveChat(storeIdRef.current) as Message[],
+  );
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyChats, setHistoryChats] = useState<StoredChat[]>([]);
   const [input, setInput] = useState("");
   // Multi-photo (2026-07-17): a real weekly order is a page or two of
   // handwriting plus a few shelf shots. Capped to match the server.
@@ -306,7 +334,40 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-  const nextIdRef = useRef(1);
+  // Start past any restored ids so restored + new messages never collide.
+  const nextIdRef = useRef(messages.reduce((max, m) => Math.max(max, m.id), 0) + 1);
+
+  // Persist every change (photos stripped inside toStored) — fails soft.
+  useEffect(() => {
+    if (messages.length > 0) {
+      saveActiveChat(storeIdRef.current, messages.map(toStored));
+    }
+  }, [messages]);
+
+  const handleNewChat = () => {
+    startNewChat(storeIdRef.current);
+    setMessages([]);
+    setAskError(null);
+    setFailedAsk(null);
+    setHistoryOpen(false);
+  };
+  const handleOpenHistory = () => {
+    setHistoryChats(listChats(storeIdRef.current));
+    setHistoryOpen(true);
+  };
+  const handleOpenChat = (id: string) => {
+    const msgs = openChat(storeIdRef.current, id) as Message[];
+    setMessages(msgs);
+    nextIdRef.current = msgs.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+    setHistoryOpen(false);
+    setAskError(null);
+    setFailedAsk(null);
+  };
+  const handleDeleteChat = (id: string) => {
+    const wasActive = deleteChat(storeIdRef.current, id);
+    setHistoryChats(listChats(storeIdRef.current));
+    if (wasActive) setMessages([]);
+  };
 
   const suggestions = useMemo(
     () =>
@@ -439,6 +500,72 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
     <div
       className={`assistant-chat${layout === "page" ? " assistant-chat--page" : ""}`}
     >
+      {/* Chat controls (2026-07-25): the chat persists across tab switches;
+          New chat starts fresh, History reopens or deletes past chats. */}
+      <div className="assistant-controls">
+        <button
+          type="button"
+          className="assistant-controls__btn"
+          onClick={handleOpenHistory}
+        >
+          History
+        </button>
+        {messages.length > 0 && (
+          <button
+            type="button"
+            className="assistant-controls__btn assistant-controls__btn--new"
+            onClick={handleNewChat}
+          >
+            + New chat
+          </button>
+        )}
+      </div>
+      {historyOpen && (
+        <div className="assistant-history" role="dialog" aria-label="Chat history">
+          <div className="assistant-history__head">
+            <span className="assistant-history__title">Past chats</span>
+            <button
+              type="button"
+              className="assistant-controls__btn"
+              onClick={() => setHistoryOpen(false)}
+            >
+              Close
+            </button>
+          </div>
+          {historyChats.length === 0 ? (
+            <p className="muted assistant-history__empty">
+              No saved chats yet — conversations save automatically as you use them.
+            </p>
+          ) : (
+            historyChats.map((c) => (
+              <div key={c.id} className="assistant-history__row">
+                <button
+                  type="button"
+                  className="assistant-history__open"
+                  onClick={() => handleOpenChat(c.id)}
+                >
+                  <span className="assistant-history__name">{c.title}</span>
+                  <span className="assistant-history__meta muted">
+                    {new Date(c.updatedAt).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    })}{" "}
+                    · {c.messages.length} messages
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="assistant-history__delete"
+                  aria-label={`Delete chat ${c.title}`}
+                  onClick={() => handleDeleteChat(c.id)}
+                >
+                  ✕
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
       <div
         className="assistant-messages"
         ref={listRef}
@@ -486,6 +613,10 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
                         className="assistant-msg-image"
                       />
                     ))}
+                  </div>
+                ) : m.photoCount ? (
+                  <div className="assistant-msg-photochip">
+                    📷 {m.photoCount} photo{m.photoCount === 1 ? "" : "s"} (from history)
                   </div>
                 ) : null}
                 {m.role === "assistant" ? (

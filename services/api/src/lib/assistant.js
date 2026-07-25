@@ -1324,7 +1324,19 @@ export async function askAssistant({
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: maxTokens,
-      system: SYSTEM_PROMPT,
+      /*
+       * PROMPT CACHING (2026-07-25, Tony's unit-economics question at
+       * Colony): tools + system prompt are the huge STATIC prefix of every
+       * call — many thousands of tokens, identical every time. The
+       * cache_control breakpoint on the system block caches the whole
+       * prefix (tools included, since they precede system in the prompt),
+       * cutting that slice of input cost ~90% on every cache hit — which is
+       * every call after the first for ~5 minutes, i.e. virtually the whole
+       * tool-use loop and every rapid-fire store conversation.
+       */
+      system: [
+        { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+      ],
       tools: TOOLS,
       messages,
     });
