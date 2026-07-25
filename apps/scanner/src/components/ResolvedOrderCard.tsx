@@ -89,6 +89,16 @@ interface Row {
   /** The resolver's original pick — a different final choice = a correction
       worth teaching the store's memory (learn-on-swap). */
   originalBestCode: string | null;
+  originalBestSizeMl: number | null;
+  /** Size flip (2026-07-24): the family's other sizes; sizeIdx -1 = as matched. */
+  sizes: ResolvedCandidate[];
+  sizeIdx: number;
+}
+
+/** The bottle a row will actually add: size flip wins, else the chosen match. */
+function finalCandidate(r: Row): ResolvedCandidate | null {
+  if (r.sizeIdx >= 0 && r.sizes[r.sizeIdx]) return r.sizes[r.sizeIdx];
+  return r.chosenIdx >= 0 ? (r.candidates[r.chosenIdx] ?? null) : null;
 }
 
 /** Initial qty: the server's case suggestion wins, else the requested qty, else 1. */
@@ -131,6 +141,9 @@ export function ResolvedOrderCard({
           caseIntent: l.case_intent === true,
           remembered: l.remembered === true,
           originalBestCode: l.best?.code ?? null,
+          originalBestSizeMl: l.best?.bottle_size_ml ?? null,
+          sizes: Array.isArray(l.sizes) ? l.sizes : [],
+          sizeIdx: -1,
         };
       }),
   );
@@ -146,9 +159,11 @@ export function ResolvedOrderCard({
   }
 
   /** Swap keeps the case suggestion honest: if qty still equals the OLD
-      candidate's untouched case suggestion, retarget it to the new one. */
+      candidate's untouched case suggestion, retarget it to the new one.
+      A brand swap also clears any size flip — the sizes list belongs to the
+      resolver's matched family, not the newly chosen brand. */
   function swapChoice(r: Row, nextIdx: number) {
-    const prev = r.chosenIdx >= 0 ? r.candidates[r.chosenIdx] : null;
+    const prev = finalCandidate(r);
     const next = nextIdx >= 0 ? r.candidates[nextIdx] : null;
     let qty = r.qty;
     if (
@@ -159,7 +174,27 @@ export function ResolvedOrderCard({
     ) {
       qty = next.case_size;
     }
-    update(r.key, { chosenIdx: nextIdx, qty });
+    update(r.key, { chosenIdx: nextIdx, qty, sizeIdx: -1 });
+  }
+
+  /** Size flip (2026-07-24): switch the line to another size of the SAME
+      product family. Case suggestion retargets like a swap. */
+  function sizeChoice(r: Row, idx: number) {
+    const prev = finalCandidate(r);
+    // Picking the size that IS the current match = back to "as matched".
+    const current = r.chosenIdx >= 0 ? r.candidates[r.chosenIdx] : null;
+    const normalized = idx >= 0 && r.sizes[idx]?.code === current?.code ? -1 : idx;
+    const next = normalized >= 0 ? r.sizes[normalized] : current;
+    let qty = r.qty;
+    if (
+      r.caseIntent &&
+      prev?.case_size != null &&
+      next?.case_size != null &&
+      r.qty === prev.case_size
+    ) {
+      qty = next.case_size;
+    }
+    update(r.key, { sizeIdx: normalized, qty });
   }
 
   function addAll() {
@@ -171,8 +206,7 @@ export function ResolvedOrderCard({
       mlcc_code: string;
     }[] = [];
     for (const r of rows) {
-      if (r.chosenIdx < 0) continue;
-      const c = r.candidates[r.chosenIdx];
+      const c = finalCandidate(r);
       if (!c) continue;
       // SET semantics, not merge-add: if this code is already in the cart (e.g.
       // from an earlier card in this same conversation), set it to the card's
@@ -185,8 +219,14 @@ export function ResolvedOrderCard({
       // LEARN-ON-SWAP (the moat, 2026-07-24, Tony's call: every swap teaches
       // silently): choosing a DIFFERENT bottle than the resolver's pick is a
       // correction — teach the store's memory so next time this phrase pins
-      // "★ remembered". Choosing the default teaches nothing.
-      if (r.originalBestCode && c.code !== r.originalBestCode) {
+      // "★ remembered". Choosing the default teaches nothing. GUARD: a SIZE
+      // flip never teaches — the phrase's spoken size ("fifth") must never be
+      // re-mapped to a different-size bottle by a one-off grab.
+      if (
+        r.originalBestCode &&
+        c.code !== r.originalBestCode &&
+        c.bottle_size_ml === r.originalBestSizeMl
+      ) {
         corrections.push({
           name: r.requestedName,
           size: r.requestedSize,
@@ -238,7 +278,7 @@ export function ResolvedOrderCard({
       <div className="bulkadd-list">
         {rows.map((r) => {
           const conf = CONF[r.confidence];
-          const chosen = r.chosenIdx >= 0 ? r.candidates[r.chosenIdx] : null;
+          const chosen = finalCandidate(r);
           const cls =
             r.candidates.length === 0
               ? "bulkadd-row bulkadd-row--none"
@@ -337,6 +377,33 @@ export function ResolvedOrderCard({
                       }
                     />
                   </div>
+                  {/* SIZE FLIP (2026-07-24): every size MLCC carries of this
+                      family — grab the 375 alongside your usual 750 without
+                      leaving the card. Hidden after a brand swap (the sizes
+                      belong to the matched family). */}
+                  {r.sizes.length > 1 && r.chosenIdx === 0 && (
+                    <div className="bulkadd-swap">
+                      <span className="bulkadd-swap-label">
+                        Switch size ({r.sizes.length} carried) ⌄
+                      </span>
+                      <select
+                        className="bulkadd-swap-select"
+                        aria-label={`Switch size for ${r.requestedName}`}
+                        value={
+                          r.sizeIdx >= 0
+                            ? r.sizeIdx
+                            : r.sizes.findIndex((s) => s.code === chosen.code)
+                        }
+                        onChange={(e) => sizeChoice(r, Number(e.target.value))}
+                      >
+                        {r.sizes.map((s, i) => (
+                          <option key={s.code} value={i}>
+                            {s.code} · {sizeLabel(s)} · {money(s.licensee_price)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </>
               ) : (
                 <>

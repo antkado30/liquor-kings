@@ -310,8 +310,10 @@ export function scoreCandidate(name, terms, prefer, extra = {}) {
 // container + pack_count (2026-07-12): identity truth for the verify card —
 // a 12-pack of minis and a single mini share size+material but are different
 // orderable products; the AI's verify screen must say which one it matched.
+// family_key added 2026-07-24 (size-flip on the resolve card): lets the
+// assistant batch-fetch a matched bottle's sibling sizes in one query.
 const SELECT_COLS =
-  "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price,container,pack_count,is_combo";
+  "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price,container,pack_count,is_combo,family_key";
 
 /**
  * Resolve one parsed order line to MLCC candidates.

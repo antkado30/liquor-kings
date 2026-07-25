@@ -138,6 +138,8 @@ export interface ResolvedCandidate {
       12-pack from a single and plastic from glass BEFORE add-to-cart. */
   container?: string | null;
   pack_count?: number | null;
+  /** Family identity (2026-07-24, size flip): same key = same product line. */
+  family_key?: string | null;
 }
 
 /** One line from the chat's resolve_bottles tool (in-chat add-to-cart card). */
@@ -160,6 +162,9 @@ export interface ResolvedOrderLine {
   /** Store memory (2026-07-24, the moat): this store previously corrected
       this exact phrase — the match is their own saved choice, pinned. */
   remembered?: boolean;
+  /** Size flip (2026-07-24): every size MLCC carries of the matched
+      bottle's family — the card can flip the line between them. */
+  sizes?: ResolvedCandidate[];
 }
 
 /** One learned correction: what the owner SAID → the code they chose. */

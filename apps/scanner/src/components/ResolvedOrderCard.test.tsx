@@ -211,6 +211,39 @@ describe("ResolvedOrderCard — glanceability", () => {
     expect(recordAssistantMemory).not.toHaveBeenCalled();
   });
 
+  // ── Size flip (2026-07-24) ───────────────────────────────────────────────
+  const sizesLine = () =>
+    line({
+      sizes: [
+        candidate({ code: "61099", name: "SMIRNOFF 80 PL", bottle_size_ml: 375, bottle_size_label: "375 ML", licensee_price: 4.5 }),
+        candidate(), // the matched 200ml, code 61102
+        candidate({ code: "61103", name: "SMIRNOFF 80", bottle_size_ml: 750, bottle_size_label: "750 ML", licensee_price: 9.99 }),
+      ],
+    });
+
+  it("shows the size chip when the family has other sizes", () => {
+    render(<ResolvedOrderCard lines={[sizesLine()]} cart={cart} />);
+    expect(screen.getByText(/Switch size \(3 carried\)/)).toBeTruthy();
+  });
+
+  it("flipping size updates the truth line and adds the flipped SKU", () => {
+    render(<ResolvedOrderCard lines={[sizesLine()]} cart={cart} />);
+    fireEvent.change(screen.getByLabelText(/Switch size for Smirnoff/), { target: { value: "2" } });
+    expect(screen.getByText("750 ML")).toBeTruthy(); // truth line flipped
+    expect(screen.getByText("$9.99")).toBeTruthy();
+    expect(screen.getByText("#61103")).toBeTruthy();
+    fireEvent.click(screen.getByText(/Add 1 to cart/));
+    expect(addItem.mock.calls[0][0].code).toBe("61103");
+  });
+
+  it("a SIZE flip never teaches the memory (spoken size wins)", () => {
+    render(<ResolvedOrderCard lines={[sizesLine()]} cart={cart} />);
+    fireEvent.change(screen.getByLabelText(/Switch size for Smirnoff/), { target: { value: "0" } });
+    fireEvent.click(screen.getByText(/Add 1 to cart/));
+    expect(addItem.mock.calls[0][0].code).toBe("61099"); // flipped SKU added…
+    expect(recordAssistantMemory).not.toHaveBeenCalled(); // …but nothing learned
+  });
+
   it("the done-state is a RECEIPT — qty × name · size, not a bare count (2026-07-24)", () => {
     render(
       <ResolvedOrderCard

@@ -702,6 +702,14 @@ async function toolResolveBottles(input, { supabase, storeId }) {
           base_price: c.base_price,
           min_shelf_price: c.min_shelf_price,
           proof: c.proof,
+          // Identity truth (2026-07-24): container/pack ride to the card so
+          // its size labels can say "200 ML PL" / "×4PK" honestly — they
+          // were being dropped here while the resolver selected them.
+          container: c.container ?? null,
+          pack_count: c.pack_count ?? null,
+          // Family identity (2026-07-24, size flip): lets the post-resolve
+          // pass attach this bottle's sibling sizes.
+          family_key: c.family_key ?? null,
         }
       : null;
   /*
@@ -747,7 +755,7 @@ async function toolResolveBottles(input, { supabase, storeId }) {
       const { data: skuRows, error: skuErr } = await supabase
         .from("mlcc_items")
         .select(
-          "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price",
+          "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price,container,pack_count,family_key",
         )
         .in("code", pinnedCodes);
       if (skuErr) {
@@ -852,6 +860,50 @@ async function toolResolveBottles(input, { supabase, storeId }) {
       }),
     );
     results.push(...wave);
+  }
+  /*
+   * SIZE FLIP (2026-07-24, Tony: "switch between the sizes... what sizes do
+   * you usually do"): one batched family query attaches each matched
+   * bottle's sibling sizes (same family_key, active, combos dropped) so the
+   * card can flip a line between the sizes MLCC actually carries — prices
+   * and codes included. Fails SOFT: no sizes attached = card just shows no
+   * size chip.
+   */
+  const famKeys = [
+    ...new Set(results.map((r) => r?.best?.family_key).filter(Boolean)),
+  ];
+  if (famKeys.length > 0) {
+    const { data: famRows, error: famErr } = await supabase
+      .from("mlcc_items")
+      .select(
+        "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price,container,pack_count,is_combo,family_key",
+      )
+      .in("family_key", famKeys)
+      .eq("is_active", true)
+      .limit(400);
+    if (famErr) {
+      console.warn(`[assistant] sibling-sizes fetch failed (soft): ${famErr.message}`);
+    } else {
+      const byFam = new Map();
+      for (const row of famRows || []) {
+        if (row.is_combo === true) continue; // combos never listed as a "size"
+        if (!byFam.has(row.family_key)) byFam.set(row.family_key, []);
+        byFam.get(row.family_key).push(row);
+      }
+      for (const r of results) {
+        const sibs = r?.best?.family_key ? byFam.get(r.best.family_key) : null;
+        if (sibs && sibs.length > 1) {
+          r.sizes = sibs
+            .sort(
+              (a, b) =>
+                (a.bottle_size_ml ?? 0) - (b.bottle_size_ml ?? 0) ||
+                String(a.code).localeCompare(String(b.code)),
+            )
+            .slice(0, 10)
+            .map(fmt);
+        }
+      }
+    }
   }
   // Usage counters are advisory — never block the reply on them.
   if (usedMemoryRowIds.length > 0) {
