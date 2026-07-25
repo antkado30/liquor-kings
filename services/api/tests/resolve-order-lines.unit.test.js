@@ -508,6 +508,45 @@ describe("confidence calibration (2026-07-24)", () => {
     expect(s).toBeLessThan(60); // length tiebreak only — zero missing-term penalties
   });
 
+  // ── NO-SIZE CONFIDENCE (2026-07-25, the connoisseur rematch polish) ──────
+  it("a uniquely-determined bottle earns HIGH without a spoken size (Midwinter Dram)", async () => {
+    const rows = [
+      { code: "12236", name: "HIGH WEST MIDWINTER NIGHTS DRAM", bottle_size_ml: 750, is_combo: false },
+      { code: "11111", name: "HIGH WEST RENDEZVOUS RYE", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "High West Midwinter Nights Dram" });
+    expect(r.best.code).toBe("12236");
+    expect(r.confidence).toBe("high"); // all words covered, one size exists, clear win
+  });
+
+  it("right product in MULTIPLE sizes without a spoken size = medium (owner picks via the chip)", async () => {
+    const rows = [
+      { code: "7128", name: "TITO'S HANDMADE VODKA", bottle_size_ml: 200, is_combo: false },
+      { code: "2980", name: "TITO'S HANDMADE VODKA", bottle_size_ml: 750, is_combo: false },
+    ];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "Titos handmade vodka" });
+    expect(r.confidence).toBe("medium");
+  });
+
+  it("a single-word phrase can NEVER go green without a size (no cocky 'rocks')", async () => {
+    const rows = [{ code: "26792", name: "LIM LIMONCELLO", bottle_size_ml: 750, is_combo: false }];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "Limoncello" });
+    expect(r.confidence).toBe("medium"); // capped — one eligible term is thin evidence
+  });
+
+  it("no-size + absent brand stays review + leadMissing (honesty unchanged)", async () => {
+    const rows = [{ code: "92286", name: "CRUZAN SINGLE BARREL", bottle_size_ml: 750, is_combo: false }];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "Blanton's single barrel bourbon" });
+    expect(r.confidence).toBe("review");
+    expect(r.leadMissing).toBe(true);
+  });
+
+  it("no-size + partial coverage stays review (default untouched)", async () => {
+    const rows = [{ code: "31807", name: "BLANTON'S SINGLE BARREL SB", bottle_size_ml: 750, is_combo: false }];
+    const r = await resolveOrderLine(fakeSupabase(rows), { name: "Blanton's original zeppelin edition" });
+    expect(r.confidence).toBe("review");
+  });
+
   // ── Round 2 (2026-07-24 stress re-run): the brand-initial shortcut fired on
   // stray single letters ANYWHERE in a name — "C&D", "D' ARGENT" — putting
   // wrong brands in green. Initial now counts ONLY as the name's FIRST token.

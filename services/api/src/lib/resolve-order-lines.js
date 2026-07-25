@@ -549,6 +549,37 @@ export async function resolveOrderLine(supabase, line) {
         : Infinity;
       confidence = cov.allCovered && margin >= VARIANT_PENALTY ? "high" : "medium";
     }
+  } else if (exactHit === null && bestCov && !leadMissing) {
+    /*
+     * NO-SIZE CONFIDENCE (2026-07-25, the connoisseur rematch: every
+     * correctly-found allocated bottle wore REVIEW only because no size was
+     * spoken). When the phrase names the bottle unambiguously, it earns its
+     * badge without a size:
+     *   high   — every distinctive word covered, ≥2 eligible terms (a
+     *            single-word phrase like "rocks" can never go green), the
+     *            product exists at exactly ONE size in the pool (nothing to
+     *            pick), and a clear margin over the nearest different-name
+     *            rival. "High West Midwinter Nights Dram" IS one bottle.
+     *   medium — every word covered but the product comes in multiple sizes
+     *            (right bottle, size still the owner's call — the Switch
+     *            size chip is right there) or the win is contested.
+     *   review — partial coverage (unchanged default).
+     */
+    const eligibleCount = baseTerms.filter((t) => termEligible(String(t).toLowerCase())).length;
+    if (bestCov.allCovered) {
+      const sameNameSizes = new Set(
+        all.filter((c) => c.name === ranked[0].name).map((c) => c.bottle_size_ml),
+      ).size;
+      const rival = ranked.find((c) => c.name !== ranked[0].name);
+      const margin = rival
+        ? scoreCandidate(rival.name, baseTerms, line.prefer, { row: rival, rawText }) -
+          scoreCandidate(ranked[0].name, baseTerms, line.prefer, { row: ranked[0], rawText })
+        : Infinity;
+      confidence =
+        eligibleCount >= 2 && sameNameSizes <= 1 && margin >= VARIANT_PENALTY
+          ? "high"
+          : "medium";
+    }
   }
 
   return {
