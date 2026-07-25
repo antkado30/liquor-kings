@@ -134,7 +134,12 @@ export function ResolvedOrderCard({
         };
       }),
   );
-  const [addedCount, setAddedCount] = useState<number | null>(null);
+  // Added receipt (2026-07-24, Tony: "the actual bottle that I added
+  // disappeared… I want it to be shown"): the done-state lists exactly what
+  // landed in the cart — qty × name · size — not a bare count.
+  const [added, setAdded] = useState<{ code: string; name: string; size: string; qty: number }[] | null>(
+    null,
+  );
 
   function update(key: string, patch: Partial<Row>) {
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -158,7 +163,7 @@ export function ResolvedOrderCard({
   }
 
   function addAll() {
-    let n = 0;
+    const receipt: { code: string; name: string; size: string; qty: number }[] = [];
     const corrections: {
       name: string;
       size?: string | null;
@@ -176,7 +181,7 @@ export function ResolvedOrderCard({
       const inCart = cart.items.some((it) => it.product.code === c.code);
       if (inCart) cart.updateQuantity(c.code, r.qty);
       else cart.addItem(toProduct(c), r.qty);
-      n += 1;
+      receipt.push({ code: c.code, name: c.name, size: sizeLabel(c), qty: r.qty });
       // LEARN-ON-SWAP (the moat, 2026-07-24, Tony's call: every swap teaches
       // silently): choosing a DIFFERENT bottle than the resolver's pick is a
       // correction — teach the store's memory so next time this phrase pins
@@ -194,7 +199,7 @@ export function ResolvedOrderCard({
       // Fire-and-forget: add-to-cart never waits on learning.
       void recordAssistantMemory(corrections);
     }
-    setAddedCount(n);
+    setAdded(receipt);
   }
 
   const includedCount = rows.filter(
@@ -204,11 +209,19 @@ export function ResolvedOrderCard({
     (r) => r.candidates.length === 0 || r.confidence !== "high",
   ).length;
 
-  if (addedCount != null) {
+  if (added != null) {
     return (
       <div className="banner banner-ok ordercard-done">
-        Added {addedCount} {addedCount === 1 ? "item" : "items"} to your cart —
-        open Cart to review and validate.
+        <div className="ordercard-done-title">
+          Added {added.length} {added.length === 1 ? "item" : "items"} to your cart:
+        </div>
+        {added.map((a) => (
+          <div key={a.code} className="ordercard-done-line">
+            {a.qty}× {a.name}
+            {a.size ? ` · ${a.size}` : ""}
+          </div>
+        ))}
+        <div className="ordercard-done-hint">Open Cart to review and validate.</div>
       </div>
     );
   }

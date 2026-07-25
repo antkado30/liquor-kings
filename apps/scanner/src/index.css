@@ -6427,6 +6427,21 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
 .ordercard-done {
   margin-top: 10px;
 }
+/* Added receipt (2026-07-24): the done-state shows exactly what landed. */
+.ordercard-done-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.ordercard-done-line {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+.ordercard-done-hint {
+  margin-top: 6px;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
 
 .browse-chip-v2__chevron {
   flex-shrink: 0;

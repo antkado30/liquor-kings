@@ -210,4 +210,17 @@ describe("ResolvedOrderCard — glanceability", () => {
     fireEvent.click(screen.getByText(/Add 1 to cart/));
     expect(recordAssistantMemory).not.toHaveBeenCalled();
   });
+
+  it("the done-state is a RECEIPT — qty × name · size, not a bare count (2026-07-24)", () => {
+    render(
+      <ResolvedOrderCard
+        lines={[line({ case_intent: true, suggested_qty: 24, best: candidate({ case_size: 24 }) })]}
+        cart={cart}
+      />,
+    );
+    fireEvent.click(screen.getByText(/Add 1 to cart/));
+    expect(screen.getByText(/Added 1 item to your cart:/)).toBeTruthy();
+    expect(screen.getByText(/24× SMIRNOFF 80 PL · 200 ML/)).toBeTruthy();
+    expect(screen.getByText(/Open Cart to review and validate/)).toBeTruthy();
+  });
 });
