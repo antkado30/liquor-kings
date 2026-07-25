@@ -19,6 +19,14 @@ import { ResolvedOrderCard } from "./ResolvedOrderCard";
 import type { ResolvedOrderLine, ResolvedCandidate } from "../api/assistant";
 import type { CartContextValue } from "../hooks/useCart";
 
+// Store memory (2026-07-24): the card fires learn-on-swap corrections
+// fire-and-forget — mocked so tests capture the payload with no network.
+vi.mock("../api/assistant", async (importOriginal) => {
+  const mod = (await importOriginal()) as Record<string, unknown>;
+  return { ...mod, recordAssistantMemory: vi.fn().mockResolvedValue(undefined) };
+});
+import { recordAssistantMemory } from "../api/assistant";
+
 const addItem = vi.fn();
 const updateQuantity = vi.fn();
 const cart = {
@@ -61,6 +69,7 @@ function line(over: Partial<ResolvedOrderLine> = {}): ResolvedOrderLine {
 beforeEach(() => {
   addItem.mockClear();
   updateQuantity.mockClear();
+  vi.mocked(recordAssistantMemory).mockClear();
 });
 
 describe("ResolvedOrderCard — glanceability", () => {
@@ -164,5 +173,41 @@ describe("ResolvedOrderCard — glanceability", () => {
       />,
     );
     expect(screen.getByText(/No match — search for it manually/)).toBeTruthy();
+  });
+
+  // ── Store memory (2026-07-24, the moat) ──────────────────────────────────
+  it("a remembered line wears the ★ remembered badge", () => {
+    render(<ResolvedOrderCard lines={[line({ remembered: true })]} cart={cart} />);
+    expect(screen.getByText("★ remembered")).toBeTruthy();
+  });
+
+  it("SWAP + add teaches the store's memory (learn-on-swap fires with the correction)", () => {
+    render(
+      <ResolvedOrderCard
+        lines={[
+          line({
+            alternates: [candidate({ code: "29162", name: "THREE OLIVES CHERRY" })],
+          }),
+        ]}
+        cart={cart}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/Swap match for Smirnoff/), { target: { value: "1" } });
+    fireEvent.click(screen.getByText(/Add 1 to cart/));
+    expect(recordAssistantMemory).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordAssistantMemory).mock.calls[0][0]).toEqual([
+      {
+        name: "Smirnoff",
+        size: "half pint",
+        raw: "Smirnoff half pint x2",
+        mlcc_code: "29162",
+      },
+    ]);
+  });
+
+  it("adding the resolver's own pick teaches NOTHING (no false learnings)", () => {
+    render(<ResolvedOrderCard lines={[line()]} cart={cart} />);
+    fireEvent.click(screen.getByText(/Add 1 to cart/));
+    expect(recordAssistantMemory).not.toHaveBeenCalled();
   });
 });

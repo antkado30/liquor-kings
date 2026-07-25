@@ -13,6 +13,9 @@
 
 import express from "express";
 import { askAssistant, resolveOrderList } from "../lib/assistant.js";
+import { recordCorrections } from "../lib/store-memory.js";
+import supabase from "../config/supabase.js";
+import { sizeFromText } from "../lib/resolve-order-lines.js";
 
 const router = express.Router();
 
@@ -93,6 +96,50 @@ router.post("/resolve-order", async (req, res) => {
       return res.status(503).json({ error: message });
     }
     console.error("[assistant] resolve-order failed:", message);
+    return res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /assistant/memory — THE MOAT's learn path (Phase A, 2026-07-24).
+ * Body: { storeId, corrections: [{ name, size?, sizeMl?, mlcc_code }] }
+ * 200 → { saved, errors }
+ *
+ * Called fire-and-forget by the resolve card when the owner SWAPS a match
+ * and adds to cart (Tony's call: every swap teaches, silently). Upserts the
+ * store's (phrase,size) → code memory; the next resolve of that phrase pins
+ * the remembered bottle green ("★ remembered").
+ *
+ * Auth posture matches /assistant/ask (storeId trusted in body — V1;
+ * per-store middleware scoping is the same tracked V1.5 hardening item).
+ * Writes are capped, provenance-stamped, and only ever touch this table.
+ */
+router.post("/memory", async (req, res) => {
+  const body = req.body ?? {};
+  const storeId = body.storeId ? String(body.storeId) : null;
+  const list = Array.isArray(body.corrections) ? body.corrections : [];
+  if (!storeId) return res.status(400).json({ error: "storeId is required" });
+  if (list.length === 0) return res.status(400).json({ error: "corrections[] is required" });
+  try {
+    const corrections = list.map((c) => ({
+      name: String(c?.name || ""),
+      // KEY SYMMETRY: derive size EXACTLY like resolve time does
+      // (size field → raw line → name), so the learned key and the next
+      // resolve's lookup key can never disagree.
+      sizeMl: Number.isFinite(c?.sizeMl)
+        ? c.sizeMl
+        : (sizeFromText(String(c?.size || "")) ??
+          sizeFromText(String(c?.raw || "")) ??
+          sizeFromText(String(c?.name || "")) ??
+          null),
+      mlccCode: String(c?.mlcc_code || c?.mlccCode || ""),
+      source: "card_swap",
+    }));
+    const result = await recordCorrections(supabase, storeId, corrections);
+    return res.json(result);
+  } catch (e) {
+    const message = e?.message || String(e);
+    console.error("[assistant] memory record failed:", message);
     return res.status(500).json({ error: message });
   }
 });

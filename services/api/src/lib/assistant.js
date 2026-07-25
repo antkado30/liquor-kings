@@ -36,6 +36,12 @@ import {
 } from "../mlcc/milo-ordering-rules.js";
 import { validateCartByCodes } from "./cart-validation.js";
 import {
+  normalizePhrase,
+  memoryKey,
+  fetchMemoryIndex,
+  markMemoryUsed,
+} from "./store-memory.js";
+import {
   resolveOrderLine,
   sizeFromText,
   preferFromText,
@@ -665,7 +671,7 @@ async function toolValidateCart(input, { supabase }) {
  * per-item tool-loop, no missed standards. Prefer this over query_catalog
  * whenever the user names specific bottles or asks for codes.
  */
-async function toolResolveBottles(input, { supabase }) {
+async function toolResolveBottles(input, { supabase, storeId }) {
   /*
    * 2026-07-23: cap raised 60 → 150 (a real weekly order photographed from
    * Notes ran ~45 lines; 60 left no headroom and TRUNCATED SILENTLY — half
@@ -699,6 +705,61 @@ async function toolResolveBottles(input, { supabase }) {
         }
       : null;
   /*
+   * STORE MEMORY (the moat, Phase A — 2026-07-24, Tony's design: swaps teach
+   * silently; remembered phrases pin GREEN with "★ remembered"). Before any
+   * searching, look up each line's normalized phrase in this store's learned
+   * vocabulary. A hit PINS the store's own recorded bottle: confidence high,
+   * remembered:true, no search. Memory can only replay the store's explicit
+   * choice — everything else runs the deterministic resolver unchanged, and
+   * a memory outage degrades soft to normal resolving.
+   */
+  const prepared = items.map((it) => {
+    const name = String(it?.name || "").trim();
+    const raw = String(it?.raw || "").trim();
+    const effName = name || raw;
+    const sizeMl = effName
+      ? (sizeFromText(String(it?.size || "")) ?? sizeFromText(raw) ?? sizeFromText(effName) ?? null)
+      : null;
+    return {
+      it,
+      raw,
+      effName,
+      sizeMl,
+      phrase: effName ? normalizePhrase(effName) : "",
+    };
+  });
+  let memoryIndex = new Map();
+  const memorySkuByCode = new Map();
+  if (storeId) {
+    memoryIndex = await fetchMemoryIndex(
+      supabase,
+      storeId,
+      prepared.map((p) => p.phrase),
+    );
+    const pinnedCodes = [
+      ...new Set(
+        prepared
+          .map((p) => memoryIndex.get(memoryKey(p.phrase, p.sizeMl))?.mlcc_code)
+          .filter(Boolean),
+      ),
+    ];
+    if (pinnedCodes.length > 0) {
+      const { data: skuRows, error: skuErr } = await supabase
+        .from("mlcc_items")
+        .select(
+          "id,code,name,ada_number,ada_name,bottle_size_ml,bottle_size_label,case_size,licensee_price,proof,base_price,min_shelf_price",
+        )
+        .in("code", pinnedCodes);
+      if (skuErr) {
+        console.warn(`[store-memory] pinned SKU fetch failed (soft): ${skuErr.message}`);
+      } else {
+        for (const row of skuRows || []) memorySkuByCode.set(row.code, row);
+      }
+    }
+  }
+  const usedMemoryRowIds = [];
+
+  /*
    * Chunked execution (2026-07-23): 150 concurrent resolveOrderLine calls
    * would burst-hammer Supabase (each is multiple queries). 20 at a time
    * keeps the wall time low (~8 sequential waves ≈ a few seconds) without
@@ -706,13 +767,10 @@ async function toolResolveBottles(input, { supabase }) {
    */
   const RESOLVE_CHUNK = 20;
   const results = [];
-  for (let i = 0; i < items.length; i += RESOLVE_CHUNK) {
+  for (let i = 0; i < prepared.length; i += RESOLVE_CHUNK) {
     const wave = await Promise.all(
-      items.slice(i, i + RESOLVE_CHUNK).map(async (it) => {
-        const name = String(it?.name || "").trim();
-        const raw = String(it?.raw || "").trim();
-        if (!name && !raw) return { requested: it, error: "missing name" };
-        const effName = name || raw;
+      prepared.slice(i, i + RESOLVE_CHUNK).map(async ({ it, raw, effName, sizeMl }) => {
+        if (!effName) return { requested: it, error: "missing name" };
         /*
          * DETERMINISTIC TRUTH OVER MODEL PARSE (2026-07-23): at photo scale
          * the model mangled sizes/names badly enough to turn a requested
@@ -721,10 +779,41 @@ async function toolResolveBottles(input, { supabase }) {
          * line whenever the model provides it — its own parse is only the
          * fallback. "double shot" = 100ml (Tony, 2026-07-23).
          */
-        const sizeMl =
-          sizeFromText(String(it?.size || "")) ?? sizeFromText(raw) ?? sizeFromText(effName) ?? null;
         const prefer = preferFromText(raw) ?? preferFromText(effName);
         const caseIntent = /\bcase\b/i.test(raw) || /\bcase\b/i.test(String(it?.size || ""));
+
+        // Memory pin: the store already told us what this phrase means.
+        const memHit = memoryIndex.get(memoryKey(normalizePhrase(effName), sizeMl));
+        const memSku = memHit ? memorySkuByCode.get(memHit.mlcc_code) : null;
+        if (memHit && memSku) {
+          usedMemoryRowIds.push(memHit.id);
+          const bestFmt = fmt(memSku);
+          return {
+            requested: {
+              name: effName,
+              size: it?.size ?? null,
+              qty: it?.qty ?? null,
+              ...(raw ? { raw } : {}),
+            },
+            confidence: "high",
+            remembered: true,
+            memory_note:
+              "This is the store's own saved match for this phrase (learned from their earlier correction). Present it as their usual.",
+            best: bestFmt,
+            alternates: [],
+            match_count: 1,
+            ...(caseIntent
+              ? bestFmt?.case_size
+                ? {
+                    case_intent: true,
+                    suggested_qty: bestFmt.case_size,
+                    qty_note: `The line says "case" — one full case of this bottle is ${bestFmt.case_size}. Use ${bestFmt.case_size} as the quantity unless the user corrects it.`,
+                  }
+                : { case_intent: true }
+              : {}),
+          };
+        }
+
         const r = await resolveOrderLine(supabase, {
           name: effName,
           sizeMl,
@@ -763,6 +852,10 @@ async function toolResolveBottles(input, { supabase }) {
       }),
     );
     results.push(...wave);
+  }
+  // Usage counters are advisory — never block the reply on them.
+  if (usedMemoryRowIds.length > 0) {
+    markMemoryUsed(supabase, usedMemoryRowIds).catch(() => {});
   }
   return {
     count: results.length,

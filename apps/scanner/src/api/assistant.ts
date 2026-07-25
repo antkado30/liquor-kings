@@ -157,6 +157,47 @@ export interface ResolvedOrderLine {
   case_intent?: boolean;
   suggested_qty?: number;
   qty_note?: string;
+  /** Store memory (2026-07-24, the moat): this store previously corrected
+      this exact phrase — the match is their own saved choice, pinned. */
+  remembered?: boolean;
+}
+
+/** One learned correction: what the owner SAID → the code they chose. */
+export interface AssistantMemoryCorrection {
+  name: string;
+  size?: string | null;
+  raw?: string | null;
+  mlcc_code: string;
+}
+
+/**
+ * Teach the store's memory from resolve-card swaps (fire-and-forget — the
+ * card never blocks add-to-cart on this). Every swap teaches silently
+ * (Tony's call, 2026-07-24); next time the phrase pins "★ remembered".
+ */
+export async function recordAssistantMemory(
+  corrections: AssistantMemoryCorrection[],
+): Promise<void> {
+  if (!corrections.length) return;
+  let storeId: string | undefined;
+  try {
+    storeId = getStoreId();
+  } catch {
+    return; // no store in context — nothing to teach
+  }
+  try {
+    await fetchWithRetry(
+      "/assistant/memory",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storeId, corrections }),
+      },
+      { maxRetries: 1, baseDelayMs: 500, timeoutMs: 10_000 },
+    );
+  } catch {
+    // Silent by design: learning is a bonus; a miss costs one future swap.
+  }
 }
 
 export interface ResolvedLine {

@@ -26,6 +26,7 @@ import { useState } from "react";
 import type { CartContextValue } from "../hooks/useCart";
 import type { MlccProduct } from "../types";
 import type { ResolvedOrderLine, ResolvedCandidate } from "../api/assistant";
+import { recordAssistantMemory } from "../api/assistant";
 import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 
 function rank(c: ResolvedOrderLine["confidence"]): number {
@@ -83,6 +84,11 @@ interface Row {
   sizeMismatch: boolean;
   requestedSizeMl: number | null;
   caseIntent: boolean;
+  /** Store memory (2026-07-24): the match IS this store's saved choice. */
+  remembered: boolean;
+  /** The resolver's original pick — a different final choice = a correction
+      worth teaching the store's memory (learn-on-swap). */
+  originalBestCode: string | null;
 }
 
 /** Initial qty: the server's case suggestion wins, else the requested qty, else 1. */
@@ -123,6 +129,8 @@ export function ResolvedOrderCard({
           requestedSizeMl:
             typeof l.requested_size_ml === "number" ? l.requested_size_ml : null,
           caseIntent: l.case_intent === true,
+          remembered: l.remembered === true,
+          originalBestCode: l.best?.code ?? null,
         };
       }),
   );
@@ -151,6 +159,12 @@ export function ResolvedOrderCard({
 
   function addAll() {
     let n = 0;
+    const corrections: {
+      name: string;
+      size?: string | null;
+      raw?: string | null;
+      mlcc_code: string;
+    }[] = [];
     for (const r of rows) {
       if (r.chosenIdx < 0) continue;
       const c = r.candidates[r.chosenIdx];
@@ -163,6 +177,22 @@ export function ResolvedOrderCard({
       if (inCart) cart.updateQuantity(c.code, r.qty);
       else cart.addItem(toProduct(c), r.qty);
       n += 1;
+      // LEARN-ON-SWAP (the moat, 2026-07-24, Tony's call: every swap teaches
+      // silently): choosing a DIFFERENT bottle than the resolver's pick is a
+      // correction — teach the store's memory so next time this phrase pins
+      // "★ remembered". Choosing the default teaches nothing.
+      if (r.originalBestCode && c.code !== r.originalBestCode) {
+        corrections.push({
+          name: r.requestedName,
+          size: r.requestedSize,
+          raw: r.requestedRaw,
+          mlcc_code: c.code,
+        });
+      }
+    }
+    if (corrections.length > 0) {
+      // Fire-and-forget: add-to-cart never waits on learning.
+      void recordAssistantMemory(corrections);
     }
     setAddedCount(n);
   }
@@ -225,9 +255,15 @@ export function ResolvedOrderCard({
                   {/* THE GLANCE: matched name + truth line, visible at rest. */}
                   <div className="bulkadd-row-top">
                     <span className="bulkadd-match-name">{chosen.name}</span>
-                    <span className="bulkadd-conf" style={{ color: conf.color }}>
-                      {conf.label}
-                    </span>
+                    {r.remembered ? (
+                      <span className="bulkadd-conf" style={{ color: CONF.high.color }}>
+                        ★ remembered
+                      </span>
+                    ) : (
+                      <span className="bulkadd-conf" style={{ color: conf.color }}>
+                        {conf.label}
+                      </span>
+                    )}
                   </div>
                   <div className="bulkadd-truth">
                     <span className="bulkadd-truth-size">{sizeLabel(chosen)}</span>
