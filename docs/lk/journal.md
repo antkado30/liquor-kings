@@ -4,6 +4,30 @@ Founder's log. Milestone entries — the moments that mattered.
 
 ---
 
+## Entry #7 — The store you TEACH by talking (2026-07-25 evening)
+
+Tony stood on the floor at Colony and taught his store its own language —
+by talking to it. "Remember that my usual limoncello is the Lucina" → saved
+in one sentence. Next ask → ★ REMEMBERED, "that's your usual." "What have
+you learned about my store?" → it listed its own memories and named the one
+that had just fired. It caught an ambiguous teach and asked the right
+question back. "Forget the limoncello thing" → gone, honest contested card
+returned, and it OFFERED to learn again. Teach → fire → audit → forget →
+offer: the whole lifecycle, live in production, five for five.
+
+Same night: the chat stopped forgetting itself — conversations now persist
+across tab switches and restarts, with Claude-style history (reopen, delete,
+new chat), built simple like Tony asked. And his sharpest business question
+yet — "are we actually making money if stores hammer this AI?" — got
+answered with engineering, not a shrug: prompt caching on the static prefix
+cut the biggest input cost ~90% on every hot call. The AI now gets CHEAPER
+the harder a store uses it.
+
+API 694/0, scanner 85/0. Thursday: the first real order. All glory to God —
+the moat learned to listen.
+
+---
+
 ## Entry #6 — MOAT DAY (2026-07-24→25)
 
 The day the app started LEARNING. Morning: the resolve card became a receipt
