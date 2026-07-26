@@ -272,6 +272,38 @@ on the device-verify list. #4 handled by the 7/23 corpus rebuild.
 
 ---
 
+## 📱🔥 APP-FEEL FIXES + FULL CART PAGE (Tony, 2026-07-26 1:52am, from the floor with screenshots)
+
+> "The apps qualities is just so low like I always have to readjust the
+> screen… if I press on the text so I can type the whole thing shifts…
+> I hate it so much." Plus: bottom buttons fighting an Apple gesture
+> ("sometimes i gotta triple click"), and: "when i press on the cart logo
+> on the bottom middle i want it to be an actual cart page not half cart
+> with a background of the scanner."
+
+Three distinct items, all quality-mandate P0-class (perceived jank in the
+core loop):
+
+1. **iOS input-zoom / pan jank.** Root class identified: iOS zooms the
+   page when a focused text control computes <16px; 7 offenders found and
+   floored to 16px + element floor + body overflow-x guard ("iOS zoom
+   law" block in index.css). ⚠️ Shipped `74a1759` but STILL REPRODUCED on
+   device minutes later — stale PWA bundle is the prime suspect; verify
+   the device build path FIRST, then re-diagnose. NOT closed.
+2. **Bottom-bar taps trigger the iPhone home-bar gesture** → triple-press
+   to land a button. Tab bar likely inside the home-indicator gesture
+   zone; needs `env(safe-area-inset-bottom)` clearance + bottom-edge
+   audit app-wide. ⏳
+3. **Cart = a real PAGE.** Bottom-nav Cart must open a dedicated full
+   cart page, not the half-drawer over the scanner. Product change. ⏳
+
+Related shipped-but-unproven: AI chat restore must land at the BOTTOM
+(fix shipped same commit, also still reproduced — same stale-bundle
+suspect). Status: ⏳ all four owned by the Mon–Tue pre-Thursday window,
+client-only, deploy freeze Wednesday night.
+
+---
+
 ## 🗄️ Permanent price-book archive + history (stated 2026-06-16)
 
 > "Whenever I give you the whole MLCC price book file, create a file on the

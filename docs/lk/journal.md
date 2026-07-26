@@ -4,6 +4,44 @@ Founder's log. Milestone entries — the moments that mattered.
 
 ---
 
+## Entry #8 — The AI narrates its work + Tony rewired how we work (2026-07-26)
+
+The day started with the gate and ended with a new constitution. Morning:
+the break-glass kill came off BOTH apps — verified in code first (only the
+literal "no" kills), verified gone after — leaving Colony's store flag as
+the single closed gate before Thursday's first engine live fire (mandate
+2/3). The whole order-day script got rewritten for the new arming model as
+a runbook Tony will never have to read: the shadow trick survives
+(worker-only block = armed client, refusing worker, never unsafe), and the
+duplicate tripwire was proven unable to false-trip on it.
+
+Night: the dead 60-second "Thinking" got replaced by an AI that narrates
+its own work — "Reading your photo… Matching 87 lines to MLCC bottles… 40
+of 87 done…" — streamed live, heartbeat killing the platform-timeout class
+that used to eat monster asks, fail-soft by law so progress can never
+break an answer. Tony watched it talk on his phone: proven. Chat
+persistence proven on device the same minute.
+
+Then the most important thing shipped all day, and it wasn't code. Tony
+was honest: walls of text don't stay in his head — "that's just how I'm
+programmed." Interrogated, answered, locked as RULEBOOK #28: Fable is the
+brain, Tony is the hands. One thing per message. The task board is the
+anti-loss machine — every want gets a card + receipt the second it's said.
+Ships are proven by DOING, not by paragraphs. The first message under the
+new law was four commands; it deployed clean.
+
+Honest ledger: two jank fixes (iOS input-zoom class, chat restore
+position) shipped at 74a1759 and FAILED device proof minutes later — both
+stay open, stale-PWA-bundle the prime suspect, Monday's first dig. New
+from the floor at 1:52am: bottom-bar taps fighting the iPhone home-bar
+gesture, and Cart must become a full page. All captured, nothing lost —
+that's the whole point of #28.
+
+API 708/0 · scanner 91/0. Thursday: the first engine order. All glory to
+God — the constant holds the standard.
+
+---
+
 ## Entry #7 — The store you TEACH by talking (2026-07-25 evening)
 
 Tony stood on the floor at Colony and taught his store its own language —
