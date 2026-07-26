@@ -15,13 +15,19 @@
  *     returns: { ok, candidates: MlccProduct[], extracted: { brand, product_name, size_label, confidence } }
  *
  * Design choices:
- *   - Trigram fuzzy match (mlcc_items has a trigram index already) so a
- *     model output like "Captain Morgan Spiced Rum" finds "CAPT MORGAN
- *     ORIGNAL SPICED RUM" in the catalog without exact-match brittleness.
- *   - We score candidates by combining the model's confidence with the
- *     trigram similarity. Top 5 returned — the scanner UI presents them
- *     for user confirmation (never auto-accept; vision is a fallback,
- *     not a substitute for the barcode's certainty).
+ *   - ONE MATCHER LAW (2026-07-26, scanner war phase 2 — Tony's Smirnoff
+ *     screenshot: vision correctly read "Smirnoff Vodka" plain and this
+ *     route's OWN token ranker recommended SOURS GREEN APPLE anyway,
+ *     because plain and flavored Smirnoffs scored identically on brand +
+ *     size and a coin flip crowned a flavor). Candidate matching now runs
+ *     through resolveOrderLine — the SAME deterministic resolver the AI
+ *     chat / paste-order / CLI use, with every law it has learned:
+ *     flavor penalty (plain beats flavored for a plain query), flagship
+ *     aliases, brand synonyms, proof-line demotion, size honesty. Vision
+ *     is only an EXTRACTOR now; it never ranks.
+ *   - Top candidates returned — the scanner UI presents them for user
+ *     confirmation (never auto-accept; vision is a fallback, not a
+ *     substitute for the barcode's certainty).
  *   - Returns extracted fields even when no candidates match, so the
  *     UI can show "Couldn't find this in MLCC — try a clearer photo"
  *     and the user knows what the model saw.
@@ -40,6 +46,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import express from "express";
 import supabaseDefault from "../config/supabase.js";
+import { resolveOrderLine } from "../lib/resolve-order-lines.js";
 
 const router = express.Router();
 
@@ -49,12 +56,6 @@ const VISION_MODEL =
   "claude-sonnet-4-6";
 
 const MAX_TOKENS = 512;
-const MAX_CANDIDATES_RETURNED = 5;
-// Trigram similarity threshold: PG pg_trgm default is 0.3. We use a
-// slightly lower bar so "tito's vodka" matches "TITOS HANDMADE VODKA"
-// despite the abbreviation. The model output's brand+name is short
-// and clean, so noise from low-similarity matches is minimal.
-const TRIGRAM_THRESHOLD = 0.2;
 
 const SYSTEM_PROMPT = `You identify liquor bottles from photos. The user is in a Michigan liquor store and the bottle's barcode failed to scan.
 
@@ -149,47 +150,6 @@ function normalizeExtracted(raw) {
   };
 }
 
-/**
- * Search mlcc_items for vision-extracted brand + product name (task
- * #62 fix, 2026-06-01). The previous implementation required ALL
- * tokens to match via ilike AND'd — that broke immediately on the
- * MLCC catalog's abbreviations: vision says "Captain Morgan" but the
- * catalog row reads "CAPT MORGAN ORIG SPICED RUM", so requiring
- * "Captain" as a substring kills every candidate.
- *
- * New approach: brand-prefix search + JS ranking.
- *   1. Brand prefix: take the first 4 chars of the brand token (e.g.
- *      "Captain" → "capt"), search for rows where name ilike %capt%
- *      OR ilike %<first 4 of product_name token 1>%. Catches both
- *      "CAPTAIN" and "CAPT MORGAN" without hand-coded abbreviation
- *      tables.
- *   2. Pull a generous candidate pool (50-100 rows).
- *   3. Rank in JS: count how many of the original tokens (full + 4-
- *      char prefix) appear as substrings in each row's name. Award
- *      bonus points for name prefix-matching the brand and for size
- *      matching the extracted size_label.
- *   4. Return top MAX_CANDIDATES_RETURNED.
- *
- * This is robust to abbreviations (CAPT/Captain, ORIG/Original) and
- * to word-order variation in MLCC names. Trigram index still
- * accelerates the underlying ilike. When we need more accuracy we can
- * promote to a proper trgm_similarity RPC, but this fixes the
- * immediate bug.
- */
-function tokenize(raw) {
-  return String(raw ?? "")
-    .split(/\s+/)
-    .map((t) => t.replace(/[^A-Za-z0-9]/g, ""))
-    .filter((t) => t.length >= 2);
-}
-
-function shortenForAbbrevMatch(token) {
-  // 4-char prefix catches the common MLCC abbreviations:
-  //   Captain → CAPT, Original → ORIG, Tennessee → TENN, Whiskey → WHSK.
-  // For tokens already < 4 chars, return as-is.
-  return token.length <= 4 ? token : token.slice(0, 4);
-}
-
 // The only bottle sizes MLCC sells. Vision size estimates get snapped to the
 // nearest of these so the catalog size filter actually matches a real SKU.
 const STANDARD_MLCC_SIZES_ML = [50, 100, 200, 375, 750, 1000, 1750];
@@ -250,111 +210,26 @@ function parseSizeToMl(sizeRaw) {
   return null;
 }
 
-async function searchCatalog(supabase, extracted) {
-  const brandTokens = tokenize(extracted.brand);
-  const productTokens = tokenize(extracted.product_name);
-  if (brandTokens.length === 0 && productTokens.length === 0) {
-    return [];
-  }
-
-  // The PRIMARY anchor is the brand's first token — it's the strongest
-  // signal we have. Search using its 4-char prefix as an ilike pattern.
-  // If no brand, fall back to first product token.
-  const primaryToken = brandTokens[0] ?? productTokens[0];
-  if (!primaryToken) return [];
-  const primaryPrefix = shortenForAbbrevMatch(primaryToken).toLowerCase();
-
-  let q = supabase
-    .from("mlcc_items")
-    .select("*")
-    .eq("is_active", true)
-    // Match the space-free column too, so a combined-word brand the model read
-    // (e.g. "RumChata") still pulls a spaced catalog name ("RUM CHATA").
-    .or(`name.ilike.%${primaryPrefix}%,name_searchable.ilike.%${primaryPrefix}%`);
-
-  // Size filter when vision gave us one. extracted.size_ml is already parsed
-  // and snapped to a real MLCC size (e.g. a "700ml" read → 750), so this
-  // eq-filter lines up with actual catalog SKUs instead of missing.
-  const sizeMlNumeric = extracted.size_ml ?? null;
-  if (sizeMlNumeric != null) {
-    q = q.eq("bottle_size_ml", sizeMlNumeric);
-  }
-
-  // Generous pool so the JS ranker has options. 100 rows is fast even
-  // without further filtering (trigram index handles the ilike).
-  q = q.limit(100);
-
-  let { data, error } = await q;
-  if (error) {
-    console.warn(`[catalog-vision] catalog search failed: ${error.message}`);
-    return [];
-  }
-  if (!Array.isArray(data)) data = [];
-
-  // If size filter killed all rows AND we had a size, retry WITHOUT
-  // the size filter — the vision may have read "750ml" but the
-  // catalog SKU is 1000ml and we'd rather show a near-match than
-  // nothing.
-  if (data.length === 0 && sizeMlNumeric != null) {
-    const retry = await supabase
-      .from("mlcc_items")
-      .select("*")
-      .eq("is_active", true)
-      .or(`name.ilike.%${primaryPrefix}%,name_searchable.ilike.%${primaryPrefix}%`)
-      .limit(100);
-    if (!retry.error && Array.isArray(retry.data)) data = retry.data;
-  }
-
-  if (data.length === 0) return [];
-
-  /*
-    JS ranking — count how many tokens (full + 4-char prefix) appear in
-    each row's name. Bonus for name starting with the brand prefix
-    (catches "CAPT MORGAN..." being ranked above any other "...capt..."
-    coincidence) and for size match when known.
-  */
-  const allTokens = [...brandTokens, ...productTokens];
-  const allTokensLc = allTokens.map((t) => t.toLowerCase());
-  const allPrefixesLc = allTokens.map((t) => shortenForAbbrevMatch(t).toLowerCase());
-
-  const ranked = data
-    .map((row) => {
-      const name = String(row.name ?? "").toLowerCase();
-      // Space-free name too, so combined-word catalog names ("RUMCHATA") still
-      // score token hits and aren't dropped by the score>=10 filter below.
-      const nameSearchable = String(row.name_searchable ?? "").toLowerCase();
-      let hits = 0;
-      for (let i = 0; i < allTokens.length; i++) {
-        // Count once per token — credit a full or prefix match on either column.
-        if (
-          name.includes(allTokensLc[i]) ||
-          name.includes(allPrefixesLc[i]) ||
-          nameSearchable.includes(allTokensLc[i]) ||
-          nameSearchable.includes(allPrefixesLc[i])
-        ) {
-          hits += 1;
-        }
-      }
-      const startsWithBrand =
-        name.startsWith(primaryPrefix) || nameSearchable.startsWith(primaryPrefix)
-          ? 5
-          : 0;
-      const sizeMatches =
-        sizeMlNumeric != null && Number(row.bottle_size_ml) === sizeMlNumeric
-          ? 8
-          : 0;
-      const score = hits * 10 + startsWithBrand + sizeMatches;
-      return { row, score };
-    })
-    // Drop rows that match NOTHING beyond the broad brand-prefix pull.
-    // A row where only the primary prefix coincidentally appears (e.g.
-    // "CAPRI SUN") would score 0 hits + bonuses; not useful.
-    .filter((entry) => entry.score >= 10)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_CANDIDATES_RETURNED)
-    .map((entry) => entry.row);
-
-  return ranked;
+/**
+ * Build a resolver order-line from what vision extracted (ONE MATCHER
+ * LAW, 2026-07-26). The photo becomes exactly what a typed order line
+ * would be — "Smirnoff Vodka" at 50ml — and resolveOrderLine applies
+ * every matching law the resolver knows. rawText carries the size label
+ * so proof-number waivers read what the human would have written.
+ */
+export function visionLineFromExtracted(extracted) {
+  const name = [extracted?.brand, extracted?.product_name]
+    .map((s) => String(s ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return {
+    name,
+    sizeMl: extracted?.size_ml ?? null,
+    qty: 1,
+    rawText: [name, String(extracted?.size_label ?? "").trim()]
+      .filter(Boolean)
+      .join(" "),
+  };
 }
 
 router.post("/identify-from-image", async (req, res) => {
@@ -431,23 +306,40 @@ router.post("/identify-from-image", async (req, res) => {
   const extracted = normalizeExtracted(parsed);
 
   let candidates = [];
+  let resolve = null;
   // Only search the catalog when we have at least a brand. Empty brand
   // means the model couldn't identify anything — surface that to the
   // user instead of returning random catalog rows.
   if (extracted.brand && extracted.brand.length > 0) {
-    candidates = await searchCatalog(supabaseDefault, extracted);
+    // ONE MATCHER LAW: the photo becomes an order line; the resolver ranks.
+    const resolved = await resolveOrderLine(
+      supabaseDefault,
+      visionLineFromExtracted(extracted),
+    );
+    candidates = [resolved.best, ...(resolved.alternates || [])].filter(Boolean);
+    resolve = {
+      confidence: resolved.confidence,
+      sizeMismatch: resolved.sizeMismatch === true,
+      leadMissing: resolved.leadMissing === true,
+    };
   }
 
   // Used to track cost per call in observability later — for now just
   // a console log so Fly logs show us what's happening.
   console.log(
-    `[catalog-vision] identified brand="${extracted.brand}" name="${extracted.product_name}" size="${extracted.size_label}" conf=${extracted.confidence} → ${candidates.length} candidates`,
+    `[catalog-vision] identified brand="${extracted.brand}" name="${extracted.product_name}" size="${extracted.size_label}" conf=${extracted.confidence} → ${candidates.length} candidates (resolver=${resolve?.confidence ?? "n/a"})`,
   );
 
   return res.json({
     ok: true,
     extracted,
     candidates,
+    /*
+      Resolver verdict (2026-07-26): how sure the ONE matcher is about
+      candidates[0], plus the honesty flags. The picker can surface these;
+      today they also make Fly logs diagnosable.
+    */
+    resolve,
     /*
       Stable hint for the UI when nothing matched but the model DID see
       something. Helps the user understand whether to retake the photo

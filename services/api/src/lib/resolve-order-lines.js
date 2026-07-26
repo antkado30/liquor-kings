@@ -31,6 +31,11 @@ export const FLAVOR_WORDS = [
   // is instead demoted by the flagship alias's irish+cream missing-term
   // penalty, not by a flavor penalty.
   "eggnog", "nog", "pumpkin", "smores", "horchata",
+  // 2026-07-26 (vision one-matcher rewire, Tony's Smirnoff screenshot): the
+  // ROOT BEER variant escaped every single-word penalty ("root" and "beer"
+  // alone are risky — ROOT is a real liqueur brand — but the compound is
+  // unambiguous; includes() matches the two-word phrase).
+  "root beer",
   // Premium / limited editions — always step-ups, never a base bottle. (We do
   // NOT include "black"/"gold"/"collectors"/"edition": those can BE the regular
   // product for some brands, so penalizing them could hide a real base.)
