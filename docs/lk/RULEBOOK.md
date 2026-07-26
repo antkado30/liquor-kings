@@ -179,6 +179,35 @@ its ceiling. His answers, as rules:
     Docs found stale against code get fixed in the same pass they're
     caught. A queryable decisions ledger (DB-backed) is under design —
     scope set by Tony's interrogation answers, not improvised.
+28. **THE OPERATOR SPLIT + ONE-THING PROTOCOL (Tony, 2026-07-26, permanent —
+    interrogated and locked).** His honest words: dense info-drops get
+    skimmed and nothing sticks — "none of that information stays in my
+    head." Planning and decision-making are where he needs backup;
+    terminal, consoles, and dashboards (his hands) are where he's strong.
+    The contract:
+    - **Fable is the brain, Tony is the hands.** Plans, tradeoffs,
+      details, and remembering live with Fable and in docs Fable reads.
+      Tony NEVER has to read a doc or runbook — runbooks are fed to him
+      as just-in-time steps when the moment comes (the Thursday go-live
+      runbook is the first: Fable reads it, Tony gets steps).
+    - **One thing at a time in chat.** One purpose per message, one
+      paste-back, a few labeled commands max. No recaps, no walls of
+      text, no stacked asks. "Batch me" from Tony unlocks bigger batches.
+    - **THE BOARD IS THE ANTI-LOSS MACHINE** (his named fear: "so much
+      shit piles up" and features he asks for "never get done"). Every
+      step, and every want he drops mid-work, goes on the visible task
+      board THE MOMENT it's said, with a one-line receipt back ("On the
+      board: X"). Wants ALSO land in TONY-WANTS.md the same turn (rule
+      27) — the board is the receipt he can see; the doc is the archive
+      that survives. Session end: open board items carry into the
+      handoff so the next session resurrects them. Nothing lives only in
+      Fable's head or chat scroll, ever.
+    - **Decisions: Fable decides + one line why** ("went with X because
+      Y"), veto always open. Only money and how-the-app-feels decisions
+      come back to Tony — as 2-3 tappable options with one-line
+      tradeoffs, never paragraphs.
+    - **Ships are proven by DOING, not telling:** a 30-second phone
+      action + exactly what he should see. Seeing it = knowing it.
 
 **The heart of it, in his words (7/5):**
 

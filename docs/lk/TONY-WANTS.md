@@ -232,6 +232,14 @@ platform ceiling on monster asks); model bump eval. Tony's list becomes
 the resolver regression corpus.
 
 **More live 7/16 input (same order, from the check-result sheet):**
+
+**Status check 2026-07-26 (verified in CODE, CartDrawer.tsx — doc was
+stale):** #0 one-tap "Remove these N and check again" ✅ BUILT (strips
+exactly MILO's rejected codes, fires a fresh check, place-gate re-locks —
+automates the cleanup, never the gate) and the pinned OOS strip (#2)
+✅ BUILT (drives the button label). #1 (names, not bare codes) and #3
+(post-check price reconcile into the cart display) NOT yet verified —
+on the device-verify list. #4 handled by the 7/23 corpus rebuild.
 0. **🔥 ONE-TAP "Remove out-of-stock + re-check" (the big one).** A red
    check with OOS lines currently strands the operator: MILO answers
    `can_checkout=false`, Place stays locked (correctly — MILO rejected

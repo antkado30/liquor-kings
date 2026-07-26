@@ -10,6 +10,7 @@
  */
 import { fetchWithRetry } from "./catalog";
 import { getStoreId } from "./cart";
+import { NdjsonBuffer } from "../lib/ndjson";
 
 export type AssistantResult =
   | { ok: true; answer: string; model: string; resolvedOrder?: ResolvedOrderLine[] }
@@ -33,17 +34,175 @@ export function formatAssistantError(raw: string): string {
   return code;
 }
 
+/** One live-progress tick from a streaming ask (2026-07-26). */
+export type AssistantProgress = { label: string };
+
+/*
+ * ── Live progress streaming knobs (2026-07-26, Tony: "live progress
+ *    lines, heavy asks first") ─────────────────────────────────────────
+ * Heavy asks (any photos, or a long pasted list) stream NDJSON progress;
+ * quick text asks keep the proven plain-JSON path untouched until after
+ * the first live order (deliberate blast-radius containment).
+ */
+const STREAM_MIN_QUESTION_CHARS = 200;
+/** Server flushes its first byte immediately — this only guards headers. */
+const STREAM_HEADERS_TIMEOUT_MS = 20_000;
+/** Server heartbeats every 15s; three consecutive misses = dead stream. */
+const STREAM_INACTIVITY_MS = 45_000;
+/** Absolute ceiling for a monster ask (the old fixed cap was 90s total). */
+const STREAM_HARD_CAP_MS = 240_000;
+
+function canStreamResponses(): boolean {
+  return typeof ReadableStream !== "undefined" && typeof TextDecoder !== "undefined";
+}
+
+/**
+ * Shape a successful ask payload (plain-JSON body or streamed `final`
+ * event — same fields) into an AssistantResult, surfacing resolve_bottles
+ * results so the chat can render the inline Add-to-cart card.
+ */
+function shapeAskSuccess(raw: Record<string, unknown>): AssistantResult {
+  if (typeof raw.answer !== "string") {
+    const err = typeof raw.error === "string" ? raw.error : "network_error";
+    return { ok: false, error: formatAssistantError(err) };
+  }
+  let resolvedOrder: ResolvedOrderLine[] | undefined;
+  const toolCalls = Array.isArray(raw.toolCalls)
+    ? (raw.toolCalls as Array<{ tool?: string; result?: { results?: ResolvedOrderLine[] } }>)
+    : [];
+  const rb = [...toolCalls].reverse().find((t) => t?.tool === "resolve_bottles");
+  if (rb?.result?.results && Array.isArray(rb.result.results) && rb.result.results.length > 0) {
+    resolvedOrder = rb.result.results;
+  }
+  return {
+    ok: true,
+    answer: raw.answer,
+    model: typeof raw.model === "string" ? raw.model : "",
+    ...(resolvedOrder ? { resolvedOrder } : {}),
+  };
+}
+
+/**
+ * Streaming ask: reads the NDJSON response line by line, forwarding
+ * progress labels and returning the `final` event as the result.
+ *
+ * Failure honesty: with no `final` event, the ask FAILED — a timeout or
+ * broken stream returns the same retryable error shape as before. We
+ * never silently re-fire an LLM run that may still be working.
+ */
+async function askAssistantStreaming(
+  bodyJson: string,
+  onProgress: (p: AssistantProgress) => void,
+): Promise<AssistantResult> {
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      "/assistant/ask",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: bodyJson,
+      },
+      // maxRetries 1 — never re-fire an LLM run (same law as before).
+      { maxRetries: 1, baseDelayMs: 600, timeoutMs: STREAM_HEADERS_TIMEOUT_MS },
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: formatAssistantError(msg) };
+  }
+
+  // 400/503 still arrive as plain JSON before any streaming starts.
+  if (!res.ok) {
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = (await res.json()) as Record<string, unknown>;
+    } catch {
+      /* fall through to status-based copy */
+    }
+    const err = typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`;
+    return { ok: false, error: formatAssistantError(err) };
+  }
+
+  if (!res.body) {
+    // Engine passed the ReadableStream check but handed no readable body —
+    // theoretical class; fail honestly, Retry covers it.
+    return { ok: false, error: formatAssistantError("network_error") };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const ndjson = new NdjsonBuffer();
+
+  let finalResult: AssistantResult | null = null;
+  let streamedError: string | null = null;
+  let timedOut = false;
+
+  // Inactivity watchdog + hard cap. reader.cancel() resolves the pending
+  // read() with done:true, so the loop exits cleanly without a throw.
+  let inactivity: ReturnType<typeof setTimeout> | null = null;
+  const cancelForTimeout = () => {
+    timedOut = true;
+    void reader.cancel();
+  };
+  const resetInactivity = () => {
+    if (inactivity) clearTimeout(inactivity);
+    inactivity = setTimeout(cancelForTimeout, STREAM_INACTIVITY_MS);
+  };
+  const hardCap = setTimeout(cancelForTimeout, STREAM_HARD_CAP_MS);
+
+  const handle = (evt: unknown) => {
+    if (!evt || typeof evt !== "object") return;
+    const e = evt as Record<string, unknown>;
+    if (e.type === "progress") {
+      // Heartbeats carry no label — they only reset the watchdog above.
+      if (typeof e.label === "string" && e.label) onProgress({ label: e.label });
+      return;
+    }
+    if (e.type === "final") finalResult = shapeAskSuccess(e);
+    if (e.type === "error" && typeof e.error === "string") streamedError = e.error;
+  };
+
+  try {
+    resetInactivity();
+    for (;;) {
+      const { done, value } = await reader.read();
+      resetInactivity();
+      if (done) break;
+      for (const evt of ndjson.push(decoder.decode(value, { stream: true }))) handle(evt);
+    }
+    for (const evt of ndjson.end()) handle(evt);
+  } catch (e) {
+    if (!finalResult) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: formatAssistantError(timedOut ? "timeout" : msg) };
+    }
+  } finally {
+    if (inactivity) clearTimeout(inactivity);
+    clearTimeout(hardCap);
+  }
+
+  if (finalResult) return finalResult;
+  if (streamedError) return { ok: false, error: formatAssistantError(streamedError) };
+  return { ok: false, error: formatAssistantError(timedOut ? "timeout" : "network_error") };
+}
+
 /**
  * Ask the Liquor Kings assistant a question.
  * storeId is included when available so store-scoped tools (order
  * history, inventory) work; without it, catalog/rules/pricing answers
  * still resolve fine.
+ *
+ * Live progress (2026-07-26): pass onProgress to receive human-readable
+ * labels while a HEAVY ask (photos, or a long pasted list) works — those
+ * requests stream NDJSON from the server. Quick text asks keep the plain
+ * request path unchanged.
  */
 export async function askAssistant(
   question: string,
   // Accepts a single data URI (legacy) OR an array (2026-07-17, multi-photo).
   images?: string | string[],
   history?: { role: "user" | "assistant"; content: string }[],
+  onProgress?: (p: AssistantProgress) => void,
 ): Promise<AssistantResult> {
   const trimmed = question.trim();
   const imageList = (Array.isArray(images) ? images : images ? [images] : [])
@@ -60,6 +219,21 @@ export async function askAssistant(
     storeId = undefined;
   }
 
+  const payload: Record<string, unknown> = {
+    question: trimmed,
+    ...(storeId ? { storeId } : {}),
+    // Always send the plural; server keeps singular back-compat too.
+    ...(imageList.length ? { imageDataUris: imageList } : {}),
+    ...(history && history.length ? { history } : {}),
+  };
+
+  // Heavy asks stream live progress; everything else keeps the proven path.
+  const heavy =
+    imageList.length > 0 || trimmed.length >= STREAM_MIN_QUESTION_CHARS;
+  if (heavy && onProgress && canStreamResponses()) {
+    return askAssistantStreaming(JSON.stringify({ ...payload, stream: true }), onProgress);
+  }
+
   let res: Response;
   try {
     res = await fetchWithRetry(
@@ -67,13 +241,7 @@ export async function askAssistant(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: trimmed,
-          ...(storeId ? { storeId } : {}),
-          // Always send the plural; server keeps singular back-compat too.
-          ...(imageList.length ? { imageDataUris: imageList } : {}),
-          ...(history && history.length ? { history } : {}),
-        }),
+        body: JSON.stringify(payload),
       },
       // 90s (was 30s — Order Day 2026-07-16): a long pasted order sends the
       // tool-use loop through multiple Anthropic calls + resolve_bottles, which
@@ -100,23 +268,7 @@ export async function askAssistant(
     return { ok: false, error: formatAssistantError(err) };
   }
 
-  // If the assistant resolved specific bottles, surface them so the chat can
-  // render an inline "Add to cart" card.
-  let resolvedOrder: ResolvedOrderLine[] | undefined;
-  const toolCalls = Array.isArray(raw.toolCalls)
-    ? (raw.toolCalls as Array<{ tool?: string; result?: { results?: ResolvedOrderLine[] } }>)
-    : [];
-  const rb = [...toolCalls].reverse().find((t) => t?.tool === "resolve_bottles");
-  if (rb?.result?.results && Array.isArray(rb.result.results) && rb.result.results.length > 0) {
-    resolvedOrder = rb.result.results;
-  }
-
-  return {
-    ok: true,
-    answer: raw.answer,
-    model: typeof raw.model === "string" ? raw.model : "",
-    ...(resolvedOrder ? { resolvedOrder } : {}),
-  };
+  return shapeAskSuccess(raw);
 }
 
 // ── Bulk order resolve (paste a list → MLCC codes) ─────────────────────────

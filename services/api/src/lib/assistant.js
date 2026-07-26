@@ -723,7 +723,7 @@ async function toolValidateCart(input, { supabase }) {
  * per-item tool-loop, no missed standards. Prefer this over query_catalog
  * whenever the user names specific bottles or asks for codes.
  */
-async function toolResolveBottles(input, { supabase, storeId }) {
+async function toolResolveBottles(input, { supabase, storeId, emitProgress = () => {} }) {
   /*
    * 2026-07-23: cap raised 60 → 150 (a real weekly order photographed from
    * Notes ran ~45 lines; 60 left no headroom and TRUNCATED SILENTLY — half
@@ -919,6 +919,20 @@ async function toolResolveBottles(input, { supabase, storeId }) {
       }),
     );
     results.push(...wave);
+    /*
+     * Live progress (2026-07-26): on multi-wave lists, tick the operator a
+     * running count as each wave lands. Single-wave lists (≤20 lines) skip
+     * the tick — the tool-level "Matching N lines…" label already covers
+     * them. emitProgress is the fail-soft emitter — it can never throw.
+     */
+    if (prepared.length > RESOLVE_CHUNK) {
+      emitProgress({
+        kind: "resolve_wave",
+        done: results.length,
+        total: prepared.length,
+        label: `Matching bottles — ${results.length} of ${prepared.length} done…`,
+      });
+    }
   }
   /*
    * SIZE FLIP (2026-07-24, Tony: "switch between the sizes... what sizes do
@@ -1087,6 +1101,65 @@ async function runTool(name, input, ctx) {
     return await impl(input ?? {}, ctx);
   } catch (e) {
     return { error: `tool ${name} threw: ${e?.message || e}` };
+  }
+}
+
+/*
+ * ── Live progress (2026-07-26, Tony: "live progress lines, heavy asks
+ *    first") ──────────────────────────────────────────────────────────────
+ * askAssistant accepts an optional onProgress(event) callback and emits at
+ * the REAL moments work happens: reading the message/photos, each tool run,
+ * each resolver wave, assembling the answer. The chat shows the work
+ * instead of a dead "Thinking" for 30-60s on big asks.
+ *
+ * FAIL-SOFT LAW: progress is cosmetic. makeEmit swallows EVERYTHING — a
+ * throwing or broken callback can never break, delay, or fail the ask.
+ */
+function makeEmit(onProgress) {
+  if (typeof onProgress !== "function") return () => {};
+  return (event) => {
+    try {
+      onProgress(event);
+    } catch {
+      /* progress can never break the ask */
+    }
+  };
+}
+
+/**
+ * Human copy per tool — what the operator sees while it runs. Exported for
+ * unit tests (every named tool must have real copy, never the fallback).
+ */
+export function progressLabelForTool(name, input) {
+  switch (name) {
+    case "resolve_bottles": {
+      const n = Array.isArray(input?.items) ? input.items.length : 0;
+      return n > 1
+        ? `Matching ${n} lines to MLCC bottles…`
+        : "Matching your bottle to an MLCC code…";
+    }
+    case "query_catalog":
+      return "Searching the catalog…";
+    case "query_rules":
+      return "Checking MLCC rules…";
+    case "price_quote":
+      return "Pulling prices…";
+    case "query_order_history":
+      return "Looking through your order history…";
+    case "query_inventory":
+      return "Checking your inventory…";
+    case "teach_bottle_memory":
+      return "Saving that to store memory…";
+    case "list_bottle_memory":
+      return "Reading store memory…";
+    case "forget_bottle_memory":
+      return "Updating store memory…";
+    case "check_order_quantity":
+      return "Checking quantity rules…";
+    case "validate_cart":
+      return "Validating the cart against MLCC rules…";
+    default:
+      return "Working…";
   }
 }
 
@@ -1290,6 +1363,8 @@ export async function askAssistant({
   imageDataUris = null,
   history = [],
   supabase = supabaseDefault,
+  // Live progress (2026-07-26): optional callback, fail-soft by law.
+  onProgress = null,
 }) {
   const trimmed = String(question ?? "").trim();
   const validImages = collectImageInputs({ imageDataUri, imageDataUris })
@@ -1306,8 +1381,18 @@ export async function askAssistant({
   }
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const ctx = { supabase, storeId };
+  const emitProgress = makeEmit(onProgress);
+  const ctx = { supabase, storeId, emitProgress };
   const toolCalls = [];
+
+  emitProgress({
+    kind: "start",
+    label: hasImage
+      ? validImages.length > 1
+        ? `Reading your ${validImages.length} photos…`
+        : "Reading your photo…"
+      : "Thinking…",
+  });
 
   const messages = [
     ...sanitizeHistory(history),
@@ -1321,6 +1406,12 @@ export async function askAssistant({
   let maxTokens = MAX_TOKENS;
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations += 1;
+    if (iterations > 1) {
+      // Post-tool model turns are assembling the reply (or occasionally
+      // asking for another tool — in which case the next tool label
+      // replaces this one within a second or two).
+      emitProgress({ kind: "model", label: "Putting the answer together…" });
+    }
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: maxTokens,
@@ -1357,6 +1448,7 @@ export async function askAssistant({
         );
         maxTokens = MAX_TOKENS_RETRY;
         iterations -= 1; // the discarded turn doesn't count against the loop
+        emitProgress({ kind: "model", label: "Big list — retrying with more room…" });
         continue;
       }
       console.warn(
@@ -1377,6 +1469,11 @@ export async function askAssistant({
       const toolResults = [];
       for (const block of response.content) {
         if (block.type !== "tool_use") continue;
+        emitProgress({
+          kind: "tool",
+          tool: block.name,
+          label: progressLabelForTool(block.name, block.input),
+        });
         const result = await runTool(block.name, block.input, ctx);
         toolCalls.push({ tool: block.name, input: block.input, result });
         toolResults.push({

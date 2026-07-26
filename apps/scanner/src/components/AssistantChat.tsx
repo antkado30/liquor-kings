@@ -327,6 +327,10 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
   // handwriting plus a few shelf shots. Capped to match the server.
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [isAsking, setIsAsking] = useState(false);
+  // Live progress (2026-07-26): heavy asks stream what's happening —
+  // "Reading your photos…", "Matching bottles — 40 of 87 done…" — instead
+  // of a dead "Thinking" for 30-60s. null = default label.
+  const [progressLabel, setProgressLabel] = useState<string | null>(null);
   const [askError, setAskError] = useState<string | null>(null);
   const [failedAsk, setFailedAsk] = useState<FailedAsk | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
@@ -462,8 +466,12 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
     }
 
     setIsAsking(true);
-    const result = await askAssistant(displayText, images, priorTurns);
+    setProgressLabel(null);
+    const result = await askAssistant(displayText, images, priorTurns, (p) =>
+      setProgressLabel(p.label),
+    );
     setIsAsking(false);
+    setProgressLabel(null);
 
     if (result.ok) {
       setMessages((prev) => [
@@ -644,7 +652,9 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
                   <span className="assistant-thinking__dot" />
                   <span className="assistant-thinking__dot" />
                 </span>
-                <span className="assistant-thinking__label">Thinking</span>
+                <span className="assistant-thinking__label">
+                  {progressLabel ?? "Thinking"}
+                </span>
               </div>
             </div>
           </div>
