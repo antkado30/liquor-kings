@@ -216,6 +216,19 @@ select {
   height: 24px;
   border: 3px solid var(--accent);
   opacity: 0.85;
+  transition: border-color 120ms ease, filter 120ms ease;
+}
+
+/*
+  Decode-moment hit flash (scanner war, 2026-07-26). The instant ZXing /
+  the native detector reads a barcode — BEFORE the catalog lookup — the
+  aim corners snap green. "Scanner never saw it" and "saw it, looking it
+  up" are now two visibly different states.
+*/
+.scanner-aim-rect--hit .scanner-aim-corner {
+  border-color: #34d399;
+  opacity: 1;
+  filter: drop-shadow(0 0 6px rgba(52, 211, 153, 0.85));
 }
 
 .scanner-aim-corner--tl {

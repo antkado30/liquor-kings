@@ -4,6 +4,13 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Sentry } from "../lib/sentry";
+import {
+  SCAN_TUNING,
+  buildZxingDecodeHints,
+  cropRegion,
+  isSweepTick,
+  sweepSize,
+} from "../lib/scanner-decode";
 import { IconCamera, IconFileText } from "./Icons";
 
 type BarcodeScannerProps = {
@@ -14,14 +21,10 @@ type BarcodeScannerProps = {
 };
 
 const COOLDOWN_MS = 2000;
-const DETECT_INTERVAL_MS = 220;
 const ZXING_COOLDOWN_MS = 200;
 const TROUBLE_HINT_MS = 8000;
-const VIDEO_IDEAL_WIDTH = 1280;
-const VIDEO_IDEAL_HEIGHT = 720;
+const DECODE_FLASH_MS = 420;
 const ROTATIONS = [0, 90, 180, 270] as const;
-
-type ZxDecodeHintType = import("@zxing/library").DecodeHintType;
 
 type ZxingCanvasReader = {
   decodeFromCanvas?: (
@@ -32,37 +35,6 @@ type ZxingCanvasReader = {
   ) => Promise<{ getText(): string }>;
   reset?: () => void;
 };
-
-async function buildZxingDecodeHints(): Promise<Map<ZxDecodeHintType, unknown> | null> {
-  let lib: typeof import("@zxing/library");
-  try {
-    lib = await import("@zxing/library");
-  } catch (e) {
-    try {
-      await import("@zxing/browser");
-    } catch {
-      /* ignore */
-    }
-    console.warn("[BarcodeScanner] @zxing/library unavailable; scanning without decode hints", e);
-    return null;
-  }
-  const { DecodeHintType, BarcodeFormat } = lib;
-  const hints = new Map<ZxDecodeHintType, unknown>();
-  hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-    BarcodeFormat.UPC_A,
-    BarcodeFormat.UPC_E,
-    BarcodeFormat.EAN_13,
-    BarcodeFormat.EAN_8,
-    BarcodeFormat.CODE_128,
-    BarcodeFormat.CODE_39,
-  ]);
-  hints.set(DecodeHintType.TRY_HARDER, true);
-  const invKey = (DecodeHintType as unknown as Record<string, number | undefined>).ALSO_INVERTED;
-  if (typeof invKey === "number") {
-    hints.set(invKey as ZxDecodeHintType, true);
-  }
-  return hints;
-}
 
 function rotateCanvas(
   source: HTMLCanvasElement,
@@ -126,12 +98,12 @@ function captureVideoFrame(
   video: HTMLVideoElement,
   reusable?: HTMLCanvasElement,
 ): HTMLCanvasElement | null {
-  // Reuse one canvas across ticks — the decode loop fires every
-  // DETECT_INTERVAL_MS and a fresh 1280x720 allocation per tick churned
-  // ~4MB of bitmap through the GC several times a second.
+  // One-shot full-resolution grab (photo capture). The live decode loop
+  // deliberately does NOT use this anymore — it crops straight from the
+  // video element instead of materializing a full 4K frame per tick.
   const canvas = reusable ?? document.createElement("canvas");
-  const w = video.videoWidth || VIDEO_IDEAL_WIDTH;
-  const h = video.videoHeight || VIDEO_IDEAL_HEIGHT;
+  const w = video.videoWidth || SCAN_TUNING.videoIdealWidth;
+  const h = video.videoHeight || SCAN_TUNING.videoIdealHeight;
   if (canvas.width !== w) canvas.width = w;
   if (canvas.height !== h) canvas.height = h;
   const ctx = canvas.getContext("2d");
@@ -284,11 +256,17 @@ export function BarcodeScanner({
   const barcodePhotoInputRef = useRef<HTMLInputElement>(null);
   const lastScanRef = useRef(0);
   const lastZxingScanRef = useRef<{ code: string; at: number } | null>(null);
-  // Reused across decode ticks so the loop doesn't allocate fresh ~1MP
+  // Reused across decode ticks so the loop doesn't allocate fresh
   // canvases several times a second (GC churn → heat on iPhone).
-  const frameCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cropCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sweepCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rotateScratchRef = useRef<HTMLCanvasElement | null>(null);
   const tickCountRef = useRef(0);
+  // Re-entrancy guard (scanner war, 2026-07-26): a decode tick is skipped
+  // while the previous one is still running. Without this, misses that
+  // outlast DETECT_INTERVAL_MS piled sync ZXing work onto the main thread
+  // until the preview froze and the phone cooked.
+  const decodeBusyRef = useRef(false);
   // Pause the camera + decode loop whenever the page itself is hidden
   // (app backgrounded, tab switched) — scanning a screen nobody can see
   // just burns battery.
@@ -302,12 +280,23 @@ export function BarcodeScanner({
   const [showTroubleHint, setShowTroubleHint] = useState(false);
   const [barcodePhotoBusy, setBarcodePhotoBusy] = useState(false);
   const [barcodePhotoError, setBarcodePhotoError] = useState<string | null>(null);
+  // The instant a barcode DECODES, the aim rect flashes green — so
+  // "scanner never saw it" and "saw it, catalog is thinking" are two
+  // visibly different things (scanner war, 2026-07-26).
+  const [decodeFlash, setDecodeFlash] = useState(false);
+  // Actual camera mode granted (e.g. "3840×2160") — shown in the muted
+  // engine line so a phone in hand proves the resolution bump in seconds.
+  const [achievedRes, setAchievedRes] = useState<string | null>(null);
   const troubleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleSuccessfulScan = useCallback(
     (code: string) => {
       setShowTroubleHint(false);
       setBarcodePhotoError(null);
+      setDecodeFlash(true);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = setTimeout(() => setDecodeFlash(false), DECODE_FLASH_MS);
       if (troubleTimerRef.current) {
         clearTimeout(troubleTimerRef.current);
         troubleTimerRef.current = setTimeout(
@@ -319,6 +308,23 @@ export function BarcodeScanner({
     },
     [onScan],
   );
+
+  const reportAchievedResolution = useCallback((video: HTMLVideoElement, eng: string) => {
+    const report = () => {
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      if (!w || !h) return;
+      setAchievedRes(`${w}×${h}`);
+      console.log(`[BarcodeScanner] camera granted ${w}x${h} (engine=${eng})`);
+      Sentry?.addBreadcrumb?.({
+        category: "scanner",
+        message: `camera ${w}x${h} engine=${eng}`,
+        level: "info",
+      });
+    };
+    if (video.videoWidth) report();
+    else video.addEventListener("loadedmetadata", report, { once: true });
+  }, []);
 
   const reportCameraError = useCallback((error: unknown) => {
     const sentryCapture = Sentry?.captureException;
@@ -376,6 +382,13 @@ export function BarcodeScanner({
     zxingReaderRef.current = null;
     zxingResetRef.current?.();
     zxingResetRef.current = null;
+    decodeBusyRef.current = false;
+    if (flashTimerRef.current) {
+      clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = null;
+    }
+    setDecodeFlash(false);
+    setAchievedRes(null);
     setScanning(false);
     if (videoRef.current) {
       videoRef.current.srcObject = null;
@@ -410,8 +423,8 @@ export function BarcodeScanner({
           const stream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: "environment",
-              width: { ideal: VIDEO_IDEAL_WIDTH },
-              height: { ideal: VIDEO_IDEAL_HEIGHT },
+              width: { ideal: SCAN_TUNING.videoIdealWidth },
+              height: { ideal: SCAN_TUNING.videoIdealHeight },
             },
             audio: false,
           });
@@ -428,6 +441,7 @@ export function BarcodeScanner({
           if (v) {
             v.srcObject = stream;
             await v.play().catch(() => {});
+            reportAchievedResolution(v, "native");
           }
           setScanning(true);
 
@@ -435,8 +449,10 @@ export function BarcodeScanner({
             const vid = videoRef.current;
             const det = detectorRef.current;
             if (!vid || !det || vid.readyState < 2) return;
+            if (decodeBusyRef.current) return;
             const now = Date.now();
             if (now - lastScanRef.current < COOLDOWN_MS) return;
+            decodeBusyRef.current = true;
             try {
               const codes = await det.detect(vid);
               if (codes.length > 0) {
@@ -448,8 +464,10 @@ export function BarcodeScanner({
               }
             } catch {
               /* ignore frame errors */
+            } finally {
+              decodeBusyRef.current = false;
             }
-          }, DETECT_INTERVAL_MS);
+          }, SCAN_TUNING.detectIntervalMs);
         } catch (error) {
           reportCameraError(error);
           setPermissionError(cameraFailureMessage(categorizeCameraError(error)));
@@ -469,8 +487,8 @@ export function BarcodeScanner({
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
-            width: { ideal: VIDEO_IDEAL_WIDTH },
-            height: { ideal: VIDEO_IDEAL_HEIGHT },
+            width: { ideal: SCAN_TUNING.videoIdealWidth },
+            height: { ideal: SCAN_TUNING.videoIdealHeight },
           },
           audio: false,
         });
@@ -486,11 +504,12 @@ export function BarcodeScanner({
         if (v) {
           v.srcObject = stream;
           await v.play().catch(() => {});
+          reportAchievedResolution(v, "zxing");
         }
 
         let reader: InstanceType<typeof BrowserMultiFormatReader>;
         try {
-          const hints = await buildZxingDecodeHints();
+          const hints = await buildZxingDecodeHints("live");
           reader = hints
             ? new BrowserMultiFormatReader(hints, { delayBetweenScanSuccess: 200 })
             : new BrowserMultiFormatReader(undefined, { delayBetweenScanSuccess: 200 });
@@ -507,42 +526,86 @@ export function BarcodeScanner({
 
         setScanning(true);
 
+        /*
+          THE LIVE DECODE LOOP (rebuilt 2026-07-26, scanner war — every
+          choice below is a measured number, see lib/scanner-decode.ts):
+
+          - Guarded: a tick is skipped while the previous decode runs, so
+            misses can never pile sync work onto the main thread again.
+          - Every tick: decode the center crop (inside the aim rect)
+            STRAIGHT from the video element at native resolution — with
+            4K capture this is what reads small/curved bottle barcodes at
+            normal holding distance (~25–40ms per attempt).
+          - Every 3rd tick: also decode a ≤1024px-wide downscaled full
+            frame at all four rotations, for codes held off-center or
+            sideways (shelf tags on the counter).
+        */
         timerRef.current = setInterval(() => {
           void (async () => {
             const vid = videoRef.current;
             const zxReader = zxingReaderRef.current;
             if (!vid || !zxReader || vid.readyState < 2) return;
+            if (decodeBusyRef.current) return;
             const now = Date.now();
             if (now - lastScanRef.current < COOLDOWN_MS) return;
+            decodeBusyRef.current = true;
+            try {
+              let raw: string | null = null;
 
-            if (!frameCanvasRef.current) {
-              frameCanvasRef.current = document.createElement("canvas");
+              const region = cropRegion(vid.videoWidth, vid.videoHeight);
+              if (region) {
+                if (!cropCanvasRef.current) {
+                  cropCanvasRef.current = document.createElement("canvas");
+                }
+                const crop = cropCanvasRef.current;
+                if (crop.width !== region.sw) crop.width = region.sw;
+                if (crop.height !== region.sh) crop.height = region.sh;
+                const ctx = crop.getContext("2d");
+                if (ctx) {
+                  ctx.drawImage(
+                    vid,
+                    region.sx, region.sy, region.sw, region.sh,
+                    0, 0, region.sw, region.sh,
+                  );
+                  raw = await tryDecodeCanvas(zxReader, crop);
+                }
+              }
+
+              tickCountRef.current += 1;
+              if (!raw && isSweepTick(tickCountRef.current)) {
+                const size = sweepSize(vid.videoWidth, vid.videoHeight);
+                if (size) {
+                  if (!sweepCanvasRef.current) {
+                    sweepCanvasRef.current = document.createElement("canvas");
+                  }
+                  const sweep = sweepCanvasRef.current;
+                  if (sweep.width !== size.w) sweep.width = size.w;
+                  if (sweep.height !== size.h) sweep.height = size.h;
+                  const ctx = sweep.getContext("2d");
+                  if (ctx) {
+                    ctx.drawImage(vid, 0, 0, size.w, size.h);
+                    if (!rotateScratchRef.current) {
+                      rotateScratchRef.current = document.createElement("canvas");
+                    }
+                    raw = await decodeBarcodeFromCanvas(zxReader, sweep, {
+                      rotations: ROTATIONS,
+                      scratch: rotateScratchRef.current,
+                    });
+                  }
+                }
+              }
+              if (!raw) return;
+
+              const prev = lastZxingScanRef.current;
+              if (prev && prev.code === raw && now - prev.at < ZXING_COOLDOWN_MS) return;
+              lastZxingScanRef.current = { code: raw, at: now };
+              lastScanRef.current = now;
+              handleSuccessfulScan(raw);
+            } finally {
+              decodeBusyRef.current = false;
             }
-            const canvas = captureVideoFrame(vid, frameCanvasRef.current);
-            if (!canvas) return;
-
-            // Any-angle support without the constant burn: try the upright
-            // frame every tick, the full 90/180/270 sweep every 3rd tick.
-            // A rotated barcode still reads within ~660ms (well under the
-            // 2s scan cooldown); idle CPU drops ~4x.
-            tickCountRef.current += 1;
-            const fullSweep = tickCountRef.current % 3 === 0;
-            if (!rotateScratchRef.current) {
-              rotateScratchRef.current = document.createElement("canvas");
-            }
-            const raw = await decodeBarcodeFromCanvas(zxReader, canvas, {
-              rotations: fullSweep ? ROTATIONS : [0],
-              scratch: rotateScratchRef.current,
-            });
-            if (!raw) return;
-
-            const prev = lastZxingScanRef.current;
-            if (prev && prev.code === raw && now - prev.at < ZXING_COOLDOWN_MS) return;
-            lastZxingScanRef.current = { code: raw, at: now };
-            lastScanRef.current = now;
-            handleSuccessfulScan(raw);
           })();
-        }, DETECT_INTERVAL_MS);
+        }, SCAN_TUNING.detectIntervalMs);
       } catch (error) {
         reportCameraError(error);
         setPermissionError(cameraFailureMessage(categorizeCameraError(error)));
@@ -626,7 +689,8 @@ export function BarcodeScanner({
       const { BrowserMultiFormatReader } = await import("@zxing/browser");
       let reader: InstanceType<typeof BrowserMultiFormatReader>;
       try {
-        const hints = await buildZxingDecodeHints();
+        // One-shot still → spend everything (TRY_HARDER + inverted).
+        const hints = await buildZxingDecodeHints("photo");
         reader = hints
           ? new BrowserMultiFormatReader(hints)
           : new BrowserMultiFormatReader();
@@ -691,7 +755,10 @@ export function BarcodeScanner({
           <div className="scanner-video-wrap">
             <video ref={videoRef} className="scanner-video" playsInline muted />
             {scanning ? (
-              <div className="scanner-aim-rect" aria-hidden>
+              <div
+                className={`scanner-aim-rect${decodeFlash ? " scanner-aim-rect--hit" : ""}`}
+                aria-hidden
+              >
                 <span className="scanner-aim-corner scanner-aim-corner--tl" />
                 <span className="scanner-aim-corner scanner-aim-corner--tr" />
                 <span className="scanner-aim-corner scanner-aim-corner--bl" />
@@ -707,6 +774,7 @@ export function BarcodeScanner({
           </div>
           <p className="muted small">
             {engine === "native" ? "Using native scanner" : "Using ZXing fallback"}
+            {achievedRes ? ` · ${achievedRes}` : ""}
           </p>
 
           <input

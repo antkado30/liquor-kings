@@ -332,7 +332,41 @@ War plan (measured, like the 42px hunt — no guessing):
 4. Native wrap note: TONY-WANTS already queues Capacitor partly for a
    native barcode module — this war strengthens that case post-launch.
 
-Status: ⏳ opened 7/26; diagnosis is the next work block.
+### Phase 1 verdict (2026-07-26, measured with a Playwright decode-floor
+### harness running the app's exact @zxing pipeline — 145 measured rows)
+
+Tony's RINSE answers: failures = "no reaction at all", every bottle size,
+"never, no matter how long." That ruled out the camera and the catalog —
+deterministic decode failure. The harness then found TWO structural bugs:
+
+1. **THE DEATH ZONE (why 5 bottles could never scan).** At 720p capture,
+   a 22mm bottle barcode only has enough pixels to decode (floor: 1.4
+   px/module) when the phone is ≤10cm away — but the iPhone lens can't
+   focus that close, and at 1px of focus blur the floor rises past reach.
+   Enough pixels → no focus; focus → not enough pixels. Those bottles
+   were mathematically unscannable. 4K capture reads the same barcode
+   out to 30cm — inside comfortable focus range. (30mm barcodes: 720p
+   died past 15–20cm; 4K passes at every measured distance.)
+2. **THE HEAT SPIRAL (why the app felt frozen).** TRY_HARDER + inverted
+   retry made every MISS cost 586–944ms of synchronous main-thread
+   ZXing — fired every 220ms with NO re-entrancy guard. Aiming at an
+   unreadable barcode = runaway decode pile-up: frozen preview, hot
+   phone. Measured fix: a "live" hint mode (no TRY_HARDER/inverted)
+   catches THE SAME barcodes in every scenario (identical pass rows,
+   identical 1.4 floor) at 18–38ms per miss — 20–45x cheaper.
+
+Phase 1 ship (`lib/scanner-decode.ts` + rebuilt live loop, 13 new tests):
+4K capture request (older phones degrade gracefully; granted res shown in
+the muted engine line + Sentry breadcrumb), re-entrancy guard, per-tick
+center-crop decode at native res (~25–40ms), downscaled full-frame
+rotation sweep every 3rd tick, TRY_HARDER reserved for one-shot photo
+stills, and a green aim-rect flash the instant a barcode decodes — so
+"scanner never saw it" vs "saw it, looking it up" are visibly different.
+
+Acceptance test: the SAME 5 bottles that failed on the floor, rescanned.
+
+Status: 🚀 Phase 1 shipped (pending Tony's floor proof). Phase 2 next:
+vision picker one-matcher + tap-through (items 2–3 above).
 
 ---
 
