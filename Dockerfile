@@ -21,6 +21,11 @@ FROM node:22-bookworm AS web-builder
 # rather than secrets. Each SPA has its own Sentry project, hence two ARGs.
 ARG VITE_SENTRY_DSN_ADMIN=""
 ARG VITE_SENTRY_DSN_SCANNER=""
+# Build stamp (2026-07-27): the deploy script already passes GIT_SHA; baking
+# it into the scanner bundle (More page footer) makes "which build is this
+# phone actually running?" a fact instead of a guess — the 7/26 jank-fix
+# retest was unprovable without it.
+ARG GIT_SHA=""
 
 WORKDIR /build
 
@@ -36,7 +41,7 @@ COPY apps/admin ./apps/admin
 COPY apps/scanner ./apps/scanner
 
 RUN VITE_SENTRY_DSN="$VITE_SENTRY_DSN_ADMIN" npm run build:admin
-RUN VITE_SENTRY_DSN="$VITE_SENTRY_DSN_SCANNER" npm run build:scanner
+RUN VITE_SENTRY_DSN="$VITE_SENTRY_DSN_SCANNER" VITE_GIT_SHA="$GIT_SHA" npm run build:scanner
 
 
 # ─── Stage 2: slim production runtime (NO Chromium) ───────────────────────

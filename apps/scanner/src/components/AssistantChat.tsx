@@ -398,7 +398,16 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
      */
     const behavior: ScrollBehavior = didInitialScroll.current ? "smooth" : "auto";
     didInitialScroll.current = true;
-    endRef.current?.scrollIntoView({ behavior, block: "end" });
+    /*
+     * Double-rAF (2026-07-27): the 7/26 restore landed mid-card — the
+     * scroll raced the giant resolve card's initial layout. Two frames
+     * lets layout fully settle before anchoring to the bottom.
+     */
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        endRef.current?.scrollIntoView({ behavior, block: "end" });
+      });
+    });
   }, [messages, isAsking, pendingImages, askError]);
 
   // Accepts one OR many files (gallery multi-select). Each is validated +

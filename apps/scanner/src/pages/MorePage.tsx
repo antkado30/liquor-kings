@@ -139,6 +139,13 @@ export function MorePage() {
         <span>Sign out</span>
       </button>
 
+      {/* Build stamp (2026-07-27): which build is this phone ACTUALLY
+          running? Baked in at Docker build via VITE_GIT_SHA — never
+          guess about a stale bundle again. */}
+      <p style={buildStampStyle}>
+        Build {(import.meta.env.VITE_GIT_SHA as string | undefined) || "dev"}
+      </p>
+
       {confirmSignOut ? (
         <div
           role="dialog"
@@ -393,4 +400,12 @@ const signOutConfirmStyle: React.CSSProperties = {
   fontSize: 14,
   fontWeight: 700,
   cursor: "pointer",
+};
+
+const buildStampStyle: React.CSSProperties = {
+  marginTop: 18,
+  textAlign: "center",
+  fontSize: 12,
+  color: "rgba(255,255,255,0.35)",
+  letterSpacing: "0.02em",
 };
