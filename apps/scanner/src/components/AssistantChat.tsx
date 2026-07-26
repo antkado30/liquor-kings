@@ -340,6 +340,9 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   // Start past any restored ids so restored + new messages never collide.
   const nextIdRef = useRef(messages.reduce((max, m) => Math.max(max, m.id), 0) + 1);
+  // Scroll anchoring (2026-07-26, Tony: a restored chat opened at the TOP).
+  const endRef = useRef<HTMLDivElement>(null);
+  const didInitialScroll = useRef(false);
 
   // Persist every change (photos stripped inside toStored) — fails soft.
   useEffect(() => {
@@ -385,8 +388,17 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
   const showSuggestions = messages.length === 0 && !isAsking && !askError;
 
   useEffect(() => {
-    const el = listRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    if (messages.length === 0 && !isAsking) return;
+    /*
+     * scrollIntoView reaches whichever ancestor actually scrolls — the
+     * messages div in the drawer, the PAGE itself on the AI tab.
+     * (el.scrollTo on the inner div was a no-op in page layout, so a
+     * restored chat opened at the TOP — Tony, 2026-07-26.) First paint
+     * jumps straight to the latest message; after that it glides.
+     */
+    const behavior: ScrollBehavior = didInitialScroll.current ? "smooth" : "auto";
+    didInitialScroll.current = true;
+    endRef.current?.scrollIntoView({ behavior, block: "end" });
   }, [messages, isAsking, pendingImages, askError]);
 
   // Accepts one OR many files (gallery multi-select). Each is validated +
@@ -681,6 +693,9 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
             </div>
           </div>
         ) : null}
+
+        {/* Bottom anchor — the scroll effect lands here (2026-07-26). */}
+        <div ref={endRef} aria-hidden />
       </div>
 
       {imageError ? (

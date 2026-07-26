@@ -29,6 +29,9 @@ body {
   color: var(--text);
   line-height: 1.45;
   -webkit-tap-highlight-color: transparent;
+  /* Sideways-pan guard (2026-07-26, Tony's jank screenshots): the page must
+     never scroll horizontally, so nothing can leave the screen "shifted". */
+  overflow-x: hidden;
 }
 
 button,
@@ -1675,7 +1678,7 @@ select {
   color: var(--text);
   border-radius: 12px;
   padding: 0 14px;
-  font-size: 0.9375rem;
+  font-size: 16px; /* iOS zoom law — see floor rule at end of file */
 }
 
 .assistant-input:focus {
@@ -2522,7 +2525,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: var(--bg);
   color: var(--text);
-  font-size: 0.9375rem;
+  font-size: 16px; /* iOS zoom law */
 }
 
 .orders-search__input:focus {
@@ -6188,7 +6191,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
-  font-size: 0.9375rem;
+  font-size: 16px; /* iOS zoom law */
   line-height: 1.45;
 }
 .bulkadd-textarea:focus {
@@ -6261,7 +6264,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
-  font-size: 0.8125rem;
+  font-size: 16px; /* iOS zoom law (was 13px — a zoom trigger on every swap) */
 }
 .bulkadd-qty {
   width: 60px;
@@ -6272,7 +6275,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
-  font-size: 0.9375rem;
+  font-size: 16px; /* iOS zoom law */
   font-weight: 600;
 }
 .bulkadd-nomatch {
@@ -7530,7 +7533,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   color: var(--text);
   border-radius: 8px;
   padding: 10px 12px;
-  font-size: 0.9375rem;
+  font-size: 16px; /* iOS zoom law */
   font-weight: 500;
   width: 100%;
 }
@@ -7933,7 +7936,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: var(--bg);
   color: var(--text);
-  font-size: 0.9375rem;
+  font-size: 16px; /* iOS zoom law */
   font-weight: 500;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -9129,4 +9132,19 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+/* ── iOS INPUT-ZOOM LAW (2026-07-26, from Tony's jank screenshots) ─────────
+   iOS zooms the WHOLE page when a focused input/select/textarea computes
+   under 16px, and the installed app stays zoomed + panned sideways — the
+   "constantly readjusting the screen" jank Tony hated. Every text-entry
+   control must compute ≥16px. All existing offenders were fixed in place
+   (search "iOS zoom law"); this floor catches unclassed controls that
+   inherit a small size from their container. If you style a NEW input:
+   16px is the minimum, no exceptions. (.bulkadd-swap-select knew this
+   trick in isolation — it is codebase law now.) */
+input,
+textarea,
+select {
+  font-size: max(16px, 1em);
 }
