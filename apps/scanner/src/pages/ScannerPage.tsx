@@ -671,6 +671,11 @@ export function ScannerPage() {
           /* task #44: latest price book date drives the freshness/discontinuation banner */
           latestPriceBookDate={latestPriceBookDate}
           onToast={(msg) => setToast(msg)}
+          onOpenProduct={(fam, code) => {
+            setCurrentFamily(fam);
+            setProductCardInitialCode(code);
+            setUpcScanContext(null);
+          }}
           onDismiss={() => {
             setShowProductCard(false);
             setCurrentFamily(null);

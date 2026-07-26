@@ -454,6 +454,48 @@ export async function getProductFamily(mlccCode: string): Promise<ProductFamily 
   return { baseName, sizes, mixedContainers: data.mixedContainers === true };
 }
 
+/** "More from this brand" (2026-07-26): one entry per sibling family. */
+export type RelatedProducts = {
+  mode: "brand" | "similar";
+  brand: string | null;
+  items: { product: MlccProduct; sizes_count: number; from_price: number | null }[];
+};
+
+/**
+ * Related families for the open bottle — ranked server-side by the
+ * all-LK-stores order aggregate (Tony's hybrid). Fails SOFT to null:
+ * the card renders fine without suggestions.
+ */
+export async function getRelatedProducts(
+  mlccCode: string,
+): Promise<RelatedProducts | null> {
+  try {
+    const res = await fetchWithRetry(
+      `${BASE}/items/${encodeURIComponent(mlccCode)}/related`,
+      undefined,
+      { maxRetries: 1, baseDelayMs: 400, timeoutMs: 8000 },
+    );
+    if (!res.ok) return null;
+    const raw = (await res.json()) as Record<string, unknown>;
+    if (!raw?.ok || !Array.isArray(raw.items)) return null;
+    return {
+      mode: raw.mode === "similar" ? "similar" : "brand",
+      brand: typeof raw.brand === "string" ? raw.brand : null,
+      items: (raw.items as Array<Record<string, unknown>>)
+        .filter((i) => i && typeof i === "object" && i.product)
+        .map((i) => ({
+          product: mapRow(i.product as Record<string, unknown>),
+          sizes_count: Math.max(1, Number(i.sizes_count) || 1),
+          from_price: Number.isFinite(Number(i.from_price))
+            ? Number(i.from_price)
+            : null,
+        })),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export type PriceBookStatusResponse = {
   ok: boolean;
   priceBookDate?: string | null;

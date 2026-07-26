@@ -13,6 +13,11 @@ import { lookupUpcFromOpenFoodFacts } from "../lib/open-food-facts.js";
 import { extractBottleSizeMl, findMlccCandidatesForUpc, lookupUpcFromUpcitemdb } from "../lib/upcitemdb.js";
 import { Sentry } from "../lib/sentry.js";
 import {
+  groupIntoFamilies,
+  rankFamilies,
+  priceBandFor,
+} from "../lib/related-products.js";
+import {
   deleteUpcMapping,
   flagUpcMappingAsIncorrect,
   getUpcMapping,
@@ -2162,6 +2167,102 @@ router.get("/items", async (req, res) => {
       ok: false,
       error: e instanceof Error ? e.message : String(e),
     });
+  }
+});
+
+
+/**
+ * GET /price-book/items/:code/related — "More from this brand"
+ * (2026-07-26, TONY-WANTS: design locked via Q&A).
+ *
+ * mode "brand":   other families of the same brand_family, ranked by the
+ *                 all-LK-stores order aggregate (ordered_count — Tony's
+ *                 hybrid), scans as tiebreak.
+ * mode "similar": thin brands (<2 sibling families) fall back to same
+ *                 category + similar price ("if you're buying this,
+ *                 these move too").
+ *
+ * Read-only, ≤400-row pulls, ordered server-side so the cap keeps the
+ * best sellers. Same non-unique-code anchor rule as /items/:code/family.
+ */
+router.get("/items/:code/related", async (req, res) => {
+  try {
+    const code = String(req.params.code ?? "").trim();
+    if (!code) {
+      return res.status(400).json({ ok: false, error: "code_required" });
+    }
+    const { data: anchorRows, error: aErr } = await supabase
+      .from("mlcc_items")
+      .select("*")
+      .eq("code", code)
+      .order("ada_number", { ascending: true })
+      .limit(1);
+    if (aErr) return res.status(500).json({ ok: false, error: aErr.message });
+    const anchor =
+      Array.isArray(anchorRows) && anchorRows.length > 0 ? anchorRows[0] : null;
+    if (!anchor) return res.json({ ok: false, error: "mlcc_code_not_found" });
+
+    const anchorKey = String(anchor.family_key ?? "").trim() || null;
+    const brand = String(anchor.brand_family ?? "").trim();
+    const SELECT_COLS =
+      "id,code,name,brand_family,category,ada_number,ada_name,proof," +
+      "bottle_size_label,bottle_size_ml,case_size,licensee_price," +
+      "min_shelf_price,base_price,container,pack_count,is_new_item," +
+      "image_url,family_key,is_combo,is_active,ordered_count,scan_count";
+
+    let mode = "brand";
+    let families = [];
+
+    if (brand) {
+      const { data: rows, error } = await supabase
+        .from("mlcc_items")
+        .select(SELECT_COLS)
+        .eq("is_active", true)
+        .eq("brand_family", brand)
+        .order("ordered_count", { ascending: false, nullsFirst: false })
+        .limit(400);
+      if (error) return res.status(500).json({ ok: false, error: error.message });
+      families = rankFamilies(
+        groupIntoFamilies(rows, { excludeFamilyKey: anchorKey }),
+      );
+    }
+
+    if (families.length < 2) {
+      mode = "similar";
+      const category = String(anchor.category ?? "").trim();
+      let q = supabase
+        .from("mlcc_items")
+        .select(SELECT_COLS)
+        .eq("is_active", true);
+      if (category) q = q.eq("category", category);
+      const band = priceBandFor(anchor.licensee_price);
+      if (band) q = q.gte("licensee_price", band.min).lte("licensee_price", band.max);
+      const { data: rows, error } = await q
+        .order("ordered_count", { ascending: false, nullsFirst: false })
+        .order("scan_count", { ascending: false, nullsFirst: false })
+        .limit(400);
+      if (error) return res.status(500).json({ ok: false, error: error.message });
+      // Different brands only — the thin brand already showed what it has.
+      const pool = (rows ?? []).filter(
+        (r) => !brand || String(r.brand_family ?? "").trim() !== brand,
+      );
+      families = rankFamilies(
+        groupIntoFamilies(pool, { excludeFamilyKey: anchorKey }),
+      );
+    }
+
+    return res.json({
+      ok: true,
+      mode,
+      brand: brand || null,
+      items: families.map((f) => ({
+        product: f.representative,
+        sizes_count: f.sizes_count,
+        from_price: f.from_price,
+      })),
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message ?? String(e) });
   }
 });
 

@@ -9159,6 +9159,133 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   gap: 6px;
 }
 
+/* ── "More from this brand" on every product card (2026-07-26) ──────────
+   One row per sibling family, ranked by the LK-fleet order aggregate.
+   Width discipline: min-width 0 + ellipsis everywhere — nothing in this
+   section may ever widen the card (the 42px law). No text inputs here. */
+.morefrom {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.morefrom__title {
+  margin: 0 0 2px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.morefrom__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.morefrom__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 52px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.morefrom__row:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+.morefrom__row:disabled {
+  opacity: 0.6;
+}
+.morefrom__thumb {
+  width: 34px;
+  height: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+}
+.morefrom__thumb img,
+.morefrom__thumb svg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.morefrom__copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.morefrom__name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.morefrom__meta {
+  font-size: 0.75rem;
+}
+.morefrom__chev {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  display: inline-flex;
+}
+.morefrom__spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: rgba(255, 255, 255, 0.8);
+  animation: morefrom-spin 0.7s linear infinite;
+}
+@keyframes morefrom-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.morefrom__skeleton-line {
+  height: 12px;
+  width: 140px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.morefrom__row--skeleton {
+  height: 52px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.03);
+  animation: morefrom-pulse 1.1s ease-in-out infinite;
+}
+@keyframes morefrom-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 /* ── iOS INPUT-ZOOM LAW (2026-07-26, from Tony's jank screenshots) ─────────
    iOS zooms the WHOLE page when a focused input/select/textarea computes
    under 16px, and the installed app stays zoomed + panned sideways — the

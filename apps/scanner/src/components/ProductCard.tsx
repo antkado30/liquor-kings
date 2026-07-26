@@ -5,6 +5,7 @@ import { fetchTagsHtml } from "../api/tags";
 import { downscaleImageFile } from "../lib/downscaleImage";
 import { IconAlert, IconCamera, IconCheck, IconInfo, IconTag } from "./Icons";
 import { TagPrintPreview } from "./TagPrintPreview";
+import { MoreFromBrand } from "./MoreFromBrand";
 import {
   generateValidQuantities,
   getOrderingRuleDisplay,
@@ -39,6 +40,8 @@ type ProductCardProps = {
    */
   latestPriceBookDate?: string | null;
   onToast?: (message: string) => void;
+  /** "More from this brand" tap-through: parent swaps the open card (2026-07-26). */
+  onOpenProduct?: (family: ProductFamily, code: string) => void;
 };
 
 export function ProductCard({
@@ -50,6 +53,7 @@ export function ProductCard({
   wasUpcScanMatch = false,
   latestPriceBookDate = null,
   onToast,
+  onOpenProduct,
 }: ProductCardProps) {
   useLockBodyScroll();
   const [selectedProduct, setSelectedProduct] = useState<MlccProduct>(() =>
@@ -678,6 +682,14 @@ export function ProductCard({
             </button>
           </div>
         ) : null}
+
+        {/* "The store keeps selling" — scroll down for more from this
+            brand / more like this (Tony, 2026-07-26). Keyed on the
+            family's first code so switching sizes never refetches. */}
+        <MoreFromBrand
+          anchorCode={family.sizes[0]?.code ?? selectedProduct.code}
+          onOpenProduct={onOpenProduct}
+        />
       </div>
       {/*
         Shelf tag print preview modal. Renders above ProductCard via

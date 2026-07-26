@@ -1005,6 +1005,10 @@ export function BrowsePage() {
             setToast(`Added ${quantity} × ${sizeLabel}`);
           }}
           onToast={(msg) => setToast(msg)}
+          onOpenProduct={(fam, code) => {
+            setCurrentFamily(fam);
+            setInitialCode(code);
+          }}
         />
       ) : null}
 
