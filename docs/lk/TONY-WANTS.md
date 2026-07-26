@@ -304,6 +304,34 @@ client-only, deploy freeze Wednesday night.
 
 ---
 
+## 🛒 "MORE FROM THIS BRAND" ON EVERY BOTTLE (Tony, 2026-07-26, design LOCKED via Q&A)
+
+> "Once you're done with that, you could scroll down — more from this
+> brand… different flavors, the most popular / the most ordered stuff
+> after that one — and that opens up a product card of all the sizes.
+> Even if a brand only has one type of liquor, suggest more stuff."
+
+Locked by interrogation (his answers, 7/26):
+1. **Ranking = the hybrid.** "Michigan-wide, but collect data from
+   stores to see what actually is top." Implementation truth: the
+   all-LK-stores order aggregate (mlcc_items.ordered_count, bumped by
+   every confirmed LK order; today mostly Colony, thickens with every
+   store that joins) with scans as tiebreak. Per-store personalization
+   is a later layer once fleet data exists. This aggregate is also
+   acquisition-story data nobody else has.
+2. **Thin brands (1-2 products) fall back to same kind + similar
+   price**, most popular first — "if you're buying this, these move
+   too."
+3. **Everywhere a bottle opens** — catalog, search, AND the scan
+   result. One behavior: open a bottle, scroll down, keep shopping.
+4. Entries are FAMILIES (one row per flavor/variant, never per size);
+   tapping one opens the full product card with every size (his words).
+
+Status: ⏳ design locked 7/26, build queued in the pre-Thursday safe
+lane (read-only client+API; no money path).
+
+---
+
 ## 🗄️ Permanent price-book archive + history (stated 2026-06-16)
 
 > "Whenever I give you the whole MLCC price book file, create a file on the

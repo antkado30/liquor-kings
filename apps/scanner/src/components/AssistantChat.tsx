@@ -341,7 +341,6 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
   // Start past any restored ids so restored + new messages never collide.
   const nextIdRef = useRef(messages.reduce((max, m) => Math.max(max, m.id), 0) + 1);
   // Scroll anchoring (2026-07-26, Tony: a restored chat opened at the TOP).
-  const endRef = useRef<HTMLDivElement>(null);
   const didInitialScroll = useRef(false);
 
   // Persist every change (photos stripped inside toStored) — fails soft.
@@ -405,7 +404,17 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
      */
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        endRef.current?.scrollIntoView({ behavior, block: "end" });
+        /*
+         * TRUE bottom (2026-07-26, Tony: "I have to scroll down a little
+         * to see the text box"): the old sentinel anchored the END OF
+         * MESSAGES to the viewport edge, leaving the composer just below
+         * the fold on the AI tab. Land the PAGE at its full bottom
+         * (composer in view) and the drawer's own scroller likewise.
+         */
+        const doc = document.scrollingElement;
+        if (doc) doc.scrollTo({ top: doc.scrollHeight, behavior });
+        const el = listRef.current;
+        if (el) el.scrollTo({ top: el.scrollHeight, behavior });
       });
     });
   }, [messages, isAsking, pendingImages, askError]);
@@ -702,9 +711,6 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
             </div>
           </div>
         ) : null}
-
-        {/* Bottom anchor — the scroll effect lands here (2026-07-26). */}
-        <div ref={endRef} aria-hidden />
       </div>
 
       {imageError ? (
