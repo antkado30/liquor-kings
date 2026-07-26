@@ -22,6 +22,14 @@ body,
   margin: 0;
 }
 
+html {
+  /* Sideways-pan kill, root layer (2026-07-27): body-only overflow-x was
+     not enough — iOS pans the DOCUMENT to reveal focused elements that
+     poke past the edge. clip forbids even that (hidden = older fallback). */
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+
 body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 16px;
@@ -32,6 +40,7 @@ body {
   /* Sideways-pan guard (2026-07-26, Tony's jank screenshots): the page must
      never scroll horizontally, so nothing can leave the screen "shifted". */
   overflow-x: hidden;
+  overflow-x: clip;
 }
 
 button,
@@ -1370,6 +1379,7 @@ select {
 .assistant-messages {
   flex: 1 1 auto;
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
   -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
@@ -1672,6 +1682,11 @@ select {
 
 .assistant-input {
   flex: 1 1 auto;
+  /* THE 42px BUG (2026-07-27, measured): a flex input's default min-width
+     is its intrinsic size (~20 characters), so this row overflowed the
+     viewport and pushed Send off-screen — the sideways pan/scroll jank.
+     min-width: 0 lets it shrink to fit. Law: every flex input needs this. */
+  min-width: 0;
   min-height: var(--touch);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: var(--bg);
@@ -3387,6 +3402,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   padding: 0;
   margin: 0;
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
   flex: 1;
 }
 
@@ -5361,6 +5377,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
   -webkit-overflow-scrolling: touch;
   padding: 4px 2px max(16px, env(safe-area-inset-bottom));
 }
@@ -6170,6 +6187,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
 
 .bulkadd-body {
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
   -webkit-overflow-scrolling: touch;
   padding: 4px 18px 18px;
   display: flex;
@@ -6457,6 +6475,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   margin-bottom: 10px;
   max-height: 45vh;
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
 }
 .assistant-history__head {
   display: flex;
@@ -6600,6 +6619,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   padding: 0;
   margin: 0;
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
   flex: 1;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -6746,6 +6766,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
 
 .andash-sheet__scroll {
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
   flex: 1;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -7480,6 +7501,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
      (2026-06-10) for the iOS viewport-overestimation fix. */
   max-height: 88dvh;
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
   overscroll-behavior: contain;
 }
 
@@ -7570,6 +7592,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   gap: 6px;
   max-height: 240px;
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
 }
 
 .tplpg-edit-item {
@@ -7655,6 +7678,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   gap: 4px;
   max-height: 180px;
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
 }
 
 .tplpg-search-result {
@@ -9024,6 +9048,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
      (2026-06-10) for the iOS viewport-overestimation fix. */
   max-height: min(90dvh, 720px);
   overflow-y: auto;
+  overflow-x: hidden; /* vertical scrollers never pan sideways (2026-07-27 law) */
   overscroll-behavior: contain;
 }
 
