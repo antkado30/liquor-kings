@@ -304,6 +304,38 @@ client-only, deploy freeze Wednesday night.
 
 ---
 
+## 🚨🔥🔥🔥 SCANNER RELIABILITY WAR (Tony, 2026-07-26, from the floor — P0)
+
+> "I literally just tried scanning 10 different bottles and like five of
+> them just weren't scanning at all... we need to improve the overall
+> quality of our scanner by 1,000,000%. We have to make everything
+> advance. We can't have any inconveniences. We can't have any mishaps.
+> We can't have any broken code. We can't have anything look ugly."
+
+5/10 scan failure at the register = core-loop emergency (the scan page is
+the front door — Quality Mandate rule 6 applies). Same session, the photo
+fallback showed its own wound (screenshot): VISION SAW "Smirnoff No. 21
+Vodka 50ml, HIGH CONFIDENCE" → RECOMMENDED "SMIRNOFF SOURS GREEN APPLE
+PL" — the vision picker has its own matcher that never learned the 7/23
+flavor-penalty law ("what the fuck are you talking about"), and its
+result rows have no tap-through to the product card.
+
+War plan (measured, like the 42px hunt — no guessing):
+1. Diagnose the barcode pipeline: ZXing config, camera resolution/focus/
+   torch, symbologies, per-bottle failure modes (minis? curved? glare?)
+   — RINSE Tony on which 5 failed and HOW (never locks vs wrong vs lag).
+2. ONE MATCHER LAW: vision picker results must flow through the
+   deterministic resolver scoring (plain-over-flavor, size-aware) — the
+   AI chat, paste-order, and photo paths already do; vision is the last
+   organ with its own untaught matcher (rule 13: fix the class).
+3. Vision rows get tap-through to the full product card.
+4. Native wrap note: TONY-WANTS already queues Capacitor partly for a
+   native barcode module — this war strengthens that case post-launch.
+
+Status: ⏳ opened 7/26; diagnosis is the next work block.
+
+---
+
 ## 🛒 "MORE FROM THIS BRAND" ON EVERY BOTTLE (Tony, 2026-07-26, design LOCKED via Q&A)
 
 > "Once you're done with that, you could scroll down — more from this

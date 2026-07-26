@@ -90,3 +90,31 @@ export function priceBandFor(anchorPrice) {
   if (!Number.isFinite(p) || p <= 0) return null;
   return { min: Math.max(1, p * 0.5), max: p * 2 };
 }
+
+/**
+ * Brand prefixes from a raw MLCC name (2026-07-26, the Jim Beam finding:
+ * brand_family is NULL for most of the catalog - the ingestor only
+ * preserves it, nothing populates it). MLCC names lead with the brand
+ * ("JIM BEAM PL", "SKYY INFUSION CITRUS"), so leading-token prefixes
+ * recover the lineup: try the two-token prefix first ("JIM BEAM"), fall
+ * back to one token ("SKYY") when the brand is a single word. Tokens
+ * under 3 chars are too generic to trust alone.
+ */
+export function brandPrefixesFor(name) {
+  const tokens = String(name ?? "")
+    .trim()
+    .toUpperCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  const out = [];
+  if (tokens.length >= 2) out.push(`${tokens[0]} ${tokens[1]}`);
+  if (tokens[0] && tokens[0].length >= 3 && !out.includes(tokens[0])) {
+    out.push(tokens[0]);
+  }
+  return out;
+}
+
+/** Escape ILIKE wildcards so a name like "100% AGAVE" can never glob. */
+export function escapeIlike(s) {
+  return String(s).replace(/[\\%_]/g, (m) => `\\${m}`);
+}

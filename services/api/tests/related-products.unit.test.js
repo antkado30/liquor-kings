@@ -13,6 +13,8 @@ import {
   pickRepresentative,
   rankFamilies,
   priceBandFor,
+  brandPrefixesFor,
+  escapeIlike,
 } from "../src/lib/related-products.js";
 
 const row = (over = {}) => ({
@@ -137,5 +139,29 @@ describe("priceBandFor", () => {
     expect(priceBandFor(null)).toBeNull();
     expect(priceBandFor(0)).toBeNull();
     expect(priceBandFor("nope")).toBeNull();
+  });
+});
+
+describe("brandPrefixesFor (the Jim Beam finding)", () => {
+  it("two-token prefix first, one-token fallback second", () => {
+    expect(brandPrefixesFor("JIM BEAM PL")).toEqual(["JIM BEAM", "JIM"]);
+    expect(brandPrefixesFor("SKYY INFUSION CITRUS")).toEqual(["SKYY INFUSION", "SKYY"]);
+  });
+
+  it("single-word names give just the one prefix", () => {
+    expect(brandPrefixesFor("LIMONCELLO")).toEqual(["LIMONCELLO"]);
+  });
+
+  it("a leading token under 3 chars never stands alone", () => {
+    expect(brandPrefixesFor("JB SPECIAL")).toEqual(["JB SPECIAL"]);
+  });
+
+  it("empty or garbage names give no prefixes (falls to similar mode)", () => {
+    expect(brandPrefixesFor("")).toEqual([]);
+    expect(brandPrefixesFor(null)).toEqual([]);
+  });
+
+  it("escapeIlike neuters wildcards", () => {
+    expect(escapeIlike("100% AGAVE_X")).toBe("100\\% AGAVE\\_X");
   });
 });

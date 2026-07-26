@@ -16,6 +16,8 @@ import {
   groupIntoFamilies,
   rankFamilies,
   priceBandFor,
+  brandPrefixesFor,
+  escapeIlike,
 } from "../lib/related-products.js";
 import {
   deleteUpcMapping,
@@ -2211,6 +2213,7 @@ router.get("/items/:code/related", async (req, res) => {
       "image_url,family_key,is_combo,is_active,ordered_count,scan_count";
 
     let mode = "brand";
+    let brandLabel = brand || null;
     let families = [];
 
     if (brand) {
@@ -2225,6 +2228,35 @@ router.get("/items/:code/related", async (req, res) => {
       families = rankFamilies(
         groupIntoFamilies(rows, { excludeFamilyKey: anchorKey }),
       );
+    }
+
+    /* Brand ladder (2026-07-26, the Jim Beam finding): brand_family is
+       NULL-sparse in the catalog (the ingestor preserves it; nothing
+       populates it), so big brands fell straight to "More like this".
+       MLCC names lead with the brand, so recover the lineup by
+       leading-name-prefix: two-token ("JIM BEAM") first, one-token
+       ("SKYY") second. First rung yielding a real lineup (2+ families)
+       wins and names the section. */
+    if (families.length < 2) {
+      for (const prefix of brandPrefixesFor(anchor.name)) {
+        const { data: rows, error } = await supabase
+          .from("mlcc_items")
+          .select(SELECT_COLS)
+          .eq("is_active", true)
+          .ilike("name", `${escapeIlike(prefix)}%`)
+          .order("ordered_count", { ascending: false, nullsFirst: false })
+          .limit(400);
+        if (error) return res.status(500).json({ ok: false, error: error.message });
+        const found = rankFamilies(
+          groupIntoFamilies(rows, { excludeFamilyKey: anchorKey }),
+        );
+        if (found.length >= 2) {
+          families = found;
+          brandLabel = prefix;
+          mode = "brand";
+          break;
+        }
+      }
     }
 
     if (families.length < 2) {
@@ -2254,7 +2286,7 @@ router.get("/items/:code/related", async (req, res) => {
     return res.json({
       ok: true,
       mode,
-      brand: brand || null,
+      brand: brandLabel,
       items: families.map((f) => ({
         product: f.representative,
         sizes_count: f.sizes_count,

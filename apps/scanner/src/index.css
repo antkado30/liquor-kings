@@ -68,7 +68,9 @@ select {
 
 .page {
   min-height: 100%;
-  padding: 12px 14px 96px;
+  /* Bottom clearance = tab bar + home-bar inset (2026-07-26): viewport-fit
+     made the bar taller; flat 96px left the last item trapped under it. */
+  padding: 12px 14px calc(96px + env(safe-area-inset-bottom));
   max-width: 560px;
   margin: 0 auto;
 }
@@ -544,7 +546,9 @@ select {
   -webkit-overflow-scrolling: touch;
   background: var(--surface);
   border-radius: 16px 16px 0 0;
-  padding: 16px 16px 20px;
+  /* The fixed tab bar overlays this sheet's bottom - clear it so the last
+     row (More-from-brand) is reachable and tappable (2026-07-26). */
+  padding: 16px 16px calc(88px + env(safe-area-inset-bottom));
   border: 1px solid rgba(255, 255, 255, 0.08);
   animation: sheetUp 0.2s ease-out;
   display: flex;
@@ -2412,7 +2416,7 @@ select {
   margin: 0 auto;
   /* Bottom padding reserves room for the fixed BottomTabBar (#90).
      Without this content sits under the tab bar and gets clipped. */
-  padding: 16px 16px 110px;
+  padding: 16px 16px calc(110px + env(safe-area-inset-bottom));
   min-height: 100vh;
 }
 
@@ -3067,7 +3071,7 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   values + sort options.
 */
 .browse-shell {
-  padding-bottom: 80px; /* room for the floating toast */
+  padding-bottom: calc(80px + env(safe-area-inset-bottom)); /* toast + tab bar clearance */
 }
 
 .browse-search {
