@@ -234,6 +234,18 @@ type CartDrawerProps = {
    * not just after. Defaults to false (safe/preview) when omitted.
    */
   allowOrderSubmission?: boolean;
+  /**
+   * THE CART TAB FIX (Tony, 2026-07-26: "when I press on the cart logo on
+   * the bottom middle i want it to be an actual cart page not half cart
+   * with a background of the scanner"). "drawer" (default) is the classic
+   * bottom sheet the scanner's top-right cart icon opens — quick peek,
+   * tab bar hidden, body locked. "page" renders the SAME component as a
+   * real full page inside the /cart route: no backdrop, no grab handle,
+   * no close X, tab bar stays visible, the page scrolls normally, and
+   * the sticky Check/Place footer sits ABOVE the tab bar. Zero changes
+   * to the money state machine — this prop only swaps the chrome.
+   */
+  layout?: "drawer" | "page";
 };
 
 export function CartDrawer({
@@ -244,15 +256,19 @@ export function CartDrawer({
   storeName,
   storeLicense,
   allowOrderSubmission = false,
+  layout = "drawer",
 }: CartDrawerProps) {
+  const isPage = layout === "page";
   /*
-   * Hide the bottom tab bar while the drawer is open. Tony's
+   * Hide the bottom tab bar while the DRAWER is open. Tony's
    * 2026-06-07 critical bug: the tab bar was covering the Submit
    * button at the bottom of the drawer so the user literally could
-   * not reach it. This kills the overlap.
+   * not reach it. This kills the overlap. In PAGE mode the tab bar
+   * must stay (it's how you leave the page) — the footer clears it
+   * via CSS instead.
    */
-  useHideTabBar();
-  useLockBodyScroll();
+  useHideTabBar(!isPage);
+  useLockBodyScroll(!isPage);
   const navigate = useNavigate();
   const {
     items,
@@ -1027,9 +1043,28 @@ export function CartDrawer({
   };
 
   return (
-    <div className="drawer-backdrop" onClick={handleClose} role="presentation">
-      <div className="drawer drawer--cart" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Cart">
-        <div className="drawer-grab" aria-hidden="true" />
+    /*
+      PAGE vs DRAWER shell (2026-07-26, the Cart-tab fix). In page mode the
+      fixed dimmed backdrop becomes a plain static host (the /cart route IS
+      the background), the sheet chrome (grab handle, close X, dialog
+      semantics) disappears, and `drawer--cart-page` CSS un-sheets the
+      container. The sibling modals below are position:fixed overlays, so
+      they render identically from either host. Everything inside — the
+      whole Check/Place machine — is byte-identical between modes.
+    */
+    <div
+      className={isPage ? "cart-page-host" : "drawer-backdrop"}
+      onClick={isPage ? undefined : handleClose}
+      role={isPage ? undefined : "presentation"}
+    >
+      <div
+        className={`drawer drawer--cart${isPage ? " drawer--cart-page" : ""}`}
+        onClick={isPage ? undefined : (e) => e.stopPropagation()}
+        role={isPage ? undefined : "dialog"}
+        aria-modal={isPage ? undefined : true}
+        aria-label="Cart"
+      >
+        {isPage ? null : <div className="drawer-grab" aria-hidden="true" />}
         <div className="drawer-header drawer-header--cart">
           <div className="drawer-header__titles">
             <h2>Cart</h2>
@@ -1041,9 +1076,11 @@ export function CartDrawer({
               </span>
             ) : null}
           </div>
-          <button type="button" className="drawer-close" onClick={handleClose} aria-label="Close cart" disabled={isBusy}>
-            <IconX size={20} />
-          </button>
+          {isPage ? null : (
+            <button type="button" className="drawer-close" onClick={handleClose} aria-label="Close cart" disabled={isBusy}>
+              <IconX size={20} />
+            </button>
+          )}
         </div>
 
         {/* ─── Cart contents (always visible unless in submit-done state) ─── */}

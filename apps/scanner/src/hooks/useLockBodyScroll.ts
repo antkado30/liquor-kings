@@ -14,8 +14,12 @@ import { useEffect } from "react";
  * Pair this with `overscroll-behavior: contain` on the modal's scroll container
  * so the inner scroll never chains out to the page.
  */
-export function useLockBodyScroll(): void {
+export function useLockBodyScroll(active: boolean = true): void {
   useEffect(() => {
+    // `active` lets a component that renders as EITHER an overlay or a
+    // real page (CartDrawer since 2026-07-26) opt out without breaking
+    // the rules of hooks — a page must scroll like a page.
+    if (!active) return;
     const body = document.body;
     const scrollY = window.scrollY;
     const prev = {
@@ -44,5 +48,5 @@ export function useLockBodyScroll(): void {
       // Restore the scroll position the page had before we locked it.
       window.scrollTo(0, scrollY);
     };
-  }, []);
+  }, [active]);
 }

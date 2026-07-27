@@ -1,29 +1,129 @@
 /**
- * CartPage — Cart tab destination. Critical fix 2026-06-07.
+ * CartPage — the Cart tab is a REAL page now (2026-07-26).
  *
- * The old CartPage was a placeholder stub from way back ("Connect to
- * your store to submit orders") that never got finished — the real
- * cart UX lives in <CartDrawer> on the ScannerPage. Tony hit this
- * immediately when the bottom Cart tab routed to the stub instead of
- * the real cart.
+ * Tony, from the floor: "when I press on the cart logo on the bottom
+ * middle i want it to be an actual cart page not half cart with a
+ * background of the scanner" — and the tab bar must not vanish.
  *
- * Fix: redirect to / with ?view=cart so the existing query-param
- * machinery in ScannerPage opens the cart drawer. Same pattern we
- * use for the Dashboard and AI Assistant overlays.
+ * History: the original CartPage was a stub, then (2026-06-07) a
+ * redirect to /?view=cart that opened CartDrawer OVER the scanner —
+ * exactly the half-cart Tony called out. This page renders the SAME
+ * CartDrawer component in `layout="page"` mode: identical Check/Place
+ * machinery, zero logic changes — only the chrome differs (no backdrop,
+ * no grab handle, no close X, tab bar visible, page scroll, sticky
+ * footer clears the tab bar). The scanner's top-right cart icon still
+ * opens the classic drawer for a quick peek — both live on.
  *
- * Long-term, CartDrawer should probably be refactored into a real
- * page so the Cart tab is a destination not a redirect. Filing that
- * as a follow-up; for V1 the redirect is the pragmatic fix.
+ * The page carries its own copies of the ScannerPage plumbing the
+ * drawer needs:
+ *   - useBackgroundPreValidate: silent validation while the user looks
+ *     at the cart, so Check can short-circuit on a fresh cached result.
+ *   - store meta (name / license / armed flag) for the pre-submit
+ *     verification modal — fetched from /home/smart-cards, fail-soft
+ *     (missing meta degrades to the safe "preview" messaging).
+ *   - ProductCard host state so tapping a cart line's product name
+ *     opens the bottle's family card (Amazon-style sibling browsing),
+ *     including the More-from-brand tap-through.
  */
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { CartDrawer } from "../components/CartDrawer";
+import { ProductCard } from "../components/ProductCard";
+import { useCart } from "../hooks/useCart";
+import { useBackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
+import { getSmartCards, type StoreVerificationMeta } from "../api/home";
+import { getProductFamily } from "../api/catalog";
+import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
+import type { MlccProduct, ProductFamily } from "../types";
 
 export function CartPage() {
+  const cart = useCart();
   const navigate = useNavigate();
+  const preValidate = useBackgroundPreValidate(cart.items);
+
+  const [storeMeta, setStoreMeta] = useState<StoreVerificationMeta | undefined>(
+    undefined,
+  );
   useEffect(() => {
-    navigate("/?view=cart", { replace: true });
-  }, [navigate]);
-  // Empty render while the redirect fires. User sees a flash of black
-  // for a frame; not worth styling.
-  return null;
+    let cancelled = false;
+    void getSmartCards()
+      .then((r) => {
+        if (!cancelled && r.ok && r.store_meta) setStoreMeta(r.store_meta);
+      })
+      .catch(() => {
+        /* fail-soft: modal falls back to generic store header + safe
+           preview messaging, same as ScannerPage before meta loads */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const [currentFamily, setCurrentFamily] = useState<ProductFamily | null>(null);
+  const [initialCode, setInitialCode] = useState<string | undefined>(undefined);
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2800);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const openFamily = useCallback(async (p: MlccProduct) => {
+    // Same single-size fallback law as ScannerPage.openFamily: the card
+    // must ALWAYS open (doctrine: no silent failures).
+    const fam: ProductFamily =
+      (await getProductFamily(p.code)) ?? { baseName: p.name, sizes: [p] };
+    setInitialCode(p.code);
+    setCurrentFamily(fam);
+  }, []);
+
+  return (
+    <div className="page cart-page">
+      <CartDrawer
+        layout="page"
+        cart={cart}
+        preValidate={preValidate}
+        storeName={storeMeta?.store_name ?? null}
+        storeLicense={storeMeta?.liquor_license ?? null}
+        allowOrderSubmission={storeMeta?.allow_order_submission ?? false}
+        /*
+          onClose on the PAGE means "this flow is finished, leave the
+          cart" — after Place fires, the drawer machinery calls onClose
+          so the persistent OrderStatusPill takes over; landing on the
+          scanner home mirrors the drawer's behavior exactly.
+        */
+        onClose={() => navigate("/")}
+        onLineProductClick={(product) => {
+          void openFamily(product);
+        }}
+      />
+
+      {currentFamily ? (
+        <ProductCard
+          family={currentFamily}
+          initialSelectedCode={initialCode}
+          onDismiss={() => {
+            setCurrentFamily(null);
+            setInitialCode(undefined);
+          }}
+          onAddToCart={(product, quantity) => {
+            cart.addItem(product, quantity);
+            const sizeLabel = `${product.bottle_size_label ?? `${product.bottle_size_ml ?? ""} mL`}${nonGlassContainerSuffix(product.container)}${packCountSuffix(product.pack_count)}`;
+            setToast(`Added ${quantity} × ${sizeLabel}`);
+          }}
+          onToast={(msg) => setToast(msg)}
+          onOpenProduct={(fam, code) => {
+            setCurrentFamily(fam);
+            setInitialCode(code);
+          }}
+        />
+      ) : null}
+
+      {toast ? (
+        <div className="cart-page-toast" role="status">
+          {toast}
+        </div>
+      ) : null}
+    </div>
+  );
 }

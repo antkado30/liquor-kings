@@ -284,23 +284,30 @@ on the device-verify list. #4 handled by the 7/23 corpus rebuild.
 Three distinct items, all quality-mandate P0-class (perceived jank in the
 core loop):
 
-1. **iOS input-zoom / pan jank.** Root class identified: iOS zooms the
-   page when a focused text control computes <16px; 7 offenders found and
-   floored to 16px + element floor + body overflow-x guard ("iOS zoom
-   law" block in index.css). ⚠️ Shipped `74a1759` but STILL REPRODUCED on
-   device minutes later — stale PWA bundle is the prime suspect; verify
-   the device build path FIRST, then re-diagnose. NOT closed.
-2. **Bottom-bar taps trigger the iPhone home-bar gesture** → triple-press
-   to land a button. Tab bar likely inside the home-indicator gesture
-   zone; needs `env(safe-area-inset-bottom)` clearance + bottom-edge
-   audit app-wide. ⏳
-3. **Cart = a real PAGE.** Bottom-nav Cart must open a dedicated full
-   cart page, not the half-drawer over the scanner. Product change. ⏳
+1. **iOS input-zoom / pan jank.** ✅ CLOSED (measured kill, `f020ec7`):
+   Playwright harness found the true offender — `.assistant-input`
+   flex min-width overflow forcing doc width 435px — plus the 16px
+   floors. Tony on device: "It looks good baby."
+2. **Bottom-bar taps trigger the iPhone home-bar gesture.** ✅ CLOSED:
+   `viewport-fit=cover` was missing, so every `env(safe-area-inset-*)`
+   was ZERO in the installed PWA. Added → Tony: "everything works
+   perfectly."
+3. **Cart = a real PAGE.** ✅ BUILT 2026-07-26 (pending phone proof).
+   Not a rewrite — CartDrawer (the whole 2.5k-line Check/Place money
+   machine, untouched) learned `layout="page"`: /cart renders it as a
+   true full page — no backdrop, no grab/X, tab bar VISIBLE, page
+   scroll, sticky Check/Place footer offset above the tab bar (offset
+   MEASURED at 69px nav height via a Playwright cart harness; all four
+   layout checks pass: no h-overflow, tab bar alive, footer clears,
+   last line reachable). The scanner's top-right cart icon still opens
+   the classic drawer peek — both modes share every byte of cart logic.
+   CartPage carries its own pre-validate hook, smart-cards store meta
+   (fail-soft), and a ProductCard host so cart-line taps + More-from-
+   brand work from the page. 4 new hook tests pin the mode split.
 
-Related shipped-but-unproven: AI chat restore must land at the BOTTOM
-(fix shipped same commit, also still reproduced — same stale-bundle
-suspect). Status: ⏳ all four owned by the Mon–Tue pre-Thursday window,
-client-only, deploy freeze Wednesday night.
+Related shipped-and-proven: AI chat restore lands at the true bottom
+(`766733d`). Status: items 1–2 proven on device 7/26; item 3 awaiting
+proof. Deploy freeze Wednesday night stands.
 
 ---
 
