@@ -238,8 +238,13 @@ stale):** #0 one-tap "Remove these N and check again" ✅ BUILT (strips
 exactly MILO's rejected codes, fires a fresh check, place-gate re-locks —
 automates the cleanup, never the gate) and the pinned OOS strip (#2)
 ✅ BUILT (drives the button label). #1 (names, not bare codes) and #3
-(post-check price reconcile into the cart display) NOT yet verified —
-on the device-verify list. #4 handled by the 7/23 corpus rebuild.
+(post-check price reconcile into the cart display) — **VERIFIED BUILT
+in code 2026-07-27** (doc was stale): #1 = `lib/oos-display.ts`
+("OLD CROW · 1750 ML · #9528", wired into the result sheet); #3 =
+`lib/cart-total.ts` resolveDisplayedTotal (MLCC net shown only while
+the checked cart matches the screen — honesty rules baked in, wired
+into the drawer footer). Device glance rides the 7/27 morning list.
+#4 handled by the 7/23 corpus rebuild.
 0. **🔥 ONE-TAP "Remove out-of-stock + re-check" (the big one).** A red
    check with OOS lines currently strands the operator: MILO answers
    `can_checkout=false`, Place stays locked (correctly — MILO rejected
@@ -865,11 +870,14 @@ Device proof pending deploy.
 > bottom it doesnt let me click on it to see the progress only after it has
 > finished it lets me"
 
-⏳ Tap the pill mid-run → sheet opens LIVE: current stage, elapsed timer,
-honest progress copy; the result fills in when it lands. This REVERSES the
-2026-06-30 "skip tap-through progress" call — that call assumed a ~10s engine
-run; real checks are 30–60s (56s on 2026-07-05) and an untappable pill reads
-as frozen. Related: the "staged progress, no dead spinner" want above.
+✅ **BUILT — both halves.** Half 1 (tap works in EVERY state, live sheet
+opens mid-run, result fills in place) shipped with the pill rebuild —
+this doc had gone stale. Half 2 (2026-07-27): the live sheet was one
+thin line while the drawer had the full experience — the stage
+checklist + elapsed clock + honest slow-MILO copy got extracted to the
+shared `RpaProgress` panel, and a mid-run pill tap now renders the
+IDENTICAL rich panel the drawer shows (one truth). 9 tests pin it.
+Device proof rides the 7/27 batch.
 
 ## 🔥🔥 Catalog quality — family tree 100% + grouped search (Tony, 2026-07-01, after finding competitor "minimum.")
 

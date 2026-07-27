@@ -19,6 +19,7 @@ import { useCartItemsOrEmpty } from "../hooks/useCart";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import { oosDisplayLabel } from "../lib/oos-display";
 import { IconAlert, IconCheck, IconLoader, IconX } from "./Icons";
+import { RpaProgressPanel, stageIndexFor, stagesForMode } from "./RpaProgress";
 
 type Props = {
   /**
@@ -27,8 +28,20 @@ type Props = {
    * because the pill re-renders it with fresh props; 2026-07-08 want).
    */
   result: ActiveOrderResult | null;
-  /** Live copy while result is null: the pill's own headline + stage line. */
-  live?: { title: string; sub: string | null } | null;
+  /**
+   * Live state while result is null. title/sub are the pill's own copy;
+   * progressStage/progressMessage/startedAtMs (2026-07-27 — the OTHER
+   * half of Tony's 7/5 want) drive the full RpaProgressPanel so a
+   * mid-run tap shows the SAME rich stage checklist + elapsed clock the
+   * cart drawer shows, not one thin line.
+   */
+  live?: {
+    title: string;
+    sub: string | null;
+    progressStage?: string | null;
+    progressMessage?: string | null;
+    startedAtMs?: number;
+  } | null;
   /** True when the run finalized failed/canceled → honest failure view. */
   failed?: boolean;
   /**
@@ -203,21 +216,36 @@ export function RunResultSheet({
             </button>
           </div>
           <div style={bodyStyle}>
-            {live?.sub ? (
-              <div style={{ fontSize: 14, color: "rgba(255,255,255,0.85)", marginBottom: 14 }}>
-                {live.sub}
-              </div>
-            ) : null}
             {mode === "validate_only" ? (
               <div style={practiceNoteStyle}>
                 Practice check — nothing is being ordered.{" "}
                 <span style={{ opacity: 0.7 }}>MILO is checking the cart and pricing only.</span>
               </div>
             ) : null}
+            {/*
+              The full stage checklist + live elapsed clock — the same
+              panel the cart drawer renders (one truth, ./RpaProgress).
+              Before the worker claims the run, every stage shows pending
+              and the headline explains the wait.
+            */}
+            <RpaProgressPanel
+              headline={{
+                title:
+                  mode === "submit"
+                    ? "MILO is placing this order"
+                    : "MILO is checking this cart",
+                sub:
+                  live?.progressMessage ??
+                  (live?.progressStage ? undefined : "Starting up — sending your cart to MILO…"),
+              }}
+              stages={stagesForMode(mode)}
+              currentStageIndex={stageIndexFor(stagesForMode(mode), live?.progressStage)}
+              preStage={!live?.progressStage}
+              startedAtMs={live?.startedAtMs}
+            />
             <p style={mutedStyle}>
-              MILO is checking your cart against live stock and rules. You can
-              close this — the pill keeps tracking, and the result lands here
-              the moment it&apos;s done.
+              You can close this — the pill keeps tracking, and the result
+              lands here the moment it&apos;s done.
             </p>
           </div>
           <div style={footerStyle}>

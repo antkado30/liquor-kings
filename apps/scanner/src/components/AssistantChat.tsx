@@ -15,6 +15,7 @@ import {
   toStored,
   type StoredChat,
 } from "../lib/assistant-chat-store";
+import { LabelPacer } from "../lib/label-pacer";
 import {
   IconAlert,
   IconCamera,
@@ -497,9 +498,18 @@ export function AssistantChat({ cart, layout = "page" }: AssistantChatProps) {
 
     setIsAsking(true);
     setProgressLabel(null);
+    /*
+      Label pacing (2026-07-27 — Tony 7/26: "it said reading your photo
+      then something else i couldnt catch it"): server ticks can arrive
+      faster than a human reads. The pacer guarantees each label ≥1.2s
+      on screen, collapsing bursts to the latest; reset() after the ask
+      so a held label can never flash over the landed answer.
+    */
+    const pacer = new LabelPacer((label) => setProgressLabel(label));
     const result = await askAssistant(displayText, images, priorTurns, (p) =>
-      setProgressLabel(p.label),
+      pacer.push(p.label),
     );
+    pacer.reset();
     setIsAsking(false);
     setProgressLabel(null);
 

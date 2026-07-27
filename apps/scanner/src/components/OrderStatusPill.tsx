@@ -214,7 +214,20 @@ export function OrderStatusPill() {
       {showResult && activeOrder ? (
         <RunResultSheet
           result={activeOrder.result}
-          live={!terminal ? { title, sub } : null}
+          live={
+            !terminal
+              ? {
+                  title,
+                  sub,
+                  // 2026-07-27 (Tony's 7/5 want, second half): feed the
+                  // live sheet the real run state so it renders the full
+                  // stage checklist + elapsed clock, not one thin line.
+                  progressStage: activeOrder.progressStage ?? null,
+                  progressMessage: activeOrder.progressMessage ?? null,
+                  startedAtMs: activeOrder.startedAtMs,
+                }
+              : null
+          }
           failed={
             terminal &&
             activeOrder.status !== "succeeded" &&

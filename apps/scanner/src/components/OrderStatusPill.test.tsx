@@ -81,7 +81,7 @@ beforeEach(() => {
 });
 
 describe("OrderStatusPill — tap-through (2026-07-08 want)", () => {
-  it("mid-run tap opens the LIVE sheet: stage line + honest practice copy", () => {
+  it("mid-run tap opens the LIVE sheet: full stage checklist + honest practice copy", () => {
     mockActiveOrder = runningOrder();
     render(<OrderStatusPill />);
 
@@ -91,7 +91,12 @@ describe("OrderStatusPill — tap-through (2026-07-08 want)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show run progress" }));
 
     const dialog = screen.getByRole("dialog", { name: "MLCC run progress" });
-    expect(dialog.textContent).toContain("Confirming your cart"); // stage label
+    // 2026-07-27 (the 7/5 want, second half): the live sheet renders the
+    // FULL RpaProgressPanel checklist — every validate stage listed, the
+    // current one active — instead of the old single stage line.
+    expect(dialog.textContent).toContain("Logging into MLCC");
+    expect(dialog.textContent).toContain("Validating cart");
+    expect(dialog.querySelectorAll(".rpa-progress__step--active").length).toBe(1);
     expect(dialog.textContent).toContain("Practice check — nothing is being ordered.");
     expect(dialog.textContent).toContain("the result lands here");
   });

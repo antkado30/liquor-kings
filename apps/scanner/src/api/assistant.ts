@@ -38,13 +38,14 @@ export function formatAssistantError(raw: string): string {
 export type AssistantProgress = { label: string };
 
 /*
- * ── Live progress streaming knobs (2026-07-26, Tony: "live progress
- *    lines, heavy asks first") ─────────────────────────────────────────
- * Heavy asks (any photos, or a long pasted list) stream NDJSON progress;
- * quick text asks keep the proven plain-JSON path untouched until after
- * the first live order (deliberate blast-radius containment).
+ * ── Live progress streaming knobs ─────────────────────────────────────
+ * 2026-07-26: heavy asks first (blast-radius containment before the
+ * pattern was proven). 2026-07-27: proven on the floor same day
+ * ("it worked it said reading your photo") → EVERY ask streams when the
+ * caller wants progress and the browser can. This also retires the 60s
+ * platform-ceiling class for good — plain JSON remains only as the
+ * fallback for no-onProgress callers and ancient browsers.
  */
-const STREAM_MIN_QUESTION_CHARS = 200;
 /** Server flushes its first byte immediately — this only guards headers. */
 const STREAM_HEADERS_TIMEOUT_MS = 20_000;
 /** Server heartbeats every 15s; three consecutive misses = dead stream. */
@@ -227,10 +228,9 @@ export async function askAssistant(
     ...(history && history.length ? { history } : {}),
   };
 
-  // Heavy asks stream live progress; everything else keeps the proven path.
-  const heavy =
-    imageList.length > 0 || trimmed.length >= STREAM_MIN_QUESTION_CHARS;
-  if (heavy && onProgress && canStreamResponses()) {
+  // Every ask streams live progress when the caller listens (2026-07-27 —
+  // the heavy-only gate served its containment purpose and retired).
+  if (onProgress && canStreamResponses()) {
     return askAssistantStreaming(JSON.stringify({ ...payload, stream: true }), onProgress);
   }
 

@@ -4,6 +4,41 @@ Founder's log. Milestone entries — the moments that mattered.
 
 ---
 
+## Entry #9 — The scanner war, won by arithmetic (2026-07-26 → 27)
+
+Tony walked the floor with ten bottles and five of them would not scan —
+"like we weren't scanning at all." No guessing this time; the measured
+method from the 42px hunt got its own decode harness: Playwright driving
+the exact @zxing pipeline the app ships, against synthetically degraded
+UPC barcodes — 145 measured rows. The verdict was arithmetic, not vibes.
+At 720p capture, a small bottle barcode only carries enough pixels to
+decode when the phone is closer than the iPhone lens can focus. Enough
+pixels → no focus; focus → not enough pixels. Those five bottles were
+MATHEMATICALLY unscannable — no amount of holding them up could ever
+work, which is exactly what Tony reported. And a second bug hid under
+it: every failed decode burned 586–944ms of synchronous main-thread
+work, fired every 220ms with no guard — the frozen preview and the hot
+phone were a runaway decode pile-up.
+
+Phase 1 shipped the measured fix: 4K capture (the same 22mm barcode
+reads out to 30cm now), a guarded fast-tick loop that catches the SAME
+barcodes in every measured scenario at 1/20th–1/45th the miss cost, a
+green flash the instant a barcode decodes, and the granted resolution
+printed under the camera so the phone itself proves the fix. Phase 2
+killed the vision picker's private brain — the thing that read a plain
+Smirnoff correctly and recommended SOURS GREEN APPLE anyway. Photos now
+rank through the SAME resolver as the AI chat and paste-order, flavor
+penalty and all; Tony's screenshot is pinned as a permanent test.
+
+Tony took the same bottles back to the shelves: "everything looks good."
+The night closed with the last app-feel want — the Cart tab is a real
+page now. Not a rewrite: the 2.5k-line Check/Place drawer learned a
+page mode, chrome only, money machine byte-identical, layout proven by
+a harness before it shipped. Three days to the first engine live fire,
+and the front door finally feels like the product Tony is selling.
+
+---
+
 ## Entry #8 — The AI narrates its work + Tony rewired how we work (2026-07-26)
 
 The day started with the gate and ended with a new constitution. Morning:

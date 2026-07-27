@@ -60,7 +60,6 @@ import {
   IconCheck,
   IconClipboardList,
   IconFileText,
-  IconLoader,
   IconTrash,
   IconX,
 } from "./Icons";
@@ -69,6 +68,12 @@ import {
   getOrderingRuleDisplay,
 } from "../lib/mlcc-ordering-rules";
 import { humanizeRunFailure } from "../lib/run-failure-human";
+import {
+  RPA_STAGES_SUBMIT,
+  RPA_STAGES_VALIDATE,
+  RpaProgressPanel,
+  STUCK_RETRY_THRESHOLD_SEC,
+} from "./RpaProgress";
 import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 import { REAL_SUBMISSION_WIRED } from "../config/submission";
 
@@ -170,31 +175,11 @@ function isStage3TimeoutRejection(reason: unknown): boolean {
   return /quick add list|did not appear/i.test(reason);
 }
 
-/**
- * Stages the user sees during a validate_only RPA run. The `id` matches
- * the worker's `progress_stage` value reported via the heartbeat. The
- * `label` is user-facing copy (kept short and concrete — "Logging in"
- * not "Stage 1"). Order matters: the progress list checks indices left
- * to right.
+/*
+ * Stage lists + the rich progress panel moved to ./RpaProgress
+ * (2026-07-27) so the status pill's LIVE sheet renders the identical
+ * panel — one truth for what a running MILO job looks like.
  */
-const RPA_STAGES_VALIDATE: ReadonlyArray<{ id: string; label: string }> = [
-  { id: "rpa_login", label: "Logging into MLCC" },
-  { id: "rpa_navigate", label: "Loading products page" },
-  { id: "rpa_add_items", label: "Adding items to cart" },
-  { id: "rpa_validate", label: "Validating cart" },
-];
-
-/**
- * Stages for a full submit run (Stages 1-5). Same shape as the validate
- * list with one extra step at the end.
- */
-const RPA_STAGES_SUBMIT: ReadonlyArray<{ id: string; label: string }> = [
-  { id: "rpa_login", label: "Logging into MLCC" },
-  { id: "rpa_navigate", label: "Loading products page" },
-  { id: "rpa_add_items", label: "Adding items to cart" },
-  { id: "rpa_validate", label: "Validating cart" },
-  { id: "rpa_checkout", label: "Submitting order" },
-];
 
 type CartDrawerProps = {
   cart: CartContextValue;
@@ -2441,67 +2426,6 @@ function ValidateResultPanel({
   );
 }
 
-function formatElapsedMs(startedAtMs: number): string {
-  const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
-  const mins = Math.floor(elapsedSec / 60);
-  const secs = elapsedSec % 60;
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
-
-/**
- * How long a validate poll may run with no result before we surface the
- * "Start over" escape hatch. Deliberately aligned with honestSlowMessage()'s
- * top tier so the escape button appears at exactly the moment the honest
- * slow-MILO copy turns to its most patient tone — not earlier (a normal
- * validate genuinely takes 60-90s; offering recovery sooner would invite
- * unnecessary store-recovery calls) and not later (past this, MILO is either
- * wedged or glacial, and the user should be able to free their store in one
- * tap rather than staring at a spinner).
- */
-const STUCK_RETRY_THRESHOLD_SEC = 75;
-
-function honestSlowMessage(elapsedSec: number): string | null {
-  if (elapsedSec >= STUCK_RETRY_THRESHOLD_SEC) {
-    return "MILO is slow today. We keep at it until it answers — you can keep scanning, this continues in the background.";
-  }
-  if (elapsedSec >= 30) {
-    return "MILO is taking longer than usual — still working.";
-  }
-  return null;
-}
-
-/**
- * Live elapsed clock for RPA polling phases. Ticks every second from
- * startedAtMs; cleaned up on unmount.
- */
-function PollingElapsedStatus({ startedAtMs }: { startedAtMs: number }) {
-  const [elapsedSec, setElapsedSec] = useState(() =>
-    Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)),
-  );
-
-  useEffect(() => {
-    const tick = () => {
-      setElapsedSec(Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)));
-    };
-    tick();
-    const id = window.setInterval(tick, 1000);
-    return () => window.clearInterval(id);
-  }, [startedAtMs]);
-
-  const slowNote = honestSlowMessage(elapsedSec);
-
-  return (
-    <div className="rpa-progress__elapsed-row">
-      <span className="rpa-progress__elapsed" aria-label="Elapsed time">
-        {formatElapsedMs(startedAtMs)}
-      </span>
-      {slowNote ? (
-        <p className="rpa-progress__slow-note muted small">{slowNote}</p>
-      ) : null}
-    </div>
-  );
-}
-
 /**
  * Human failure card — one sentence headline, one-tap retry, quiet
  * technical detail for support (quality mandate 2026-06-12).
@@ -2536,85 +2460,6 @@ function RunFailureCard({
           {failureMessage ? `\n${failureMessage}` : ""}
         </pre>
       </details>
-    </div>
-  );
-}
-
-/**
- * Stage-by-stage progress panel rendered during a Validate or Submit RPA
- * run. Replaces the boring "Validating against MLCC…" banner with a
- * checkable stage list so the user can see what's in flight, what's
- * done, and what's coming.
- *
- * Each stage is one row with:
- *   - icon: SVG check (done) / SVG spinner (active, pulsing) / empty ring (pending)
- *   - label
- *
- * Headline at top of the panel shows the overall operation + the worker's
- * latest progress_message (if it added any color).
- *
- * Why this matters: when MLCC takes 60-90s to respond, an unchanging
- * banner feels frozen even when the system is working hard. Visible
- * progress = perceived speed. The actual time is unchanged.
- */
-function RpaProgressPanel({
-  headline,
-  stages,
-  currentStageIndex,
-  preStage,
-  startedAtMs,
-}: {
-  headline: { title: string; sub?: string };
-  stages: ReadonlyArray<{ id: string; label: string }>;
-  currentStageIndex: number;
-  /**
-   * True when the run hasn't reached any RPA stage yet (we're still
-   * syncing the cart to the server or waiting for the worker to claim).
-   * In this state all stages render as pending and we show a sub-line
-   * explaining the wait.
-   */
-  preStage: boolean;
-  /** When set, show live elapsed timer + honest slow-progress copy. */
-  startedAtMs?: number;
-}) {
-  return (
-    <div className="rpa-progress" role="status" aria-live="polite">
-      <div className="rpa-progress__headline">
-        <strong>{headline.title}</strong>
-        {headline.sub ? (
-          <div className="rpa-progress__sub muted small">{headline.sub}</div>
-        ) : null}
-        {startedAtMs != null ? <PollingElapsedStatus startedAtMs={startedAtMs} /> : null}
-      </div>
-      <ol className="rpa-progress__list">
-        {stages.map((stage, idx) => {
-          const status: "done" | "active" | "pending" = preStage
-            ? "pending"
-            : currentStageIndex < 0
-              ? "pending"
-              : idx < currentStageIndex
-                ? "done"
-                : idx === currentStageIndex
-                  ? "active"
-                  : "pending";
-          return (
-            <li
-              key={stage.id}
-              className={`rpa-progress__step rpa-progress__step--${status}`}
-              aria-current={status === "active" ? "step" : undefined}
-            >
-              <span className="rpa-progress__icon" aria-hidden>
-                {status === "done" ? (
-                  <IconCheck size={12} strokeWidth={2.75} />
-                ) : status === "active" ? (
-                  <IconLoader size={12} strokeWidth={2.75} className="rpa-progress__spin" />
-                ) : null}
-              </span>
-              <span className="rpa-progress__label">{stage.label}</span>
-            </li>
-          );
-        })}
-      </ol>
     </div>
   );
 }
