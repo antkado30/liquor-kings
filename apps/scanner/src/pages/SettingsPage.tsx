@@ -38,6 +38,7 @@ import {
 } from "../lib/currentStore";
 import { clearAllCache, useCachedResource } from "../lib/swr";
 import { signOut } from "../lib/supabase";
+import { SavedMatchesSection } from "../components/SavedMatchesSection";
 
 const APP_VERSION =
   (import.meta.env.VITE_SENTRY_RELEASE as string | undefined) ?? "0.1.0";
@@ -727,6 +728,9 @@ export function SettingsPage() {
 
       {/* ─── Notifications ─── */}
       <NotificationsSection />
+
+      {/* ─── Saved matches (THE MOAT audit door, 2026-07-28) ─── */}
+      <SavedMatchesSection />
 
       {/* ─── Legal ─── */}
       <section className="settings-block" aria-labelledby="settings-legal-title">

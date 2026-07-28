@@ -9376,3 +9376,75 @@ select {
   font-weight: 600;
   z-index: 70;
 }
+
+/* ─── Saved matches (Settings audit door for THE MOAT, 2026-07-28) ─── */
+
+.savedm-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.savedm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.savedm-row:first-child {
+  border-top: 0;
+}
+
+.savedm-row__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.savedm-row__phrase {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.savedm-row__phrase-size {
+  font-weight: 400;
+  font-size: 0.8125rem;
+}
+
+.savedm-row__target {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.savedm-row__trash {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 10px;
+  background: transparent;
+  color: #f87171;
+  cursor: pointer;
+}
+
+.savedm-row__confirm {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.savedm-btn {
+  padding: 6px 12px;
+  font-size: 0.8125rem;
+}

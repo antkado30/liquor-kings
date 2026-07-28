@@ -24,6 +24,7 @@ import ordersRouter from "./routes/orders.routes.js";
 import tagsRouter from "./routes/tags.routes.js";
 import homeRouter from "./routes/home.routes.js";
 import browseRouter from "./routes/browse.routes.js";
+import storeMemoryRouter from "./routes/store-memory.routes.js";
 import orderTemplatesRouter, { runSchedulerHandler as orderTemplatesRunSchedulerHandler } from "./routes/order-templates.routes.js";
 import authRouter from "./routes/auth.routes.js";
 import pushRouter from "./routes/push.routes.js";
@@ -134,6 +135,12 @@ app.use("/home", resolveAuthenticatedStore, homeRouter);
  * 2026-06-03). Mounted under /catalog alongside the vision endpoint.
  */
 app.use("/catalog", resolveAuthenticatedStore, browseRouter);
+/**
+ * Store memory: GET /store-memory (list saved matches) + POST
+ * /store-memory/forget. The Settings "Saved matches" audit door for THE
+ * MOAT (2026-07-28) — see routes/store-memory.routes.js.
+ */
+app.use("/store-memory", resolveAuthenticatedStore, storeMemoryRouter);
 /**
  * App-level registration for the order-templates cron endpoint so it
  * bypasses resolveAuthenticatedStore — cron-job.org sends X-Cron-Token,
