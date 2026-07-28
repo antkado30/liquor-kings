@@ -27,6 +27,7 @@ import process from "node:process";
 import { initSentry, captureRunFailure } from "../lib/sentry.js";
 import { processOneRpaRun } from "./execution-worker.js";
 import { forceCloseAll as forceCloseRpaSessions } from "./rpa-session-manager.js";
+import { LOOP_WEDGE_LIMIT_MS, startLoopWatchdog } from "./loop-watchdog.js";
 
 // AUDIT #29 (P1, 2026-06-13): the API entrypoint (index.js) calls initSentry(),
 // but this worker daemon is a SEPARATE process (Dockerfile.worker's CMD) and
@@ -95,6 +96,11 @@ function isTransientUpstreamError(err) {
   return TRANSIENT_HTTP_RE.test(msg) || TRANSIENT_NETWORK_RE.test(msg);
 }
 
+// Loop watchdog (2026-07-28, the 12-hour silent wedge) — full story +
+// pure verdict live in ./loop-watchdog.js so tests can import them
+// without executing this daemon entrypoint.
+let lastLoopTickAt = Date.now();
+
 const apiBaseUrl = process.env.API_BASE_URL ?? "http://127.0.0.1:8080";
 const workerId =
   process.env.WORKER_ID ??
@@ -133,9 +139,11 @@ async function interruptibleSleep(ms) {
 
 async function main() {
   installShutdownHandlers();
+  startLoopWatchdog({ getLastTickMs: () => lastLoopTickAt });
   console.log(
     `[rpa-worker] daemon starting — apiBaseUrl=${apiBaseUrl} ` +
-      `workerId=${workerId} idlePollMs=${IDLE_POLL_MS}`,
+      `workerId=${workerId} idlePollMs=${IDLE_POLL_MS} ` +
+      `loopWedgeLimitMs=${LOOP_WEDGE_LIMIT_MS}`,
   );
 
   /*
@@ -154,6 +162,9 @@ async function main() {
   let consecutiveStage1Failures = 0;
 
   while (!shuttingDown) {
+    // Watchdog heartbeat: every completed iteration proves the loop is
+    // alive. If this line stops being reached, the watchdog restarts us.
+    lastLoopTickAt = Date.now();
     inFlight = true;
     let result;
     try {
