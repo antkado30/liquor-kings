@@ -4,6 +4,37 @@ Founder's log. Milestone entries — the moments that mattered.
 
 ---
 
+## Entry #10 — The watchdog and the wedge (2026-07-27 → 28)
+
+Two days before the first engine order, the system failed in the exact
+way that would have ruined Thursday — and that's the best thing that
+could have happened, because it failed on a Tuesday practice cart
+instead. Tony tapped his brand-new live pill (the 7/5 want, finished
+that morning: tap mid-run, see the full stage checklist and the honest
+elapsed clock) and the new panel told a terrible truth beautifully:
+2:21 elapsed, zero stages, "MILO is slow today." MILO wasn't slow. The
+worker daemon had been silently wedged for TWELVE HOURS — no claims, no
+errors, no logs — a hang class the old Stage-1 dead-man could never
+see, because it only counts runs that fail, not runs that never return.
+Even `fly machine restart` bounced off it: the graceful shutdown
+handler was politely waiting for a hung run to finish. It never would.
+
+The fix is the dead-man's lesson generalized: a process can't always
+heal itself, but it can refuse to keep lying. The worker now carries a
+loop watchdog — twenty minutes without a completed iteration and it
+declares itself wedged, exits, and Fly restarts it from a clean slate.
+Deployed, the next practice check ran end to end in 5.5 seconds: claim
+in under three, node engine through MILO, green sheet, real totals.
+The same day also shipped the assistant's readable progress (labels
+hold long enough to actually read — "it said reading your photo then
+something else i couldnt catch it" is dead), streaming on every ask,
+and the Settings "Saved matches" door: THE MOAT's memory, visible and
+deletable by the operator it belongs to. Tomorrow the freeze. Thursday
+the first engine order. The system that goes into it now restarts
+itself when it's stuck and shows its work while it runs.
+
+---
+
 ## Entry #9 — The scanner war, won by arithmetic (2026-07-26 → 27)
 
 Tony walked the floor with ten bottles and five of them would not scan —
