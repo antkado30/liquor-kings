@@ -3,6 +3,7 @@ import {
   isFullPriceBookXlsxHref,
   isNewItemListXlsxHref,
   assertNewItemListRowCount,
+  nextPreviousLicenseePrice,
 } from "./mlcc-price-book-ingestor.js";
 
 /*
@@ -65,5 +66,56 @@ describe("assertNewItemListRowCount", () => {
     const r = assertNewItemListRowCount(13828, 2000);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/FULL price book/);
+  });
+});
+
+/*
+  Price memory pins (2026-08-01). The whole feature rests on this one
+  pure decision: previous_licensee_price must be a REAL former shelf
+  price or null — never invented, never lost by a book that didn't
+  touch it. The upsert used to destroy the old price in place; these
+  pins make that impossible to regress silently.
+*/
+describe("nextPreviousLicenseePrice", () => {
+  it("a brand-new item has no history", () => {
+    expect(nextPreviousLicenseePrice(undefined, 12.99)).toBe(null);
+  });
+
+  it("captures the outgoing price when the licensee price moves", () => {
+    const existing = { licensee_price: 11.49, previous_licensee_price: null };
+    expect(nextPreviousLicenseePrice(existing, 12.99)).toBe(11.49);
+  });
+
+  it("a second move overwrites the memory with the latest outgoing price", () => {
+    const existing = { licensee_price: 12.99, previous_licensee_price: 11.49 };
+    expect(nextPreviousLicenseePrice(existing, 13.49)).toBe(12.99);
+  });
+
+  it("carries the memory forward when the licensee price is unchanged", () => {
+    const existing = { licensee_price: 12.99, previous_licensee_price: 11.49 };
+    expect(nextPreviousLicenseePrice(existing, 12.99)).toBe(11.49);
+  });
+
+  it("a base-only book change never destroys the memory (licensee untouched → carry)", () => {
+    // The caller only hands this function the LICENSEE price — base and
+    // min-shelf moves are invisible here by design, so they cannot wipe it.
+    const existing = { licensee_price: 12.99, previous_licensee_price: 11.49 };
+    expect(nextPreviousLicenseePrice(existing, 12.99)).toBe(11.49);
+  });
+
+  it("numeric-string DB values compare as numbers, not strings", () => {
+    // Supabase numeric columns arrive as strings; "12.99" vs 12.99 is NOT a move.
+    const existing = { licensee_price: "12.99", previous_licensee_price: "11.49" };
+    expect(nextPreviousLicenseePrice(existing, 12.99)).toBe("11.49");
+  });
+
+  it("an outgoing null price is not a memory (no 'was blank' chips)", () => {
+    const existing = { licensee_price: null, previous_licensee_price: null };
+    expect(nextPreviousLicenseePrice(existing, 12.99)).toBe(null);
+  });
+
+  it("rows that predate the column carry null, not undefined", () => {
+    const existing = { licensee_price: 12.99 };
+    expect(nextPreviousLicenseePrice(existing, 12.99)).toBe(null);
   });
 });

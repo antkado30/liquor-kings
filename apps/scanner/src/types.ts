@@ -56,6 +56,21 @@ export interface MlccProduct {
    * 50 mL rendered three identical chips and read as data corruption.
    */
   pack_count?: number | null;
+  /**
+   * Price memory (2026-08-01): the licensee price from the last price
+   * book where it differed — i.e. what this bottle cost BEFORE the
+   * current price. Written by the price-book ingestor (carried forward
+   * across books that don't move it). Null = no known history. Drives
+   * the "was $X" chip via lib/price-change.ts.
+   */
+  previous_licensee_price?: number | null;
+  /**
+   * ISO timestamp of the last time ANY price column moved for this row
+   * (base, licensee, or min-shelf — stamped by the ingestor). The chip
+   * helper uses it as the recency gate so "was $X" fades after the
+   * store has absorbed the change.
+   */
+  price_changed_at?: string | null;
 }
 
 export interface ProductFamily {

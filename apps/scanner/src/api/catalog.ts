@@ -142,6 +142,11 @@ function mapRow(row: Record<string, unknown>): MlccProduct {
     imageUrl,
     last_price_book_date: lastPriceBookDate,
     is_active: isActive,
+    // Price memory (2026-08-01): both nullable, both flow from the
+    // ingestor. Endpoints select("*") on mlcc_items so no server change
+    // was needed — but older cached rows may omit them, hence optional.
+    previous_licensee_price: num(row.previous_licensee_price),
+    price_changed_at: str(row.price_changed_at),
   };
 }
 

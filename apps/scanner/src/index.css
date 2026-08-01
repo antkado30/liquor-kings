@@ -872,6 +872,32 @@ select {
 }
 
 /*
+  Price memory chip (2026-08-01): "▲ was $11.49" beside the licensee
+  price when a recent book moved it (lib/price-change.ts decides).
+  Up = red (margin pressure — the one the store must notice), down =
+  green. Sits inline after the price so the eye reads now → was.
+*/
+.price-was {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 2px;
+  white-space: nowrap;
+}
+.price-was--up {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.12);
+}
+.price-was--down {
+  color: var(--success);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+/*
   MLCC ordering rule callout in ProductCard (task #43, 2026-05-30).
   Compact info box above the qty stepper. Three lines max:
     - "MLCC ordering" label (small uppercase like a section eyebrow)

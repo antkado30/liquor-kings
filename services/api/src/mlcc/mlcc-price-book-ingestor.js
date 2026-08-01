@@ -22,6 +22,38 @@ function numEq(a, b) {
 }
 
 /**
+ * Price memory (2026-08-01): what did this bottle cost LAST book?
+ *
+ * The upsert used to overwrite licensee_price in place — the old number
+ * was gone the moment a new book landed, and the store learned about
+ * price moves from squeezed margins, not from the app. This computes
+ * the `previous_licensee_price` column for each upsert row:
+ *
+ *   - brand-new item             → null (no history to remember)
+ *   - licensee price MOVED       → the outgoing licensee_price
+ *   - licensee price unchanged   → carry the existing memory forward,
+ *     so the "was $X" survives later books that only touch base or
+ *     min-shelf. (Known edge, accepted: price_changed_at re-stamps on
+ *     base-only changes too, so a carried memory can resurface inside
+ *     the client's recency window for one book — the number shown is
+ *     still always a real former shelf price.)
+ *   - outgoing licensee was null → null (a "was blank" chip is noise)
+ *
+ * Pure + exported for the unit pins.
+ *
+ * @param {object | undefined} existing  current mlcc_items row (or undefined for new)
+ * @param {number | null | undefined} newLicenseePrice  incoming book price
+ * @returns {number | null}
+ */
+export function nextPreviousLicenseePrice(existing, newLicenseePrice) {
+  if (!existing) return null;
+  if (!numEq(existing.licensee_price, newLicenseePrice)) {
+    return existing.licensee_price ?? null;
+  }
+  return existing.previous_licensee_price ?? null;
+}
+
+/**
  * @param {string | null | undefined} ada
  * @returns {string | null}
  */
@@ -608,6 +640,10 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
         base_price: item.basePrice,
         licensee_price: item.licenseePrice,
         min_shelf_price: item.minShelfPrice,
+        // Price memory: the shelf price this book replaced (see
+        // nextPreviousLicenseePrice). existing rows come from a
+        // select("*") above, so the carried column is always present.
+        previous_licensee_price: nextPreviousLicenseePrice(existing, item.licenseePrice),
         ada_name: deriveAdaName(item.adaNumber),
         brand_family: existing?.brand_family ?? null,
         is_active: existing?.is_active ?? true,

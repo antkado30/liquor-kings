@@ -314,6 +314,10 @@ export interface ResolvedOrderLine {
   /** Store memory (2026-07-24, the moat): this store previously corrected
       this exact phrase — the match is their own saved choice, pinned. */
   remembered?: boolean;
+  /** Sent alongside `remembered` by the API (lib/assistant.js) — plain-
+      words provenance for the model/card. Was missing from this type
+      until 2026-08-01 (the wire always carried it). */
+  memory_note?: string;
   /** Size flip (2026-07-24): every size MLCC carries of the matched
       bottle's family — the card can flip the line between them. */
   sizes?: ResolvedCandidate[];

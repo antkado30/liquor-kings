@@ -12,6 +12,7 @@ import {
   stepValidQuantity,
 } from "../lib/mlcc-ordering-rules";
 import { computeProductFreshness } from "../lib/product-freshness";
+import { priceChangeFor } from "../lib/price-change";
 import type { MlccProduct, ProductFamily } from "../types";
 import { pickInitialSizeByCode, ProductSizeSelector } from "./ProductSizeSelector";
 import { PlaceholderBottle, tintForCategory } from "./BottleArt";
@@ -349,6 +350,27 @@ export function ProductCard({
       latestPriceBookDate,
     ],
   );
+
+  /*
+    Price memory (2026-08-01): "was $X" next to the licensee price when
+    it moved in a recent book. All gating lives in lib/price-change.ts
+    (real history only, ≥1¢ in integer cents, ~14-day window). Per
+    selected size for the same reason as freshness — sizes reprice
+    independently.
+  */
+  const priceChange = useMemo(
+    () =>
+      priceChangeFor({
+        licensee_price: selectedProduct.licensee_price,
+        previous_licensee_price: selectedProduct.previous_licensee_price,
+        price_changed_at: selectedProduct.price_changed_at,
+      }),
+    [
+      selectedProduct.licensee_price,
+      selectedProduct.previous_licensee_price,
+      selectedProduct.price_changed_at,
+    ],
+  );
   /*
     PHOTO TRUTH (2026-07-11, Tony's mandate — "if I press a litre it'll
     be a pint picture… this goes against everything we stand for"):
@@ -512,7 +534,17 @@ export function ProductCard({
           </div>
           <div>
             <dt>Licensee price</dt>
-            <dd className="price-accent">{money(selectedProduct.licensee_price)}</dd>
+            <dd className="price-accent">
+              {money(selectedProduct.licensee_price)}
+              {priceChange ? (
+                <span
+                  className={`price-was price-was--${priceChange.direction}`}
+                  aria-label={`Price went ${priceChange.direction} — was ${money(priceChange.was)}`}
+                >
+                  {priceChange.direction === "up" ? "▲" : "▼"} was {money(priceChange.was)}
+                </span>
+              ) : null}
+            </dd>
           </div>
           <div>
             <dt>Minimum shelf price</dt>
