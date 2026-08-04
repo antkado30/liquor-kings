@@ -9387,6 +9387,25 @@ select {
   border-radius: 0 0 12px 12px;
 }
 
+/*
+  Seam slab (2026-08-01, Tony's screenshot): the page footer floats
+  72px+safe above the viewport bottom (clearing the fixed tab bar), and
+  when the list is scrolled to the end its last rows showed THROUGH the
+  band between the footer's bottom edge and the tab bar — a half-visible
+  quantity stepper peeking under "Check Order". This paints that band
+  opaque with the footer's own surface; the tab bar (z-index 90) still
+  draws on top of the slab exactly as it does over everything else.
+*/
+.drawer--cart-page .drawer-footer::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: calc(72px + env(safe-area-inset-bottom));
+  background: var(--surface);
+}
+
 /* Add-to-cart toast on the cart page — sits above the tab bar. */
 .cart-page-toast {
   position: fixed;

@@ -13,9 +13,10 @@
  * inline-SVG icons only (no emoji). Everything is null-guarded — validateResult
  * may be null briefly or on runs that never produced one.
  */
+import { useState } from "react";
 import type { ActiveOrderResult } from "../hooks/useActiveOrder";
 import type { RunMode } from "../api/execution";
-import { useCartItemsOrEmpty } from "../hooks/useCart";
+import { useCartOrNull } from "../hooks/useCart";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll";
 import { oosDisplayLabel } from "../lib/oos-display";
 import { IconAlert, IconCheck, IconLoader, IconX } from "./Icons";
@@ -137,11 +138,21 @@ export function RunResultSheet({
 }: Props) {
   useLockBodyScroll();
   // Cart lines carry the real name/size for every OOS code MILO reports
-  // bare (TONY-WANTS 7/16 #1). Graceful-empty variant: in the app this
-  // always has the provider (OrderStatusPill sits inside CartProvider in
-  // App.tsx); without one (component tests) it falls back to
-  // productName/code rendering instead of throwing.
-  const cartItems = useCartItemsOrEmpty();
+  // bare (TONY-WANTS 7/16 #1), and the full context powers the remove-
+  // from-cart buttons (Tony 8/1: "if there is 10 bottles out of stock u
+  // should be able to either remove each one individually or remove all
+  // at once"). Graceful-null variant: in the app the provider is always
+  // there (OrderStatusPill sits inside CartProvider in App.tsx); without
+  // one (component tests) names fall back to productName/code and the
+  // remove UI doesn't render.
+  const cart = useCartOrNull();
+  const cartItems = cart?.items ?? [];
+  // Codes removed from THIS sheet since it opened. The run result is a
+  // snapshot — the OOS list can't shrink — so removed rows stay visible,
+  // struck through, as the receipt of what just happened.
+  const [removedCodes, setRemovedCodes] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   // ─── SUBMITTED-UNCONFIRMED view (2026-07-16 truth rule): the submit
   // click went to MILO and the receipt wasn't captured before the run
@@ -309,6 +320,43 @@ export function RunResultSheet({
   const checkedIn = formatDuration(result.durationMs);
   const confirmations = confirmationRows(result.confirmationNumbers);
 
+  /*
+    Remove-from-sheet (Tony 8/1). A row is removable when: this wasn't a
+    real submitted order (the cart clears on Done there anyway), the cart
+    provider exists, MILO gave us a code, that code is still IN the cart,
+    and it wasn't already removed from this sheet. Removal edits the real
+    cart — which also flips the place-gate hash, so a stale green check
+    can never place the pre-edit cart. The nudge line says so out loud.
+  */
+  const oosCodeOf = (item: { code?: string | null }): string | null => {
+    const c = item.code != null ? String(item.code).trim() : "";
+    return c === "" ? null : c;
+  };
+  const removableCodes =
+    !submitted && cart
+      ? [
+          ...new Set(
+            oos
+              .map(oosCodeOf)
+              .filter(
+                (c): c is string =>
+                  c != null &&
+                  !removedCodes.has(c) &&
+                  cartItems.some((l) => l.product.code === c),
+              ),
+          ),
+        ]
+      : [];
+  const removeOne = (code: string) => {
+    cart?.removeItem(code);
+    setRemovedCodes((prev) => new Set(prev).add(code));
+  };
+  const removeAll = () => {
+    if (!cart) return;
+    for (const code of removableCodes) cart.removeItem(code);
+    setRemovedCodes((prev) => new Set([...prev, ...removableCodes]));
+  };
+
   // Headline: placed > ready > review. Honest about a non-submission.
   let headline: string;
   let headlineIcon: React.ReactNode;
@@ -414,28 +462,56 @@ export function RunResultSheet({
             {oos.length === 0 ? (
               <p style={mutedStyle}>Everything&apos;s in stock.</p>
             ) : (
-              <ul style={listStyle}>
-                {oos.map((item, i) => {
-                  // TONY-WANTS 7/16 #1: never a naked code — join against the
-                  // cart, which knows every OOS line's real name and size.
-                  const name = oosDisplayLabel(item, cartItems);
-                  return (
-                    <li key={`${item.code ?? name}-${i}`} style={liStyle}>
-                      <span>{name}</span>
-                      {item.quantity ? <span style={qtyStyle}>× {item.quantity}</span> : null}
-                      {item.reason ? (
-                        <span style={reasonStyle}>
-                          {item.reason === "oos_section"
-                            ? "marked out-of-stock by MILO"
-                            : item.reason === "validate_demoted"
-                              ? "dropped during validate (likely out of stock)"
-                              : item.reason}
-                        </span>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
+              <>
+                <ul style={listStyle}>
+                  {oos.map((item, i) => {
+                    // TONY-WANTS 7/16 #1: never a naked code — join against the
+                    // cart, which knows every OOS line's real name and size.
+                    const name = oosDisplayLabel(item, cartItems);
+                    const code = oosCodeOf(item);
+                    const wasRemoved = code != null && removedCodes.has(code);
+                    const removable = code != null && removableCodes.includes(code);
+                    return (
+                      <li key={`${item.code ?? name}-${i}`} style={liStyle}>
+                        <span style={wasRemoved ? removedNameStyle : undefined}>{name}</span>
+                        {item.quantity ? <span style={qtyStyle}>× {item.quantity}</span> : null}
+                        {wasRemoved ? (
+                          <span style={removedChipStyle}>removed from cart</span>
+                        ) : removable ? (
+                          <button
+                            type="button"
+                            style={removeBtnStyle}
+                            onClick={() => removeOne(code)}
+                            aria-label={`Remove ${name} from cart`}
+                          >
+                            Remove
+                          </button>
+                        ) : null}
+                        {item.reason && !wasRemoved ? (
+                          <span style={reasonStyle}>
+                            {item.reason === "oos_section"
+                              ? "marked out-of-stock by MILO"
+                              : item.reason === "validate_demoted"
+                                ? "dropped during validate (likely out of stock)"
+                                : item.reason}
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+                {removableCodes.length > 1 ? (
+                  <button type="button" style={removeAllBtnStyle} onClick={removeAll}>
+                    Remove all out-of-stock ({removableCodes.length})
+                  </button>
+                ) : null}
+                {removedCodes.size > 0 ? (
+                  <p style={recheckNudgeStyle} role="status">
+                    Removed from your cart. Run a fresh Check before placing —
+                    totals and the Place lock update from the new cart.
+                  </p>
+                ) : null}
+              </>
             )}
           </section>
 
@@ -616,6 +692,51 @@ const liStyle: React.CSSProperties = {
 const qtyStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.7)",
   fontSize: 13,
+};
+
+// ─── Remove-OOS-from-sheet styles (2026-08-01) ───────────────────────────────
+const removeBtnStyle: React.CSSProperties = {
+  marginLeft: "auto",
+  padding: "4px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(248,113,113,0.45)",
+  background: "rgba(248,113,113,0.12)",
+  color: "#fca5a5",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const removeAllBtnStyle: React.CSSProperties = {
+  width: "100%",
+  marginTop: 8,
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid rgba(248,113,113,0.4)",
+  background: "rgba(248,113,113,0.1)",
+  color: "#fca5a5",
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const removedNameStyle: React.CSSProperties = {
+  textDecoration: "line-through",
+  opacity: 0.5,
+};
+
+const removedChipStyle: React.CSSProperties = {
+  marginLeft: "auto",
+  color: "#6ee7b7",
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+const recheckNudgeStyle: React.CSSProperties = {
+  margin: "10px 2px 0",
+  color: "rgba(251,191,36,0.9)",
+  fontSize: 12.5,
+  lineHeight: 1.4,
 };
 
 const reasonStyle: React.CSSProperties = {

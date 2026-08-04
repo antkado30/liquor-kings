@@ -23,6 +23,9 @@
 
 import {
   discoverLatestPriceBookUrl,
+  discoverLatestNewItemListUrl,
+  discoverLatestRetailPriceChangesUrl,
+  discoverLatestAdaChangesUrl,
   ingestMlccPriceBook,
 } from "./mlcc-price-book-ingestor.js";
 import { runUpcEnrichment } from "./mlcc-price-book-upc-enrichment.js";
@@ -60,6 +63,111 @@ async function getLastCompletedIngestUrl(supabase) {
     return { ok: false, url: null, error: error.message };
   }
   return { ok: true, url: data?.source_url ?? null };
+}
+
+/**
+ * Last successfully-ingested source URL for ONE between-book kind
+ * (2026-08-04). Same shape/rules as getLastCompletedIngestUrl, but each
+ * kind compares only against its own ledger — a retail-changes URL must
+ * never suppress (or trigger) an ADA-changes ingest.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} kind
+ * @returns {Promise<{ ok: boolean, url: string | null, error?: string }>}
+ */
+async function getLastCompletedIngestUrlOfKind(supabase, kind) {
+  const { data, error } = await supabase
+    .from("mlcc_price_book_runs")
+    .select("source_url, completed_at")
+    .eq("status", "complete")
+    .eq("kind", kind)
+    .order("completed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    return { ok: false, url: null, error: error.message };
+  }
+  return { ok: true, url: data?.source_url ?? null };
+}
+
+/*
+  Between-book auto-ingest (2026-08-04, Tony's mandate: "prices always
+  automatically up to date with whatever updates mlcc/milo makes in all
+  aspects"). MLCC publishes three between-book Excel lists alongside the
+  full book: New Item Price List (new SKUs weeks before the next book),
+  Retail Price Changes (mid-book price corrections), and ADA Changes
+  (distributor reassignments). Until now only the full book was on the
+  daily cron — new-item lists were a manual script, the other two were
+  ingested by NOTHING, so catalog prices could lag a mid-book correction
+  until the next full book landed.
+*/
+const BETWEEN_BOOK_CHECKS = [
+  { kind: "new_item_list", discover: discoverLatestNewItemListUrl },
+  { kind: "retail_price_changes", discover: discoverLatestRetailPriceChangesUrl },
+  { kind: "ada_changes", discover: discoverLatestAdaChangesUrl },
+];
+
+/**
+ * Check all three between-book lists and additively ingest any newly
+ * published one. Runs on the same daily cron tick as the full-book check
+ * (route: POST /price-book/check-updates), AFTER it — if a brand-new full
+ * book and its same-day companion lists appear together, the full book
+ * lands first and the companions upsert the same values idempotently
+ * (numEq sees no delta → no price_changed_at stamp, no memory churn).
+ *
+ * Fail-soft per kind: one list's discovery/ingest failure never blocks
+ * the others. Never throws. No UPC enrichment here (that's TXT-driven
+ * and full-book-only). Row-count fence (≤2000) + additive-only upsert
+ * are enforced inside ingestMlccPriceBook per kind.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @returns {Promise<{ checked: true, results: Array<object> }>}
+ */
+export async function checkAndIngestBetweenBookLists(supabase) {
+  const results = [];
+  for (const { kind, discover } of BETWEEN_BOOK_CHECKS) {
+    try {
+      const disc = await discover();
+      if (!disc.ok) {
+        // Absence of a list on the page is normal between publishes —
+        // report, don't alarm.
+        results.push({ kind, ingested: false, reason: `discovery: ${disc.error}` });
+        continue;
+      }
+      const currentUrl = disc.url;
+      const last = await getLastCompletedIngestUrlOfKind(supabase, kind);
+      if (!last.ok) {
+        results.push({ kind, ingested: false, reason: `ledger read failed: ${last.error}`, currentUrl });
+        continue;
+      }
+      if (last.url && last.url === currentUrl) {
+        results.push({ kind, ingested: false, reason: "no change", currentUrl });
+        continue;
+      }
+      console.log(
+        `[price-book-scheduler] new ${kind} list detected — ingesting. current=${currentUrl} last=${last.url ?? "(none)"}`,
+      );
+      const ingest = await ingestMlccPriceBook(supabase, { kind, url: currentUrl });
+      results.push(
+        ingest.ok
+          ? {
+              kind,
+              ingested: true,
+              currentUrl,
+              totalItems: ingest.totalItems ?? null,
+              updatedItems: ingest.updatedItems ?? null,
+            }
+          : { kind, ingested: false, reason: `ingest failed: ${ingest.error}`, currentUrl },
+      );
+    } catch (e) {
+      results.push({
+        kind,
+        ingested: false,
+        reason: `unexpected: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  }
+  return { checked: true, results };
 }
 
 /**

@@ -282,6 +282,75 @@ export async function discoverLatestNewItemListUrl() {
 }
 
 /**
+ * Between-book "Retail Price Changes" Excel matcher (2026-08-04, Tony's
+ * mandate: "prices always automatically up to date in all aspects").
+ * MLCC publishes mid-book price corrections in these lists — until now
+ * they were EXCLUDED by the full-book matcher and ingested by nothing,
+ * so catalog prices lagged until the next full book. Live href shape
+ * (verified on the info page 2026-08-04):
+ *   /lcc/Price-Book/5-3-26-RETAIL-PRICE-CHANGES-Excel.xlsx
+ * @param {string} hrefPathLower path + filename before query, lowercased
+ */
+export function isRetailPriceChangesXlsxHref(hrefPathLower) {
+  if (!hrefPathLower.endsWith(".xlsx")) return false;
+  return /retail-price-changes/.test(hrefPathLower);
+}
+
+/**
+ * Between-book "ADA Changes" Excel matcher (2026-08-04). Distributor
+ * reassignments — which ADA carries a code — published between books.
+ * Live href shape: /lcc/Price-Book/5-3-26-ADA-CHANGES-Excel.xlsx
+ * @param {string} hrefPathLower path + filename before query, lowercased
+ */
+export function isAdaChangesXlsxHref(hrefPathLower) {
+  if (!hrefPathLower.endsWith(".xlsx")) return false;
+  return /ada-changes/.test(hrefPathLower);
+}
+
+/**
+ * Discover the newest "Retail Price Changes" .xlsx URL from the LCC info
+ * page. Mirrors discoverLatestNewItemListUrl exactly.
+ * @returns {Promise<{ ok: true, url: string, label: string } | { ok: false, error: string }>}
+ */
+export async function discoverLatestRetailPriceChangesUrl() {
+  const page = await fetchInfoPageXlsxAnchors();
+  if (!page.ok) return { ok: false, error: page.error };
+  const candidates = page.anchors.filter((a) => isRetailPriceChangesXlsxHref(a.hrefPathLower));
+  if (!candidates.length) {
+    return { ok: false, error: "No Retail Price Changes Excel link found on the info page" };
+  }
+  const preferred = candidates.filter((c) => /retail price changes/i.test(c.label));
+  const ordered = preferred.length ? preferred : candidates;
+  const chosen = ordered[0];
+  const url = absolutizeMlccHref(chosen.hrefRaw);
+  if (!url) {
+    return { ok: false, error: "Could not resolve absolute URL for Retail Price Changes Excel" };
+  }
+  return { ok: true, url, label: chosen.label || url };
+}
+
+/**
+ * Discover the newest "ADA Changes" .xlsx URL from the LCC info page.
+ * @returns {Promise<{ ok: true, url: string, label: string } | { ok: false, error: string }>}
+ */
+export async function discoverLatestAdaChangesUrl() {
+  const page = await fetchInfoPageXlsxAnchors();
+  if (!page.ok) return { ok: false, error: page.error };
+  const candidates = page.anchors.filter((a) => isAdaChangesXlsxHref(a.hrefPathLower));
+  if (!candidates.length) {
+    return { ok: false, error: "No ADA Changes Excel link found on the info page" };
+  }
+  const preferred = candidates.filter((c) => /ada.*changes/i.test(c.label));
+  const ordered = preferred.length ? preferred : candidates;
+  const chosen = ordered[0];
+  const url = absolutizeMlccHref(chosen.hrefRaw);
+  if (!url) {
+    return { ok: false, error: "Could not resolve absolute URL for ADA Changes Excel" };
+  }
+  return { ok: true, url, label: chosen.label || url };
+}
+
+/**
  * @param {string | undefined} urlOverride
  * @returns {Promise<{ ok: true, buffer: Buffer, url: string } | { ok: false, error: string, url?: string }>}
  */
@@ -363,17 +432,17 @@ async function updateRun(supabase, runId, patch) {
  * @param {number} maxRows
  * @returns {{ ok: true } | { ok: false, error: string }}
  */
-export function assertNewItemListRowCount(count, maxRows) {
+export function assertNewItemListRowCount(count, maxRows, label = "New Item Price List") {
   if (count === 0) {
     return {
       ok: false,
-      error: "New Item Price List parsed to 0 rows — layout change or wrong file; refusing",
+      error: `${label} parsed to 0 rows — layout change or wrong file; refusing`,
     };
   }
   if (count > maxRows) {
     return {
       ok: false,
-      error: `New Item Price List parsed ${count} rows (> ${maxRows}) — this looks like a FULL price book; refusing`,
+      error: `${label} parsed ${count} rows (> ${maxRows}) — this looks like a FULL price book; refusing`,
     };
   }
   return { ok: true };
@@ -401,11 +470,27 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
     change-detection and the staleness card (both filter kind='full')
     never mistake a 40-row list for a fresh catalog.
   */
-  const kind = opts.kind === "new_item_list" ? "new_item_list" : "full";
+  /*
+    2026-08-04: 'new_item_list' generalized to a between-book FAMILY —
+    'retail_price_changes' and 'ada_changes' now ride the exact same
+    additive path (same parser, same composite-key upsert, same row-count
+    fence, own discovery, own runs-ledger kind). Only is_new_item forcing
+    stays new_item_list-specific. Unknown kinds still collapse to 'full'.
+  */
+  const BETWEEN_BOOK_KINDS = ["new_item_list", "retail_price_changes", "ada_changes"];
+  const kind = BETWEEN_BOOK_KINDS.includes(opts.kind) ? opts.kind : "full";
+  const kindLabel =
+    kind === "new_item_list"
+      ? "New Item Price List"
+      : kind === "retail_price_changes"
+        ? "Retail Price Changes"
+        : kind === "ada_changes"
+          ? "ADA Changes"
+          : "Price Book";
   const maxRows =
     Number.isFinite(opts.maxRows) && opts.maxRows > 0
       ? opts.maxRows
-      : kind === "new_item_list"
+      : kind !== "full"
         ? 2000
         : Infinity;
   const priceBookDate = opts.priceBookDate instanceof Date && !Number.isNaN(opts.priceBookDate.getTime())
@@ -417,15 +502,20 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
   // fetchLatestMlccPriceBookExcel, unchanged). Discovery failure here =
   // no run row — the manual script surfaces it loudly.
   let sourceUrl = opts.url;
-  if (kind === "new_item_list" && !sourceUrl) {
-    const disc = await discoverLatestNewItemListUrl();
+  if (kind !== "full" && !sourceUrl) {
+    const discoverers = {
+      new_item_list: discoverLatestNewItemListUrl,
+      retail_price_changes: discoverLatestRetailPriceChangesUrl,
+      ada_changes: discoverLatestAdaChangesUrl,
+    };
+    const disc = await discoverers[kind]();
     if (!disc.ok) {
-      console.log("[price-book-ingestor] new-item list discovery failed:", disc.error);
+      console.log(`[price-book-ingestor] ${kindLabel} discovery failed:`, disc.error);
       return { ok: false, error: disc.error };
     }
     sourceUrl = disc.url;
     console.log(
-      `[price-book-ingestor] discovered New Item Price List: "${disc.label}" ${disc.url}`,
+      `[price-book-ingestor] discovered ${kindLabel}: "${disc.label}" ${disc.url}`,
     );
   }
 
@@ -444,8 +534,8 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
     }
     const totalItems = parsed.items.length;
     const newItems = parsed.items.filter((i) => i.isNewItem).length;
-    if (kind === "new_item_list") {
-      const capCheck = assertNewItemListRowCount(parsed.items.length, maxRows);
+    if (kind !== "full") {
+      const capCheck = assertNewItemListRowCount(parsed.items.length, maxRows, kindLabel);
       if (!capCheck.ok) {
         console.log("[price-book-ingestor] dryRun:", capCheck.error);
         return { ok: false, error: capCheck.error };
@@ -538,8 +628,8 @@ export async function ingestMlccPriceBook(supabase, options = {}) {
     const items = parsed.items.filter((i) => i.mlccCode);
     console.log("[price-book-ingestor] parsed rows:", items.length);
 
-    if (kind === "new_item_list") {
-      const capCheck = assertNewItemListRowCount(items.length, maxRows);
+    if (kind !== "full") {
+      const capCheck = assertNewItemListRowCount(items.length, maxRows, kindLabel);
       if (!capCheck.ok) {
         console.log("[price-book-ingestor]", capCheck.error);
         await updateRun(supabase, runId, {

@@ -14,15 +14,24 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("../src/mlcc/mlcc-price-book-ingestor.js", () => ({
   discoverLatestPriceBookUrl: vi.fn(),
+  discoverLatestNewItemListUrl: vi.fn(),
+  discoverLatestRetailPriceChangesUrl: vi.fn(),
+  discoverLatestAdaChangesUrl: vi.fn(),
   ingestMlccPriceBook: vi.fn(),
 }));
 vi.mock("../src/mlcc/mlcc-price-book-upc-enrichment.js", () => ({
   runUpcEnrichment: vi.fn(),
 }));
 
-import { checkAndIngestIfPriceBookChanged } from "../src/mlcc/mlcc-price-book-scheduler.js";
+import {
+  checkAndIngestIfPriceBookChanged,
+  checkAndIngestBetweenBookLists,
+} from "../src/mlcc/mlcc-price-book-scheduler.js";
 import {
   discoverLatestPriceBookUrl,
+  discoverLatestNewItemListUrl,
+  discoverLatestRetailPriceChangesUrl,
+  discoverLatestAdaChangesUrl,
   ingestMlccPriceBook,
 } from "../src/mlcc/mlcc-price-book-ingestor.js";
 import { runUpcEnrichment } from "../src/mlcc/mlcc-price-book-upc-enrichment.js";
@@ -139,5 +148,128 @@ describe("checkAndIngestIfPriceBookChanged — failure handling", () => {
 
     expect(r.ingested).toBe(true);
     expect(r.upcEnrichment.ok).toBe(false);
+  });
+});
+
+/*
+  Between-book auto-ingest (2026-08-04): new-item / retail-price-changes /
+  ada-changes ride the same daily cron tick. Each kind compares against
+  ITS OWN ledger row, ingests additively with its own kind stamp, and one
+  kind's failure never blocks the others.
+*/
+
+/** Ledger mock that answers per-kind: .eq("kind", K) selects the row. */
+function mockRunsLedgerByKind(urlByKind) {
+  return {
+    from: () => {
+      const state = { kind: null };
+      const b = {
+        select: () => b,
+        eq: (col, val) => {
+          if (col === "kind") state.kind = val;
+          return b;
+        },
+        order: () => b,
+        limit: () => b,
+        maybeSingle: () =>
+          Promise.resolve({
+            data: urlByKind[state.kind] ? { source_url: urlByKind[state.kind] } : null,
+            error: null,
+          }),
+      };
+      return b;
+    },
+  };
+}
+
+describe("checkAndIngestBetweenBookLists", () => {
+  const URLS = {
+    new_item_list: "https://mlcc/new-item.xlsx?rev=N1",
+    retail_price_changes: "https://mlcc/retail-changes.xlsx?rev=R1",
+    ada_changes: "https://mlcc/ada-changes.xlsx?rev=A1",
+  };
+
+  beforeEach(() => {
+    discoverLatestNewItemListUrl.mockResolvedValue({ ok: true, url: URLS.new_item_list, label: "New Item" });
+    discoverLatestRetailPriceChangesUrl.mockResolvedValue({ ok: true, url: URLS.retail_price_changes, label: "Retail Changes" });
+    discoverLatestAdaChangesUrl.mockResolvedValue({ ok: true, url: URLS.ada_changes, label: "ADA Changes" });
+    ingestMlccPriceBook.mockResolvedValue({ ok: true, totalItems: 42, updatedItems: 40 });
+  });
+
+  it("all three unchanged → zero ingests, three calm no-change results", async () => {
+    const supabase = mockRunsLedgerByKind({ ...URLS });
+
+    const r = await checkAndIngestBetweenBookLists(supabase);
+
+    expect(ingestMlccPriceBook).not.toHaveBeenCalled();
+    expect(r.results).toHaveLength(3);
+    for (const row of r.results) expect(row).toMatchObject({ ingested: false, reason: "no change" });
+  });
+
+  it("a newly published retail-changes list ingests with ITS kind and url only", async () => {
+    const supabase = mockRunsLedgerByKind({
+      ...URLS,
+      retail_price_changes: "https://mlcc/retail-changes.xlsx?rev=OLD",
+    });
+
+    const r = await checkAndIngestBetweenBookLists(supabase);
+
+    expect(ingestMlccPriceBook).toHaveBeenCalledTimes(1);
+    expect(ingestMlccPriceBook).toHaveBeenCalledWith(supabase, {
+      kind: "retail_price_changes",
+      url: URLS.retail_price_changes,
+    });
+    const retail = r.results.find((x) => x.kind === "retail_price_changes");
+    expect(retail).toMatchObject({ ingested: true, updatedItems: 40 });
+  });
+
+  it("first-ever run of a kind (no ledger row) ingests", async () => {
+    const supabase = mockRunsLedgerByKind({
+      new_item_list: URLS.new_item_list,
+      retail_price_changes: URLS.retail_price_changes,
+      // ada_changes has never been ingested → no row
+    });
+
+    await checkAndIngestBetweenBookLists(supabase);
+
+    expect(ingestMlccPriceBook).toHaveBeenCalledTimes(1);
+    expect(ingestMlccPriceBook).toHaveBeenCalledWith(supabase, {
+      kind: "ada_changes",
+      url: URLS.ada_changes,
+    });
+  });
+
+  it("one kind's discovery failure never blocks the others (fail-soft)", async () => {
+    discoverLatestNewItemListUrl.mockResolvedValue({ ok: false, error: "not on page" });
+    const supabase = mockRunsLedgerByKind({
+      retail_price_changes: URLS.retail_price_changes,
+      ada_changes: "https://mlcc/ada-changes.xlsx?rev=OLD",
+    });
+
+    const r = await checkAndIngestBetweenBookLists(supabase);
+
+    const newItem = r.results.find((x) => x.kind === "new_item_list");
+    expect(newItem.ingested).toBe(false);
+    expect(newItem.reason).toMatch(/discovery/);
+    expect(ingestMlccPriceBook).toHaveBeenCalledTimes(1);
+    expect(ingestMlccPriceBook).toHaveBeenCalledWith(supabase, {
+      kind: "ada_changes",
+      url: URLS.ada_changes,
+    });
+  });
+
+  it("an ingest failure is reported for that kind and the sweep continues", async () => {
+    ingestMlccPriceBook.mockResolvedValue({ ok: false, error: "parse exploded" });
+    const supabase = mockRunsLedgerByKind({
+      new_item_list: "https://mlcc/new-item.xlsx?rev=OLD",
+      retail_price_changes: "https://mlcc/retail-changes.xlsx?rev=OLD",
+      ada_changes: "https://mlcc/ada-changes.xlsx?rev=OLD",
+    });
+
+    const r = await checkAndIngestBetweenBookLists(supabase);
+
+    expect(ingestMlccPriceBook).toHaveBeenCalledTimes(3);
+    expect(r.results.every((x) => x.ingested === false)).toBe(true);
+    expect(r.results.every((x) => /ingest failed: parse exploded/.test(x.reason))).toBe(true);
   });
 });

@@ -292,3 +292,15 @@ export function useCartItemsOrEmpty(): CartItem[] {
   const ctx = useContext(CartContext);
   return ctx?.items ?? [];
 }
+
+/**
+ * Full cart context, or null when no provider is mounted (2026-08-01,
+ * remove-OOS-from-result-sheet). For chrome that rides ABOVE the app
+ * (OrderStatusPill → RunResultSheet): in the real app the provider is
+ * always there (App.tsx nesting), so removal works; in isolated
+ * component tests there's no provider and the remove UI simply doesn't
+ * render. Anything that REQUIRES the cart still uses the loud useCart().
+ */
+export function useCartOrNull(): CartContextValue | null {
+  return useContext(CartContext);
+}

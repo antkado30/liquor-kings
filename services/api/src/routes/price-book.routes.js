@@ -53,7 +53,10 @@ import {
   COMBO_PREFIX_FALLBACK_MIN_LEN,
 } from "../mlcc/family-tree-query.js";
 import { runUpcEnrichment } from "../mlcc/mlcc-price-book-upc-enrichment.js";
-import { checkAndIngestIfPriceBookChanged } from "../mlcc/mlcc-price-book-scheduler.js";
+import {
+  checkAndIngestIfPriceBookChanged,
+  checkAndIngestBetweenBookLists,
+} from "../mlcc/mlcc-price-book-scheduler.js";
 import { normalizeUpc } from "../lib/upc-normalize.js";
 
 /** When true, picker confirmations persist UPC onto `mlcc_items` (local cache for future scans). */
@@ -305,7 +308,15 @@ router.post("/check-updates", async (req, res) => {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const force = Boolean(body.force);
     const result = await checkAndIngestIfPriceBookChanged(supabase, { force });
-    res.json({ ok: true, ...result });
+    /*
+      Between-book lists (2026-08-04): same daily tick, AFTER the full
+      check — new-item / retail-price-changes / ada-changes lists ingest
+      additively the day MLCC publishes them instead of waiting for the
+      next full book. Fail-soft: a between-book hiccup never turns the
+      cron response into an error (the full-book result is the headline).
+    */
+    const betweenBook = await checkAndIngestBetweenBookLists(supabase);
+    res.json({ ok: true, ...result, between_book: betweenBook.results });
   } catch (e) {
     res.status(500).json({
       ok: false,
