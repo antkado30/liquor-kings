@@ -32,6 +32,7 @@ import { ProductCard } from "../components/ProductCard";
 import { useCart } from "../hooks/useCart";
 import { useBackgroundPreValidate } from "../hooks/useBackgroundPreValidate";
 import { getSmartCards, type StoreVerificationMeta } from "../api/home";
+import { fetchWithRetries } from "../lib/store-meta-retry";
 import { getProductFamily } from "../api/catalog";
 import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 import type { MlccProduct, ProductFamily } from "../types";
@@ -46,14 +47,23 @@ export function CartPage() {
   );
   useEffect(() => {
     let cancelled = false;
-    void getSmartCards()
-      .then((r) => {
-        if (!cancelled && r.ok && r.store_meta) setStoreMeta(r.store_meta);
-      })
-      .catch(() => {
-        /* fail-soft: modal falls back to generic store header + safe
-           preview messaging, same as ScannerPage before meta loads */
-      });
+    /*
+      Retry, don't shrug (2026-08-05). This payload carries
+      allow_order_submission — the Place button's existence. The old
+      one-shot fetch meant a single transient failure hid Place on a
+      fully-armed store for the whole session (it happened, live, an
+      hour after arming). Three patient tries; still fail-soft to the
+      safe preview messaging if the network is truly gone.
+    */
+    void fetchWithRetries(
+      async () => {
+        const r = await getSmartCards();
+        return r.ok && r.store_meta ? r.store_meta : null;
+      },
+      { tries: 3, delayMs: 3000, cancelled: () => cancelled },
+    ).then((meta) => {
+      if (!cancelled && meta) setStoreMeta(meta);
+    });
     return () => {
       cancelled = true;
     };

@@ -9385,6 +9385,15 @@ select {
   bottom: calc(72px + env(safe-area-inset-bottom));
   margin: 4px -14px 0;
   border-radius: 0 0 12px 12px;
+  /*
+    2026-08-05, Tony: "I don't like that little space" — the base
+    .drawer-footer carries safe-area bottom padding for the DRAWER
+    layout (which sticks to the true viewport bottom). On the page
+    layout the `bottom` offset above already clears the tab bar AND
+    its safe area, so keeping the base padding double-counts the
+    inset and leaves a hollow band under the hint line. Flat 12px.
+  */
+  padding-bottom: 12px;
 }
 
 /*
