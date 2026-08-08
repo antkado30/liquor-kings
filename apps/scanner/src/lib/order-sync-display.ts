@@ -48,7 +48,15 @@ const cents = (n: number | null | undefined): number | null => {
 
 export function orderMoneyView(o: SyncedOrderLike): OrderMoneyView {
   const synced = o.synced_at != null;
-  const placed = o.net_total ?? o.gross_total ?? null;
+  /*
+    A placement total of $0 is an artifact, not money — the 8/5 evidence
+    backfill wrote 0 where totals were never captured, and the first live
+    sync then showed a false "Edited · was $0.00" on an untouched order.
+    MILO minimums make a real $0 order impossible, so 0 = unknown: never
+    the headline, never the "was" side of an edit claim.
+  */
+  const placedRaw = o.net_total ?? o.gross_total ?? null;
+  const placed = placedRaw != null && Number(placedRaw) > 0 ? placedRaw : null;
   const syncedNet = o.synced_net_total ?? o.synced_gross_total ?? null;
   const current = synced && syncedNet != null ? syncedNet : placed;
 
@@ -112,6 +120,27 @@ export function detailLines<T>(detail: {
   if (synced.length > 0) return { lines: synced, source: "synced" };
   const placed = Array.isArray(detail.line_items) ? detail.line_items : [];
   return { lines: placed, source: "placed" };
+}
+
+/**
+ * Render any date value for humans WITHOUT the off-by-one trap: a bare
+ * "2026-08-11" fed to new Date() parses as UTC MIDNIGHT, which Eastern
+ * time renders as Aug 10 — Tony's Aug 5 order grouped under "AUG 4" and
+ * an Aug 11 delivery displayed as Aug 10 (2026-08-08, first sync night).
+ * Date-only strings are calendar dates: parse them as LOCAL y/m/d. Full
+ * timestamps keep normal parsing.
+ */
+export function shortDateLabel(value: string | null | undefined): string {
+  if (!value) return "—";
+  const s = String(value);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 /** "just now" / "4m ago" / "3h ago" / "2d ago" — for the sync caption. */

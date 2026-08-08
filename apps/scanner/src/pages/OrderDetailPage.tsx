@@ -15,6 +15,7 @@ import {
   lineMoney,
   orderDeliveryDate,
   orderMoneyView,
+  shortDateLabel,
   timeAgoShort,
 } from "../lib/order-sync-display";
 import {
@@ -37,14 +38,9 @@ function money(n: number | null | undefined): string {
 }
 
 function shortDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  // Delegates to the local-parse-aware label (date-only strings like
+  // "2026-08-11" must never shift a day — see shortDateLabel).
+  return shortDateLabel(iso);
 }
 
 function formatSize(ml: number | null | undefined): string | null {

@@ -43,7 +43,11 @@ function loadCredentialsLazy(supabase, storeId) {
   );
 }
 
-/** How often the tick actually looks for due stores. */
+/** How often the tick scans for SCHEDULED-due stores (the 6h cadence).
+    Owner-requested syncs are checked EVERY idle tick (~2.5s) — one tiny
+    indexed stores read — because "tap Sync, wait a minute" felt broken
+    the first night it shipped (Tony, 2026-08-08 1am: "we have to make
+    syncing faster"). Tap-to-fresh is now ~5s. */
 export const CHECK_EVERY_MS = 60_000;
 /** Standing cadence: re-sync stores with recent orders this often. */
 export const SYNC_EVERY_MS = 6 * 60 * 60_000;
@@ -85,6 +89,28 @@ const msOrNull = (iso) => {
 };
 
 /**
+ * FAST PATH — stores whose owner tapped Sync (requested newer than last
+ * sync). One tiny stores read; runs every idle tick so a tap is served
+ * in seconds, not at the next scheduled scan.
+ */
+export async function findRequestedSyncStores(supabase) {
+  const { data, error } = await supabase
+    .from("stores")
+    .select("id, order_sync_requested_at, last_order_sync_at")
+    .not("order_sync_requested_at", "is", null)
+    .limit(50);
+  if (error) throw new Error(`stores read failed: ${error.message}`);
+  return (Array.isArray(data) ? data : [])
+    .filter((s) => {
+      const req = msOrNull(s.order_sync_requested_at);
+      const last = msOrNull(s.last_order_sync_at);
+      return req != null && (last == null || req > last);
+    })
+    .slice(0, MAX_STORES_PER_TICK)
+    .map((s) => ({ storeId: s.id, reason: "requested" }));
+}
+
+/**
  * Find due stores. One stores read + one newest-confirmation read per
  * store — trivially cheap at current scale; revisit with a single RPC
  * when the fleet grows past tens of stores.
@@ -119,7 +145,7 @@ export async function findDueSyncStores(supabase, { nowMs }) {
   return due;
 }
 
-let nextCheckAtMs = 0;
+let nextScheduledScanAtMs = 0;
 let sharedSupabase = null;
 
 function getSupabase() {
@@ -145,13 +171,18 @@ export async function maybeRunOrderSyncTick(deps = {}) {
   try {
     if (process.env.LK_ORDER_SYNC === "no") return { ran: false, reason: "disabled" };
     const nowMs = deps.nowMs ?? Date.now();
-    if (nowMs < nextCheckAtMs) return { ran: false, reason: "throttled" };
-    nextCheckAtMs = nowMs + CHECK_EVERY_MS;
 
     const supabase = deps.supabase ?? getSupabase();
     if (!supabase) return { ran: false, reason: "no_supabase_env" };
 
-    const due = await findDueSyncStores(supabase, { nowMs });
+    // Owner taps are checked EVERY tick (~2.5s) — the scheduled 6h-cadence
+    // scan (heavier: per-store confirmation reads) stays on the 60s throttle.
+    let due = await findRequestedSyncStores(supabase);
+    if (due.length === 0) {
+      if (nowMs < nextScheduledScanAtMs) return { ran: false, reason: "throttled" };
+      nextScheduledScanAtMs = nowMs + CHECK_EVERY_MS;
+      due = await findDueSyncStores(supabase, { nowMs });
+    }
     if (due.length === 0) return { ran: false, reason: "none_due" };
 
     const loadCredentials = deps.loadCredentials ?? loadCredentialsLazy;
@@ -202,6 +233,6 @@ export async function maybeRunOrderSyncTick(deps = {}) {
 
 /** Test helper — reset the throttle + shared client. Unit tests only. */
 export function __resetOrderSyncLoopForTests() {
-  nextCheckAtMs = 0;
+  nextScheduledScanAtMs = 0;
   sharedSupabase = null;
 }

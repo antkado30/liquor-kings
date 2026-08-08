@@ -11,6 +11,7 @@ import {
   orderLineCount,
   lineMoney,
   detailLines,
+  shortDateLabel,
   timeAgoShort,
 } from "./order-sync-display";
 
@@ -63,6 +64,20 @@ describe("orderMoneyView", () => {
     expect(v.edited).toBe(false);
   });
 
+  it("the $0.00 backfill artifact: zero placement is unknown, never an edit claim", () => {
+    // First sync night (2026-08-08): the 8/5 backfill rows carried $0
+    // totals, and NWS — never edited — showed "Edited · was $0.00".
+    const v = orderMoneyView({
+      net_total: 0,
+      gross_total: 0,
+      synced_at: "2026-08-08T05:00:00.000Z",
+      synced_net_total: 1349.53,
+    });
+    expect(v.current).toBe(1349.53);
+    expect(v.placed).toBe(null);
+    expect(v.edited).toBe(false);
+  });
+
   it("sub-penny float noise is not an edit", () => {
     const v = orderMoneyView({
       net_total: 2029.14,
@@ -110,6 +125,25 @@ describe("delivery / line count / line money", () => {
     const placed = detailLines({ line_items: [{ a: 1 }], synced_line_items: [] });
     expect(placed.source).toBe("placed");
     expect(placed.lines).toEqual([{ a: 1 }]);
+  });
+});
+
+describe("shortDateLabel", () => {
+  it("date-only strings are LOCAL calendar dates — never a day early", () => {
+    // The first-sync-night bug: "2026-08-05" via new Date() is UTC
+    // midnight, which Eastern renders as Aug 4 — the Aug 5 order grouped
+    // under "AUG 4" and the Aug 11 delivery displayed as Aug 10.
+    expect(shortDateLabel("2026-08-05")).toBe("Aug 5, 2026");
+    expect(shortDateLabel("2026-08-11")).toBe("Aug 11, 2026");
+    expect(shortDateLabel("2026-01-01")).toBe("Jan 1, 2026");
+  });
+
+  it("full timestamps and junk stay sane", () => {
+    expect(shortDateLabel(null)).toBe("—");
+    expect(shortDateLabel("garbage")).toBe("garbage");
+    // A real timestamp renders as a date (exact day depends on TZ — just
+    // assert it formatted rather than echoed).
+    expect(shortDateLabel("2026-08-05T22:59:21.000Z")).toMatch(/Aug [56], 2026/);
   });
 });
 

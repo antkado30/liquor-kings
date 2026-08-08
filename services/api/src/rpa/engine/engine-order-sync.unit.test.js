@@ -20,6 +20,7 @@ import {
 import { __resetNodeMiloSessionForTests } from "./milo-node-session.js";
 import {
   syncDueVerdict,
+  findRequestedSyncStores,
   SYNC_EVERY_MS,
   RECENT_WINDOW_MS,
 } from "../../workers/order-sync-loop.js";
@@ -195,6 +196,31 @@ describe("buildSyncPlan", () => {
     expect(imp.synced_line_item_count).toBe(1);
   });
 
+  it("heals the $0.00 backfill artifact: zero placement totals fill from original*", () => {
+    // First sync night (2026-08-08): backfill rows carried $0 totals and
+    // the UI showed "Edited · was $0.00". Zero = never-captured, so the
+    // sync must repair it with placement-time money.
+    const zeroed = {
+      id: "row-z",
+      confirmation_number: "5869217",
+      placed_at: "2026-08-05T22:59:21.000Z",
+      order_number: "277169025",
+      delivery_date: "2026-08-11",
+      net_total: 0,
+      gross_total: 0,
+    };
+    const plan = buildSyncPlan({
+      localRows: [zeroed],
+      apiOrders: [normalizeMiloApiOrderForSync(editedApiOrder())],
+      nowIso: NOW_ISO,
+      storeId: STORE,
+    });
+    const patch = plan.updates[0].patch;
+    expect(patch.net_total).toBe(5209.14);
+    expect(patch.gross_total).toBe(5486.04);
+    expect(patch.synced_net_total).toBe(2029.14);
+  });
+
   it("counts local rows MILO no longer returns (old history) without touching them", () => {
     const ancient = { id: "row-3", confirmation_number: "5654920" };
     const plan = buildSyncPlan({
@@ -332,6 +358,36 @@ describe("runMiloOrderSyncForStore", () => {
         nowIso: NOW_ISO,
       }),
     ).rejects.toMatchObject({ classification: "invalid_credentials" });
+  });
+});
+
+describe("findRequestedSyncStores (the tap fast-path)", () => {
+  const storesTable = (rows) => ({
+    from: (table) => {
+      if (table !== "stores") throw new Error(`unexpected table ${table}`);
+      return {
+        select: () => ({
+          not: () => ({
+            limit: async () => ({ data: rows, error: null }),
+          }),
+        }),
+      };
+    },
+  });
+
+  it("serves fresh taps, skips already-served ones", async () => {
+    const due = await findRequestedSyncStores(
+      storesTable([
+        // Tapped after last sync → due.
+        { id: "a", order_sync_requested_at: "2026-08-08T05:10:00Z", last_order_sync_at: "2026-08-08T05:00:00Z" },
+        // Tapped, never synced → due.
+        { id: "b", order_sync_requested_at: "2026-08-08T05:10:00Z", last_order_sync_at: null },
+        // Already served → quiet.
+        { id: "c", order_sync_requested_at: "2026-08-08T04:00:00Z", last_order_sync_at: "2026-08-08T05:00:00Z" },
+      ]),
+    );
+    expect(due.map((d) => d.storeId)).toEqual(["a", "b"]);
+    expect(due.every((d) => d.reason === "requested")).toBe(true);
   });
 });
 

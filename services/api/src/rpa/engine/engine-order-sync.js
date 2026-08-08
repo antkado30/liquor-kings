@@ -138,14 +138,19 @@ export function buildSyncPlan({ localRows, apiOrders, nowIso, storeId }) {
       // Backfill placement HOLES only — never overwrite a captured
       // placement fact (immutability doctrine). Rows born from the
       // evidence backfill carry nulls here; MILO's original* fields ARE
-      // the placement record for them.
+      // the placement record for them. A ZERO placement total is a hole
+      // too: the 8/5 backfill wrote $0.00 where evidence had no totals,
+      // and the first live sync (2026-08-08) then rendered a false
+      // "Edited · was $0.00" chip on an untouched order. Nobody places a
+      // $0 order — MILO minimums forbid it — so 0 means "never captured".
+      const moneyHole = (v) => v == null || Number(v) === 0;
       if (local.placed_at == null && o.placedIso) patch.placed_at = o.placedIso;
       if (local.order_number == null && o.orderNumber) patch.order_number = o.orderNumber;
       if (local.delivery_date == null && o.originalDeliveryDate) {
         patch.delivery_date = o.originalDeliveryDate;
       }
-      if (local.net_total == null && o.originalNet != null) patch.net_total = o.originalNet;
-      if (local.gross_total == null && o.originalGross != null) {
+      if (moneyHole(local.net_total) && o.originalNet != null) patch.net_total = o.originalNet;
+      if (moneyHole(local.gross_total) && o.originalGross != null) {
         patch.gross_total = o.originalGross;
       }
       updates.push({ id: local.id, patch });

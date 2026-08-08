@@ -31,6 +31,7 @@ import {
   orderDeliveryDate,
   orderLineCount,
   orderMoneyView,
+  shortDateLabel,
   timeAgoShort,
 } from "../lib/order-sync-display";
 
@@ -57,14 +58,10 @@ function moneyPrecise(n: number | null | undefined): string {
 }
 
 function shortDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  // Delegates to the local-parse-aware label: date-only strings parse as
+  // LOCAL calendar dates, so an Aug 5 group can never render "AUG 4" and
+  // an Aug 11 delivery can never render Aug 10 (first-sync-night bug).
+  return shortDateLabel(iso);
 }
 
 function dayKey(iso: string | null | undefined): string {
@@ -111,10 +108,16 @@ type OrdersData = {
   hasMore: boolean;
 };
 
-/** Poll cadence + budget while a sync is in flight (worker picks up
-    within ~a minute; a real sync is ~1-2s once claimed). */
-const SYNC_POLL_MS = 5_000;
-const SYNC_POLL_MAX = 24;
+/** Poll cadence while a sync is in flight. The worker fast-path serves a
+    tap in ~5s, so poll every 2s at first, easing to 5s if it drags
+    (robot mid-order). */
+const SYNC_POLL_FAST_MS = 2_000;
+const SYNC_POLL_SLOW_MS = 5_000;
+const SYNC_POLL_FAST_COUNT = 10;
+const SYNC_POLL_MAX = 28;
+/** Opening Orders auto-refreshes from MILO when the last check is older
+    than this — fresh truth with zero taps. */
+const AUTO_SYNC_AFTER_MS = 10 * 60_000;
 
 export function OrdersPage() {
   const navigate = useNavigate();
@@ -172,6 +175,7 @@ export function OrdersPage() {
   const pollSyncUntilDone = useCallback(
     (attempt: number) => {
       stopPolling();
+      const delay = attempt < SYNC_POLL_FAST_COUNT ? SYNC_POLL_FAST_MS : SYNC_POLL_SLOW_MS;
       pollTimer.current = setTimeout(() => {
         void getOrderSyncStatus().then((r) => {
           if (r.ok && !r.status.pending) {
@@ -186,7 +190,7 @@ export function OrdersPage() {
           }
           pollSyncUntilDone(attempt + 1);
         });
-      }, SYNC_POLL_MS);
+      }, delay);
     },
     // res is stable per useCachedResource contract used elsewhere on the page
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,8 +209,11 @@ export function OrdersPage() {
     });
   }, [syncState, pollSyncUntilDone]);
 
-  // One status read on mount: shows "Synced Xm ago", and resumes the
-  // spinner if a sync someone requested is still in flight.
+  // One status read on mount: shows "Checked Xm ago", resumes the
+  // spinner if a sync is already in flight — and AUTO-SYNCS when the
+  // last check is stale, so opening Orders always means fresh MILO
+  // truth without a tap (first-sync-night lesson: "make syncing
+  // faster" — the fastest sync is the one you never have to ask for).
   useEffect(() => {
     let cancelled = false;
     void getOrderSyncStatus().then((r) => {
@@ -215,6 +222,20 @@ export function OrdersPage() {
       if (r.status.pending) {
         setSyncState("syncing");
         pollSyncUntilDone(0);
+        return;
+      }
+      const lastMs = r.status.lastSyncedAt ? Date.parse(r.status.lastSyncedAt) : NaN;
+      const stale = !Number.isFinite(lastMs) || Date.now() - lastMs > AUTO_SYNC_AFTER_MS;
+      if (stale) {
+        setSyncState("syncing");
+        void requestOrderSync().then((req) => {
+          if (cancelled) return;
+          if (!req.ok) {
+            setSyncState("idle");
+            return;
+          }
+          pollSyncUntilDone(0);
+        });
       }
     });
     return () => {
