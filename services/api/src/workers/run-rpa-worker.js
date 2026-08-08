@@ -28,6 +28,7 @@ import { initSentry, captureRunFailure } from "../lib/sentry.js";
 import { processOneRpaRun } from "./execution-worker.js";
 import { forceCloseAll as forceCloseRpaSessions } from "./rpa-session-manager.js";
 import { LOOP_WEDGE_LIMIT_MS, startLoopWatchdog } from "./loop-watchdog.js";
+import { maybeRunOrderSyncTick } from "./order-sync-loop.js";
 
 // AUDIT #29 (P1, 2026-06-13): the API entrypoint (index.js) calls initSentry(),
 // but this worker daemon is a SEPARATE process (Dockerfile.worker's CMD) and
@@ -218,6 +219,16 @@ async function main() {
     }
 
     if (result?.claimed === false) {
+      /*
+        Idle-time order sync (#36 Phase A, 2026-08-08): the queue is
+        empty, so borrow the idle poll to refresh placed orders from
+        MILO (read-only; self-throttled inside — a cheap no-op almost
+        every pass). Runs BEFORE the sleep so a just-tapped Sync waits
+        at most one check interval, and only on the claimed===false
+        branch so it can never delay a real run. A sync takes ~1-2s;
+        the 20-min wedge limit doesn't notice it.
+      */
+      await maybeRunOrderSyncTick();
       // Queue was empty — quiet poll cadence.
       await interruptibleSleep(IDLE_POLL_MS);
     } else if (result?.success === false) {

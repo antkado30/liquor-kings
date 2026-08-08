@@ -56,6 +56,7 @@ import { runUpcEnrichment } from "../mlcc/mlcc-price-book-upc-enrichment.js";
 import {
   checkAndIngestIfPriceBookChanged,
   checkAndIngestBetweenBookLists,
+  checkAndRunUpcEnrichmentIfTxtChanged,
 } from "../mlcc/mlcc-price-book-scheduler.js";
 import { normalizeUpc } from "../lib/upc-normalize.js";
 
@@ -316,7 +317,17 @@ router.post("/check-updates", async (req, res) => {
       cron response into an error (the full-book result is the headline).
     */
     const betweenBook = await checkAndIngestBetweenBookLists(supabase);
-    res.json({ ok: true, ...result, between_book: betweenBook.results });
+    /*
+      TXT watch (2026-08-05, barcode auto-currency mandate): MLCC posts
+      the UPC-bearing TXT on its own schedule (Aug book was live for
+      days before its TXT). Re-enrich the moment the TXT URL changes —
+      ledgered under kind='upc_txt', idempotent, fail-soft.
+    */
+    const upcTxt =
+      result.ingested === true
+        ? { checked: false, ran: false, reason: "full ingest already ran enrichment this tick" }
+        : await checkAndRunUpcEnrichmentIfTxtChanged(supabase);
+    res.json({ ok: true, ...result, between_book: betweenBook.results, upc_txt: upcTxt });
   } catch (e) {
     res.status(500).json({
       ok: false,

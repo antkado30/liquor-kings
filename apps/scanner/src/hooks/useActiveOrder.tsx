@@ -33,6 +33,7 @@ import {
   type ValidateResult,
 } from "../api/execution";
 import { getCurrentStoreId } from "../lib/currentStore";
+import { useCartOrNull } from "./useCart";
 import { CHECK_TRUST_WINDOW_MS, type LastGreenCheck } from "../lib/place-gate";
 
 const STORAGE_KEY = "lk.activeOrder.v1";
@@ -205,6 +206,17 @@ function writeStoredGreenCheck(check: StoredGreenCheck | null) {
 
 export function ActiveOrderProvider({ children }: { children: ReactNode }) {
   const [activeOrder, setActiveOrder] = useState<ActiveOrder | null>(null);
+  /*
+    Cart access for the one-truth clear-on-placed rule (2026-08-05,
+    first-order night: Tony placed from the pill flow and 375 items
+    survived, because clearing only lived on the drawer's green Done
+    button). The provider sits inside CartProvider in App.tsx; the
+    graceful-null variant keeps bare test renders working. A ref keeps
+    the long-lived poll closure reading the CURRENT context value.
+  */
+  const cart = useCartOrNull();
+  const cartRef = useRef(cart);
+  cartRef.current = cart;
   // Rehydrated lazily on mount (store-scoped, expiry-pruned) so Place
   // eligibility survives an app close/reopen within the trust window.
   const [lastGreenCheck, setLastGreenCheck] = useState<LastGreenCheck | null>(
@@ -269,6 +281,17 @@ export function ActiveOrderProvider({ children }: { children: ReactNode }) {
           setActiveOrder((cur) =>
             cur && cur.runId === order.runId ? { ...cur, status, result } : cur,
           );
+          /*
+            ONE TRUTH: any run that lands with a REAL submission clears
+            the cart — whichever surface shows the result (drawer, pill
+            sheet, or nobody watching at all). The drawer's Done button
+            keeps its own clear as a harmless no-op second call. Gated
+            on submitted === true (the worker's explicit truth bit), so
+            practice checks and downgraded submits never touch the cart.
+          */
+          if (result.submitted === true) {
+            cartRef.current?.clearCart();
+          }
           /*
             Record the GREEN check (two-step ordering, 2026-07-11): a
             validate_only run that succeeded with MILO's own

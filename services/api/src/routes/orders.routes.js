@@ -58,7 +58,7 @@ router.get("/", async (req, res) => {
   let q = supabase
     .from("milo_order_confirmations")
     .select(
-      "id, store_id, execution_run_id, ada_number, ada_name, confirmation_number, order_number, placed_at, delivery_date, submitted_at, net_total, gross_total, line_item_count, distributor_raw, status_at_placement, created_at",
+      "id, store_id, execution_run_id, ada_number, ada_name, confirmation_number, order_number, placed_at, delivery_date, submitted_at, net_total, gross_total, line_item_count, distributor_raw, status_at_placement, created_at, synced_at, synced_status, synced_updated_by_ada, synced_net_total, synced_gross_total, synced_delivery_date, synced_line_item_count, origin",
     )
     .eq("store_id", storeId)
     .order("placed_at", { ascending: false, nullsFirst: false })
@@ -85,6 +85,65 @@ router.get("/", async (req, res) => {
       : null;
 
   return res.json({ ok: true, orders, nextCursor });
+});
+
+/**
+ * POST /orders/sync — ask the worker to refresh this store's placed
+ * orders from MILO (#36 Phase A). Sets stores.order_sync_requested_at;
+ * the worker's idle loop picks it up within ~a minute. Read-only against
+ * MILO — this can never place or change an order.
+ */
+router.post("/sync", async (req, res) => {
+  const storeId = req.store_id;
+  if (!storeId) {
+    return res
+      .status(403)
+      .json({ ok: false, error: "Store context not resolved" });
+  }
+  const supabase = supabaseDefault;
+  const requestedAt = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("stores")
+    .update({ order_sync_requested_at: requestedAt })
+    .eq("id", storeId)
+    .select("order_sync_requested_at, last_order_sync_at")
+    .maybeSingle();
+  if (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+  return res.json({
+    ok: true,
+    requestedAt: data?.order_sync_requested_at ?? requestedAt,
+    lastSyncedAt: data?.last_order_sync_at ?? null,
+  });
+});
+
+/**
+ * GET /orders/sync/status — is a sync pending, and when did the last one
+ * finish? The Orders page polls this after tapping Sync.
+ */
+router.get("/sync/status", async (req, res) => {
+  const storeId = req.store_id;
+  if (!storeId) {
+    return res
+      .status(403)
+      .json({ ok: false, error: "Store context not resolved" });
+  }
+  const supabase = supabaseDefault;
+  const { data, error } = await supabase
+    .from("stores")
+    .select("order_sync_requested_at, last_order_sync_at")
+    .eq("id", storeId)
+    .maybeSingle();
+  if (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+  const requestedAt = data?.order_sync_requested_at ?? null;
+  const lastSyncedAt = data?.last_order_sync_at ?? null;
+  const pending = Boolean(
+    requestedAt && (!lastSyncedAt || Date.parse(requestedAt) > Date.parse(lastSyncedAt)),
+  );
+  return res.json({ ok: true, pending, requestedAt, lastSyncedAt });
 });
 
 /**
@@ -138,7 +197,7 @@ router.get("/summary/recent", async (req, res) => {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
     .from("milo_order_confirmations")
-    .select("id, net_total, gross_total, placed_at, ada_number")
+    .select("id, net_total, gross_total, synced_net_total, synced_gross_total, synced_at, placed_at, ada_number")
     .eq("store_id", storeId)
     .gte("placed_at", since);
 
@@ -152,14 +211,23 @@ router.get("/summary/recent", async (req, res) => {
       .map((r) => `${r.placed_at?.slice(0, 10)}-${r.ada_number ?? ""}`)
       .filter((k) => k && !k.startsWith("undefined-")),
   ).size;
-  const netSpend = rows.reduce(
-    (sum, r) => sum + (Number(r.net_total) || 0),
-    0,
-  );
-  const grossSpend = rows.reduce(
-    (sum, r) => sum + (Number(r.gross_total) || 0),
-    0,
-  );
+  /*
+    #36 Phase A: spend follows MILO's CURRENT truth once a row has been
+    synced (the 8/5 edit moved GW&L from $5,209.14 to $2,029.14 — a
+    30-day header still summing placement numbers would overstate real
+    spend by $3,180). Placement value remains the fallback for rows the
+    sync hasn't touched.
+  */
+  const currentNet = (r) =>
+    r.synced_at != null && r.synced_net_total != null
+      ? Number(r.synced_net_total)
+      : Number(r.net_total);
+  const currentGross = (r) =>
+    r.synced_at != null && r.synced_gross_total != null
+      ? Number(r.synced_gross_total)
+      : Number(r.gross_total);
+  const netSpend = rows.reduce((sum, r) => sum + (currentNet(r) || 0), 0);
+  const grossSpend = rows.reduce((sum, r) => sum + (currentGross(r) || 0), 0);
   return res.json({
     ok: true,
     sinceIso: since,

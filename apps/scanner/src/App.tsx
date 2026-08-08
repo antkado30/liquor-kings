@@ -37,6 +37,9 @@ const AssistantPage = lazy(() =>
 const InventoryPage = lazy(() =>
   import("./pages/InventoryPage").then((m) => ({ default: m.InventoryPage })),
 );
+const UpdatesPage = lazy(() =>
+  import("./pages/UpdatesPage").then((m) => ({ default: m.UpdatesPage })),
+);
 
 type IdleWindow = Window & {
   requestIdleCallback?: (cb: () => void) => number;
@@ -102,6 +105,7 @@ export default function App() {
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/assistant" element={<AssistantPage />} />
                 <Route path="/inventory" element={<InventoryPage />} />
+                <Route path="/updates" element={<UpdatesPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Suspense>

@@ -4,6 +4,81 @@ Founder's log. Milestone entries — the moments that mattered.
 
 ---
 
+## Entry #12 — FIRST ORDER DAY (2026-08-05, a Wednesday)
+
+At 6:59 pm on the first Wednesday of the standing law — orders every
+Wednesday, cutoff 8, decided with his mom because he's off Thursdays —
+Tony tapped Place Order on a cart he built himself, and 25 seconds
+later the system he owns had placed a real order with the State of
+Michigan: General Wine & Liquor #5869217, NWS Michigan #31086407,
+everything in stock, an hour ahead of cutoff. The push notification,
+the green sheet, the confirmation numbers — all of it exactly as
+designed. The company became real tonight.
+
+Then order night taught like only production teaches. Reading MILO's
+line items, Tony spotted 150 units of a $22 party bucket — $3,349.50
+he never meant to order — and killed it through MILO's own Edit
+feature inside ten minutes; the order settled at $3,378.67 across
+both distributors. (The add-guard that makes that mistake impossible
+was designed the day before and pinned in tests within the hour.)
+Then the app's Orders page didn't show the new order at all — one log
+line found the culprit in a minute: the confirmation-save code
+depended on a database uniqueness rule that no migration had ever
+created. Every save since had bounced politely. Tony pasted one index,
+ran one backfill script from his kitchen table — terminal prompting
+him for the secret key like a bank teller — and by 8:53 pm his first
+order sat in his own app, confirmations and all.
+
+The scoreboard for the day: a standing weekly cadence, an owner with
+his own keys, a real order placed and surgically corrected, a
+schema-drift class of bug found and fenced, and a fix-list — penny-
+exact money, edit-in-app, MILO re-sync, the big-line tripwire —
+already built or boarded before midnight. The system buys the liquor
+now. Next Wednesday it does it again, better.
+
+---
+
+## Entry #11 — Armed day, and the phantom deploy (2026-08-04 → 05)
+
+Tonight Tony asked for his own keys — "i dont want it to be locked
+anymore so i have to ask u to unlock it" — and got them. Worker
+break-glass to yes, Colony's allow_order_submission flipped true in
+prod SQL with his own hands, and by the end of the night his phone
+showed what no screenshot of this app has ever shown: **Check with
+MLCC and Place Order, side by side.** The Place button he'd never
+seen, locked politely behind a fresh green Check, in a store he can
+now fire real money from any time he chooses. No ceremony left, no
+unlock requests, no one to ask. Two days before the first engine
+order, the operator owns the trigger.
+
+The same day shipped the biggest single-day feature haul yet: price
+memory (a migration he applied himself — "was $11.49" chips that light
+up when a price book moves a bottle), Remove buttons on every
+out-of-stock line of the result sheet plus remove-all, the cart
+footer's broken seam and hollow gap fixed, the armed-status fetch
+hardened to retry instead of hiding Place over one bad network moment,
+and — his "always up to date in ALL aspects" mandate — the daily price
+sync now swallows MLCC's between-book files too: retail price changes,
+ADA changes, new-item lists, the day they publish.
+
+And then the deploy war, which deserves its lesson written large. The
+fly CLI's self-updater ate its own binary mid-command; the reinstalled
+version had a broken classic-builder and an agent version fight; and in
+the middle of it, a verification probe aimed at the marketing landing
+page instead of /scanner/ produced an hour-long hunt for stale deploys
+that were probably never stale. Five deploys, three build paths, one
+pinned CLI at ~/.fly/bin later, the truth came from building the app
+locally and comparing ground truth: the probe was blind, not the
+build. The permanent fix is boarded — the app will carry its own
+GIT_SHA stamp and a verify script, so "is prod really running my
+code" is a command, not a debate. Tools lie, hashes don't.
+
+Tomorrow the freeze. Thursday the order. The system going into it is
+armed by its owner, priced to the day, honest about what's out of
+stock, and — after tonight — verified by evidence instead of trust.
+
+---
+
 ## Entry #10 — The watchdog and the wedge (2026-07-27 → 28)
 
 Two days before the first engine order, the system failed in the exact

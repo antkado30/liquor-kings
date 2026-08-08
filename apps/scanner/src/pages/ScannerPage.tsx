@@ -26,11 +26,18 @@ import type { StoreVerificationMeta } from "../api/home";
 import { PlaceholderBottle, tintForCategory } from "../components/BottleArt";
 import { nonGlassContainerSuffix, packCountSuffix } from "../lib/container-label";
 import {
+  IconBell,
   IconCart,
   IconChevronRight,
   IconSparkles,
   IconX,
 } from "../components/Icons";
+import { getUpdates } from "../api/updates";
+import {
+  computeUnreadCount,
+  getLastSeenIso,
+  unreadBadgeLabel,
+} from "../lib/updates-unread";
 import { UpcCandidatePicker } from "../components/UpcCandidatePicker";
 import { VisionCandidatePicker } from "../components/VisionCandidatePicker";
 import {
@@ -65,6 +72,23 @@ export function ScannerPage() {
   const search = useCatalogSearch({ grouped: upcBeingMapped == null });
   const navigate = useNavigate();
   const isOnline = useOnlineStatus();
+  /*
+    Bell badge (2026-08-05, the Updates feed). One light fetch per Home
+    mount; unread = entries newer than the local watermark, which
+    UpdatesPage stamps on open. Returning Home remounts this page →
+    refetch → badge clears. Fail-soft: no feed, no badge, no noise.
+  */
+  const [updatesBadge, setUpdatesBadge] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getUpdates().then((r) => {
+      if (cancelled || !r.ok) return;
+      setUpdatesBadge(unreadBadgeLabel(computeUnreadCount(r.updates, getLastSeenIso())));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   /*
     Background pre-validate (task #47, 2026-06-02). Lives at the
     ScannerPage level so the cart-watch effect keeps running even
@@ -353,6 +377,19 @@ export function ScannerPage() {
           <span className="scanhm-wordmark__kings">Kings</span>
         </h1>
         <div className="top-bar-actions">
+          <button
+            type="button"
+            className="icon-btn cart-btn updates-bell-btn"
+            onClick={() => navigate("/updates")}
+            aria-label={
+              updatesBadge ? `Updates — ${updatesBadge} unread` : "Updates"
+            }
+          >
+            <IconBell size={22} strokeWidth={1.85} />
+            {updatesBadge ? (
+              <span className="cart-badge updates-bell-badge">{updatesBadge}</span>
+            ) : null}
+          </button>
           <button
             type="button"
             className="icon-btn cart-btn scanhm-cart-btn"

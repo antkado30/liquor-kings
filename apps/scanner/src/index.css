@@ -2542,12 +2542,17 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
 .orders-stat__head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   font-size: 0.68rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
+  /* Layout law (2026-08-05): a long label wraps INSIDE its card —
+     it never paints past the card edge again. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .orders-stat__value {
@@ -2598,6 +2603,93 @@ body.lk-tab-bar-hidden nav[aria-label="Primary navigation"] {
   overflow-x: auto;
   padding-bottom: 2px;
   scrollbar-width: none;
+  /* A half-visible chip at the right edge looked BROKEN (Tony's 8/5
+     screenshot: "NWS" cut mid-word). The fade tells the eye it's a
+     scrollable row, not a rendering bug. */
+  mask-image: linear-gradient(90deg, #000 90%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent 100%);
+}
+
+/* Each meta fact is one unbreakable unit (dot glued to its fact), so
+   line breaks land between facts — a separator can never end a line. */
+.orders-row__seg {
+  white-space: nowrap;
+}
+
+/*
+  #36 order re-sync (2026-08-08). Sync button lives in the page header
+  (right-aligned); "Edited · was $X" rides the meta line as its own
+  unbreakable segment. Colors mirror the price-memory chips: an edit
+  DOWN (the 8/5 case — money saved) reads green, an edit UP reads red.
+*/
+.orders-sync-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.orders-sync-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.orders-sync-btn__spin {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+}
+
+.orders-sync-note {
+  margin: -6px 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.orders-row__edited {
+  display: inline-block;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.orders-row__edited--down {
+  color: var(--success);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.orders-row__edited--up {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.order-detail-sync-note {
+  margin: 10px 0 0;
+}
+
+.order-detail-lines-head__tag {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: 2px;
+  white-space: nowrap;
 }
 
 .orders-chips::-webkit-scrollbar {
@@ -9413,6 +9505,100 @@ select {
   top: 100%;
   height: calc(72px + env(safe-area-inset-bottom));
   background: var(--surface);
+}
+
+/*
+  ─── Updates bell + feed (2026-08-05, Tony's design) ─────────────────
+  Bell sits next to the cart icon; badge mirrors the cart badge but in
+  accent purple so the two never read as the same thing. Feed page is
+  calm: day headers, one row per event, type-tinted icon chips.
+*/
+.updates-bell-btn {
+  position: relative;
+}
+.updates-bell-badge {
+  background: var(--accent);
+}
+.updates-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  margin: 0;
+}
+.updates-title-spacer {
+  width: 38px;
+}
+.updates-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 4px;
+}
+.updates-empty {
+  padding: 24px 4px;
+  line-height: 1.5;
+}
+.updates-day {
+  margin: 18px 0 0;
+}
+.updates-day__label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+}
+.updates-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.updates-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+}
+.updates-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.updates-icon--price {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+}
+.updates-icon--new {
+  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.12);
+}
+.updates-icon--sync {
+  color: #93c5fd;
+  background: rgba(147, 197, 253, 0.12);
+}
+.updates-icon--order {
+  color: #c4b5fd;
+  background: rgba(196, 181, 253, 0.12);
+}
+.updates-row__title {
+  font-size: 0.92rem;
+  font-weight: 650;
+  line-height: 1.3;
+}
+.updates-row__body {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin-top: 2px;
 }
 
 /* Add-to-cart toast on the cart page — sits above the tab bar. */

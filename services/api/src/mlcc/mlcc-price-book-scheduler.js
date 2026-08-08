@@ -28,7 +28,10 @@ import {
   discoverLatestAdaChangesUrl,
   ingestMlccPriceBook,
 } from "./mlcc-price-book-ingestor.js";
-import { runUpcEnrichment } from "./mlcc-price-book-upc-enrichment.js";
+import {
+  runUpcEnrichment,
+  discoverLatestPriceBookTxtUrl,
+} from "./mlcc-price-book-upc-enrichment.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -123,6 +126,70 @@ const BETWEEN_BOOK_CHECKS = [
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @returns {Promise<{ checked: true, results: Array<object> }>}
  */
+/*
+  TXT-change UPC enrichment (2026-08-05, Tony's barcode auto-currency
+  mandate: "whenever mlcc adds new bottles to the book it comes with
+  barcodes... make sure 100% that we are getting this information
+  automatically"). The TXT is the ONLY UPC source, and MLCC publishes
+  it on its own schedule — found live on 2026-08-05: the August 2 Excel
+  book was up while the TXT was still May's. Enrichment used to run
+  only on full-ingest day, so a late TXT meant new bottles stayed
+  unscannable until the NEXT book. Now the daily tick watches the TXT
+  URL with its own ledger (mlcc_price_book_runs kind='upc_txt') and
+  re-enriches the moment MLCC posts a new one. Ledger rows are written
+  on SUCCESS only — a failed enrichment leaves the last-good URL in
+  place so the next tick retries (same rule as the ingest ledger).
+*/
+export async function checkAndRunUpcEnrichmentIfTxtChanged(supabase) {
+  try {
+    const disc = await discoverLatestPriceBookTxtUrl();
+    if (!disc.ok) {
+      return { checked: true, ran: false, reason: `discovery: ${disc.error}` };
+    }
+    const currentUrl = disc.url;
+    const last = await getLastCompletedIngestUrlOfKind(supabase, "upc_txt");
+    if (!last.ok) {
+      return { checked: true, ran: false, reason: `ledger read failed: ${last.error}`, currentUrl };
+    }
+    if (last.url && last.url === currentUrl) {
+      return { checked: true, ran: false, reason: "no change", currentUrl };
+    }
+    console.log(
+      `[price-book-scheduler] new price-book TXT detected — running UPC enrichment. current=${currentUrl} last=${last.url ?? "(none)"}`,
+    );
+    const result = await runUpcEnrichment(supabase);
+    if (!result.ok) {
+      return { checked: true, ran: false, reason: `enrichment failed: ${result.error}`, currentUrl };
+    }
+    const nowIso = new Date().toISOString();
+    const { error: insErr } = await supabase.from("mlcc_price_book_runs").insert({
+      price_book_date: nowIso.slice(0, 10),
+      source_url: result.url ?? currentUrl,
+      total_items: result.apply?.updatedRows ?? null,
+      status: "complete",
+      kind: "upc_txt",
+      completed_at: nowIso,
+    });
+    if (insErr) {
+      // The enrichment itself succeeded; a ledger miss only means the next
+      // tick re-runs an idempotent pass. Log, don't fail.
+      console.warn(`[price-book-scheduler] upc_txt ledger insert failed: ${insErr.message}`);
+    }
+    return {
+      checked: true,
+      ran: true,
+      currentUrl,
+      updatedRows: result.apply?.updatedRows ?? null,
+    };
+  } catch (e) {
+    return {
+      checked: true,
+      ran: false,
+      reason: `unexpected: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
 export async function checkAndIngestBetweenBookLists(supabase) {
   const results = [];
   for (const { kind, discover } of BETWEEN_BOOK_CHECKS) {

@@ -5,11 +5,13 @@
  * Cached via useCachedResource for instant tab reopen; paginates
  * with loadMore + listOrders cursor.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  getOrderSyncStatus,
   getOrdersSummary,
   listOrders,
+  requestOrderSync,
   type MiloOrderListItem,
   type OrdersSummary,
 } from "../api/orders";
@@ -20,17 +22,29 @@ import {
   IconChevronRight,
   IconClipboardList,
   IconLoader,
+  IconRefresh,
   IconStore,
 } from "../components/Icons";
 import { useCachedResource } from "../lib/swr";
 import { getCurrentStoreId } from "../lib/currentStore";
+import {
+  orderDeliveryDate,
+  orderLineCount,
+  orderMoneyView,
+  timeAgoShort,
+} from "../lib/order-sync-display";
 
 function money(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(Number(n))) return "—";
+  /*
+    PENNY DOCTRINE (Tony, first-order night 2026-08-05): "each dollar
+    amount is correct to the exact penny of what they spent." This used
+    to round to whole dollars (maximumFractionDigits: 0) — a $3,752.60
+    order displayed as $3,753. Never round money anywhere in LK.
+  */
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0,
   }).format(Number(n));
 }
 
@@ -97,6 +111,11 @@ type OrdersData = {
   hasMore: boolean;
 };
 
+/** Poll cadence + budget while a sync is in flight (worker picks up
+    within ~a minute; a real sync is ~1-2s once claimed). */
+const SYNC_POLL_MS = 5_000;
+const SYNC_POLL_MAX = 24;
+
 export function OrdersPage() {
   const navigate = useNavigate();
   const storeId = getCurrentStoreId() ?? "none";
@@ -104,6 +123,9 @@ export function OrdersPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [adaFilter, setAdaFilter] = useState<string | null>(null);
+  const [syncState, setSyncState] = useState<"idle" | "syncing" | "slow">("idle");
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const res = useCachedResource<OrdersData>(`orders:${storeId}`, async () => {
     const [listRes, sumRes] = await Promise.all([
@@ -129,6 +151,77 @@ export function OrdersPage() {
       ? res.error.message
       : String(res.error)
     : null;
+
+  /*
+    Sync-with-MILO (#36 Phase A). Tap → POST /orders/sync → the worker's
+    idle loop refreshes every placed order from MILO's own order history
+    (read-only). We poll /orders/sync/status until pending clears, then
+    refetch the list so edited totals land on screen. If it's still
+    pending after the budget (worker busy with a real run), say so
+    honestly and stop polling — the sync still completes server-side.
+  */
+  const stopPolling = useCallback(() => {
+    if (pollTimer.current) {
+      clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => stopPolling, [stopPolling]);
+
+  const pollSyncUntilDone = useCallback(
+    (attempt: number) => {
+      stopPolling();
+      pollTimer.current = setTimeout(() => {
+        void getOrderSyncStatus().then((r) => {
+          if (r.ok && !r.status.pending) {
+            setLastSyncedAt(r.status.lastSyncedAt);
+            setSyncState("idle");
+            void res.refresh();
+            return;
+          }
+          if (attempt + 1 >= SYNC_POLL_MAX) {
+            setSyncState("slow");
+            return;
+          }
+          pollSyncUntilDone(attempt + 1);
+        });
+      }, SYNC_POLL_MS);
+    },
+    // res is stable per useCachedResource contract used elsewhere on the page
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stopPolling],
+  );
+
+  const startSync = useCallback(() => {
+    if (syncState === "syncing") return;
+    setSyncState("syncing");
+    void requestOrderSync().then((r) => {
+      if (!r.ok) {
+        setSyncState("idle");
+        return;
+      }
+      pollSyncUntilDone(0);
+    });
+  }, [syncState, pollSyncUntilDone]);
+
+  // One status read on mount: shows "Synced Xm ago", and resumes the
+  // spinner if a sync someone requested is still in flight.
+  useEffect(() => {
+    let cancelled = false;
+    void getOrderSyncStatus().then((r) => {
+      if (cancelled || !r.ok) return;
+      setLastSyncedAt(r.status.lastSyncedAt);
+      if (r.status.pending) {
+        setSyncState("syncing");
+        pollSyncUntilDone(0);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
 
   const loadMore = useCallback(async () => {
     if (!cursor || loadingMore || !res.data) return;
@@ -219,7 +312,34 @@ export function OrdersPage() {
           <IconChevronLeft size={20} strokeWidth={2} />
         </Link>
         <h1>Orders</h1>
+        <button
+          type="button"
+          className="orders-sync-btn"
+          onClick={startSync}
+          disabled={syncState === "syncing"}
+          aria-label="Sync orders with MILO"
+        >
+          {syncState === "syncing" ? (
+            <span className="settings-spinner orders-sync-btn__spin" aria-hidden>
+              <IconLoader size={15} strokeWidth={2} />
+            </span>
+          ) : (
+            <IconRefresh size={15} strokeWidth={2} aria-hidden />
+          )}
+          {syncState === "syncing" ? "Syncing…" : "Sync"}
+        </button>
       </header>
+
+      {syncState === "slow" ? (
+        <p className="orders-sync-note muted small">
+          MILO sync is taking longer than usual (the robot may be mid-order).
+          It finishes on its own — check back in a minute.
+        </p>
+      ) : lastSyncedAt ? (
+        <p className="orders-sync-note muted small">
+          Checked against MILO {timeAgoShort(lastSyncedAt, Date.now())}
+        </p>
+      ) : null}
 
       {summary ? (
         <section className="orders-stats" aria-label="Last 30 days summary">
@@ -240,9 +360,11 @@ export function OrdersPage() {
             <div className="orders-stat__meta">Distinct (30d)</div>
           </div>
           <div className="orders-stat">
+            {/* "CONFIRMATIONS" overflowed its stat card on 375pt phones
+                (Tony's 8/5 screenshot) — "Confirmed" fits with room. */}
             <div className="orders-stat__head">
               <IconClipboardList size={14} strokeWidth={2} aria-hidden />
-              Confirmations
+              Confirmed
             </div>
             <div className="orders-stat__value">{summary.totalConfirmations}</div>
             <div className="orders-stat__meta">Submitted (30d)</div>
@@ -379,59 +501,88 @@ export function OrdersPage() {
                 {g.rows.length} confirmation{g.rows.length === 1 ? "" : "s"}
               </span>
             </h2>
-            {g.rows.map((o) => (
-              <button
-                type="button"
-                key={o.id}
-                className="orders-row"
-                onClick={() => navigate(`/orders/${o.id}`)}
-              >
-                <div className="orders-row__left">
-                  <div className="orders-row__ada">
-                    {o.ada_name || o.distributor_raw || "Unknown ADA"}
+            {g.rows.map((o) => {
+              /*
+                #36 Phase A: once a row has synced, MILO's CURRENT total
+                leads and the placement total stays visible as "was" only
+                when they differ — first-order night showed a $5,209.14
+                placement while MILO's truth was $2,029.14.
+              */
+              const mv = orderMoneyView(o);
+              const delivery = orderDeliveryDate(o);
+              const lineCount = orderLineCount(o);
+              return (
+                <button
+                  type="button"
+                  key={o.id}
+                  className="orders-row"
+                  onClick={() => navigate(`/orders/${o.id}`)}
+                >
+                  <div className="orders-row__left">
+                    <div className="orders-row__ada">
+                      {o.ada_name || o.distributor_raw || "Unknown ADA"}
+                    </div>
+                    {/*
+                      Layout law (Tony 8/5: "letters out of place — never
+                      again"): each fact is ONE unbreakable segment with its
+                      leading dot glued on, so wraps land cleanly BETWEEN
+                      facts and a separator can never end a line.
+                    */}
+                    <div className="orders-row__meta muted small">
+                      <span className="orders-row__seg">Conf #{o.confirmation_number}</span>
+                      {o.order_number ? (
+                        <span className="orders-row__seg">
+                          <span className="orders-row__dot" aria-hidden>
+                            ·{" "}
+                          </span>
+                          Order #{o.order_number}
+                        </span>
+                      ) : null}
+                      {delivery ? (
+                        <span className="orders-row__seg">
+                          <span className="orders-row__dot" aria-hidden>
+                            ·{" "}
+                          </span>
+                          Delivery {shortDate(delivery)}
+                        </span>
+                      ) : null}
+                      {lineCount ? (
+                        <span className="orders-row__seg">
+                          <span className="orders-row__dot" aria-hidden>
+                            ·{" "}
+                          </span>
+                          {lineCount} line
+                          {lineCount === 1 ? "" : "s"}
+                        </span>
+                      ) : null}
+                      {mv.edited ? (
+                        <span className="orders-row__seg">
+                          <span className="orders-row__dot" aria-hidden>
+                            ·{" "}
+                          </span>
+                          <span
+                            className={`orders-row__edited ${
+                              mv.editedDown ? "orders-row__edited--down" : "orders-row__edited--up"
+                            }`}
+                          >
+                            Edited · was {money(mv.placed)}
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
-                  <div className="orders-row__meta muted small">
-                    <span>Conf #{o.confirmation_number}</span>
-                    {o.order_number ? (
-                      <>
-                        <span className="orders-row__dot" aria-hidden>
-                          ·
-                        </span>
-                        <span>Order #{o.order_number}</span>
-                      </>
-                    ) : null}
-                    {o.delivery_date ? (
-                      <>
-                        <span className="orders-row__dot" aria-hidden>
-                          ·
-                        </span>
-                        <span>Delivery {shortDate(o.delivery_date)}</span>
-                      </>
-                    ) : null}
-                    {o.line_item_count ? (
-                      <>
-                        <span className="orders-row__dot" aria-hidden>
-                          ·
-                        </span>
-                        <span>
-                          {o.line_item_count} line
-                          {o.line_item_count === 1 ? "" : "s"}
-                        </span>
-                      </>
-                    ) : null}
+                  <div className="orders-row__right">
+                    <strong>{money(mv.current)}</strong>
+                    <IconChevronRight
+                      size={18}
+                      strokeWidth={2}
+                      className="orders-row__chevron"
+                      aria-hidden
+                    />
                   </div>
-                </div>
-                <div className="orders-row__right">
-                  <strong>{money(o.net_total ?? o.gross_total)}</strong>
-                  <IconChevronRight
-                    size={18}
-                    strokeWidth={2}
-                    className="orders-row__chevron"
-                    aria-hidden
-                  />
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </section>
         ))}
       </div>

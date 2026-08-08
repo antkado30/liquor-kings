@@ -21,11 +21,13 @@ vi.mock("../src/mlcc/mlcc-price-book-ingestor.js", () => ({
 }));
 vi.mock("../src/mlcc/mlcc-price-book-upc-enrichment.js", () => ({
   runUpcEnrichment: vi.fn(),
+  discoverLatestPriceBookTxtUrl: vi.fn(),
 }));
 
 import {
   checkAndIngestIfPriceBookChanged,
   checkAndIngestBetweenBookLists,
+  checkAndRunUpcEnrichmentIfTxtChanged,
 } from "../src/mlcc/mlcc-price-book-scheduler.js";
 import {
   discoverLatestPriceBookUrl,
@@ -34,7 +36,10 @@ import {
   discoverLatestAdaChangesUrl,
   ingestMlccPriceBook,
 } from "../src/mlcc/mlcc-price-book-ingestor.js";
-import { runUpcEnrichment } from "../src/mlcc/mlcc-price-book-upc-enrichment.js";
+import {
+  runUpcEnrichment,
+  discoverLatestPriceBookTxtUrl,
+} from "../src/mlcc/mlcc-price-book-upc-enrichment.js";
 
 /** Mock Supabase: getLastCompletedIngestUrl ends its chain at .maybeSingle(). */
 function mockSupabase({ lastRunRow = null, lastRunError = null } = {}) {
@@ -271,5 +276,116 @@ describe("checkAndIngestBetweenBookLists", () => {
     expect(ingestMlccPriceBook).toHaveBeenCalledTimes(3);
     expect(r.results.every((x) => x.ingested === false)).toBe(true);
     expect(r.results.every((x) => /ingest failed: parse exploded/.test(x.reason))).toBe(true);
+  });
+});
+
+/*
+  TXT-change UPC enrichment (2026-08-05, the barcode auto-currency
+  mandate). Found live: the Aug 2 Excel book published while the TXT
+  (the ONLY UPC source) was still May's — enrichment only ran on
+  full-ingest day, so late TXTs left new bottles unscannable until the
+  next book. These pins hold the watch: own ledger kind, re-run on URL
+  change, success-only ledger rows so failures retry next tick.
+*/
+
+/** Ledger mock with per-kind rows AND an insert capture. */
+function mockLedgerWithInsert(urlByKind) {
+  const inserts = [];
+  const client = {
+    from: () => {
+      const state = { kind: null };
+      const b = {
+        select: () => b,
+        eq: (col, val) => {
+          if (col === "kind") state.kind = val;
+          return b;
+        },
+        order: () => b,
+        limit: () => b,
+        maybeSingle: () =>
+          Promise.resolve({
+            data: urlByKind[state.kind] ? { source_url: urlByKind[state.kind] } : null,
+            error: null,
+          }),
+        insert: (row) => {
+          inserts.push(row);
+          return Promise.resolve({ error: null });
+        },
+      };
+      return b;
+    },
+  };
+  return { client, inserts };
+}
+
+describe("checkAndRunUpcEnrichmentIfTxtChanged", () => {
+  const TXT_NEW = "https://mlcc/aug-price-book-txt.txt?rev=AUG";
+  const TXT_OLD = "https://mlcc/may-price-book-txt.txt?rev=MAY";
+
+  beforeEach(() => {
+    discoverLatestPriceBookTxtUrl.mockResolvedValue({ ok: true, url: TXT_NEW });
+    runUpcEnrichment.mockResolvedValue({
+      ok: true,
+      url: TXT_NEW,
+      parse: { headerFound: true },
+      apply: { updatedRows: 13409 },
+    });
+  });
+
+  it("unchanged TXT → no enrichment run", async () => {
+    const { client } = mockLedgerWithInsert({ upc_txt: TXT_NEW });
+
+    const r = await checkAndRunUpcEnrichmentIfTxtChanged(client);
+
+    expect(r).toMatchObject({ ran: false, reason: "no change" });
+    expect(runUpcEnrichment).not.toHaveBeenCalled();
+  });
+
+  it("a NEW TXT runs enrichment and writes a success ledger row (kind upc_txt)", async () => {
+    const { client, inserts } = mockLedgerWithInsert({ upc_txt: TXT_OLD });
+
+    const r = await checkAndRunUpcEnrichmentIfTxtChanged(client);
+
+    expect(runUpcEnrichment).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ ran: true, updatedRows: 13409, currentUrl: TXT_NEW });
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]).toMatchObject({
+      kind: "upc_txt",
+      status: "complete",
+      source_url: TXT_NEW,
+      total_items: 13409,
+    });
+  });
+
+  it("first-ever run (no ledger row) enriches", async () => {
+    const { client } = mockLedgerWithInsert({});
+
+    const r = await checkAndRunUpcEnrichmentIfTxtChanged(client);
+
+    expect(r.ran).toBe(true);
+    expect(runUpcEnrichment).toHaveBeenCalledTimes(1);
+  });
+
+  it("discovery failure is calm — no run, no ledger write", async () => {
+    discoverLatestPriceBookTxtUrl.mockResolvedValue({ ok: false, error: "page down" });
+    const { client, inserts } = mockLedgerWithInsert({});
+
+    const r = await checkAndRunUpcEnrichmentIfTxtChanged(client);
+
+    expect(r.ran).toBe(false);
+    expect(r.reason).toMatch(/discovery/);
+    expect(runUpcEnrichment).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("a FAILED enrichment writes NO ledger row so the next tick retries", async () => {
+    runUpcEnrichment.mockResolvedValue({ ok: false, error: "header row not found" });
+    const { client, inserts } = mockLedgerWithInsert({ upc_txt: TXT_OLD });
+
+    const r = await checkAndRunUpcEnrichmentIfTxtChanged(client);
+
+    expect(r).toMatchObject({ ran: false });
+    expect(r.reason).toMatch(/enrichment failed/);
+    expect(inserts).toHaveLength(0);
   });
 });

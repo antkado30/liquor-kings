@@ -523,3 +523,131 @@ describe("useActiveOrder green-check recording", () => {
     expect(fourth.result.current.lastGreenCheck).toBeNull();
   });
 });
+
+/*
+  Clear-cart-on-placed (2026-08-05, first-order night): Tony placed the
+  real order from the pill flow and 375 cart items survived, because the
+  clear only lived on the drawer's green Done button. Now ANY terminal
+  with submitted=true clears the cart at the provider level — one truth,
+  every surface. These pins wrap the provider in a REAL CartProvider.
+*/
+import { CartProvider } from "./useCart";
+
+const CART_KEY = "lk-scanner-cart-v1";
+
+function seedCart(codes: string[]) {
+  window.localStorage.setItem(
+    CART_KEY,
+    JSON.stringify({
+      version: 1,
+      lines: codes.map((code) => ({
+        product: {
+          id: `id-${code}`,
+          code,
+          name: `BOTTLE ${code}`,
+          ada_number: "321",
+        },
+        quantity: 3,
+      })),
+      updatedAt: "2026-08-05T12:00:00Z",
+    }),
+  );
+}
+
+function cartCodesNow(): string[] {
+  const raw = window.localStorage.getItem(CART_KEY);
+  if (!raw) return [];
+  const parsed = JSON.parse(raw) as { lines?: Array<{ product: { code: string } }> };
+  return (parsed.lines ?? []).map((l) => l.product.code);
+}
+
+function cartWrapper({ children }: { children: ReactNode }) {
+  return (
+    <CartProvider>
+      <ActiveOrderProvider>{children}</ActiveOrderProvider>
+    </CartProvider>
+  );
+}
+
+function submitSummary(runId: string, submitted: boolean) {
+  return {
+    ok: true,
+    summary: {
+      id: runId,
+      status: "succeeded",
+      progress_stage: "rpa_checkout",
+      progress_message: null,
+      failure_type: null,
+      failure_message: null,
+      validate_result: null,
+      submit_result: submitted
+        ? { submitted: true, confirmation_numbers: { "221": "5869217" } }
+        : { submitted: false },
+    },
+  };
+}
+
+describe("clear cart on real submission (one truth, 2026-08-05)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    window.localStorage.clear();
+    mockGetRunSummary.mockReset();
+    mockGetCurrentStoreId.mockReturnValue("store-1");
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a run landing submitted=true clears the cart from ANY surface", async () => {
+    seedCart(["1486", "13300", "12367"]);
+    mockGetRunSummary.mockResolvedValue(submitSummary("run-real", true));
+    const { result } = renderHook(() => useActiveOrder(), { wrapper: cartWrapper });
+    act(() => {
+      result.current.trackOrder("run-real", "submit", { cartHash: "h" });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(result.current.activeOrder?.result?.submitted).toBe(true);
+    expect(cartCodesNow()).toEqual([]);
+  });
+
+  it("a downgraded submit (submitted=false) NEVER touches the cart", async () => {
+    seedCart(["1486"]);
+    mockGetRunSummary.mockResolvedValue(submitSummary("run-dry", false));
+    const { result } = renderHook(() => useActiveOrder(), { wrapper: cartWrapper });
+    act(() => {
+      result.current.trackOrder("run-dry", "submit", { cartHash: "h" });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(result.current.activeOrder?.result?.submitted).toBe(false);
+    expect(cartCodesNow()).toEqual(["1486"]);
+  });
+
+  it("a green practice check keeps the cart untouched", async () => {
+    seedCart(["1486", "9528"]);
+    mockGetRunSummary.mockResolvedValue({
+      ok: true,
+      summary: {
+        id: "run-check",
+        status: "succeeded",
+        progress_stage: "rpa_validate",
+        progress_message: null,
+        failure_type: null,
+        failure_message: null,
+        validate_result: { validated: true, can_checkout: true, out_of_stock_items: [] },
+        submit_result: null,
+      },
+    });
+    const { result } = renderHook(() => useActiveOrder(), { wrapper: cartWrapper });
+    act(() => {
+      result.current.trackOrder("run-check", "validate_only", { cartHash: "h" });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(cartCodesNow()).toEqual(["1486", "9528"]);
+  });
+});

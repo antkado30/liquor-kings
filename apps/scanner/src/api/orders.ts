@@ -26,6 +26,20 @@ export type MiloOrderListItem = {
   distributor_raw: string | null;
   status_at_placement: string | null;
   created_at: string;
+  /*
+    #36 Phase A (2026-08-08): MILO's CURRENT truth, refreshed by the
+    worker sync loop. Placement fields above never change after submit;
+    these drift when the ADA or the owner edits the order in MILO.
+    All null/absent until the first sync touches the row.
+  */
+  synced_at?: string | null;
+  synced_status?: string | null;
+  synced_updated_by_ada?: boolean | null;
+  synced_net_total?: number | null;
+  synced_gross_total?: number | null;
+  synced_delivery_date?: string | null;
+  synced_line_item_count?: number | null;
+  origin?: string | null;
 };
 
 export type MiloOrderLineItem = {
@@ -33,14 +47,19 @@ export type MiloOrderLineItem = {
   productName?: string | null;
   quantity?: number | null;
   unitPrice?: number | null;
+  /** Browser-parser era field name. */
   lineTotal?: number | null;
+  /** Node-engine era field name (engine-orders / engine-order-sync). */
+  lineSubtotal?: number | null;
   bottleSizeMl?: number | null;
+  orderType?: string | null;
 };
 
 export type MiloOrderDetail = MiloOrderListItem & {
   liquor_tax: number | null;
   discount: number | null;
   line_items: MiloOrderLineItem[];
+  synced_line_items?: MiloOrderLineItem[] | null;
 };
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -133,6 +152,93 @@ export async function getOrder(id: string): Promise<GetOrderResult> {
     };
   }
   return { ok: true, order: raw.order as MiloOrderDetail };
+}
+
+export type OrderSyncStatus = {
+  pending: boolean;
+  requestedAt: string | null;
+  lastSyncedAt: string | null;
+};
+
+export type OrderSyncResult =
+  | { ok: true; status: OrderSyncStatus }
+  | { ok: false; error: string };
+
+/**
+ * Ask the worker to refresh placed orders from MILO (#36 Phase A).
+ * Read-only against MILO; picked up by the worker's idle loop within
+ * about a minute.
+ */
+export async function requestOrderSync(): Promise<OrderSyncResult> {
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      `${BASE}/sync`,
+      { method: "POST", headers: await authHeaders() },
+      { maxRetries: 2, baseDelayMs: 500, timeoutMs: 10_000 },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
+  }
+  let raw: Record<string, unknown>;
+  try {
+    raw = (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
+  if (!res.ok || raw.ok !== true) {
+    return {
+      ok: false,
+      error: typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`,
+    };
+  }
+  return {
+    ok: true,
+    status: {
+      pending: true,
+      requestedAt: typeof raw.requestedAt === "string" ? raw.requestedAt : null,
+      lastSyncedAt: typeof raw.lastSyncedAt === "string" ? raw.lastSyncedAt : null,
+    },
+  };
+}
+
+export async function getOrderSyncStatus(): Promise<OrderSyncResult> {
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      `${BASE}/sync/status`,
+      { method: "GET", headers: await authHeaders() },
+      { maxRetries: 1, baseDelayMs: 500, timeoutMs: 10_000 },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (await handleAuthFailure(res)) {
+    return { ok: false, error: "session_expired" };
+  }
+  let raw: Record<string, unknown>;
+  try {
+    raw = (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
+  if (!res.ok || raw.ok !== true) {
+    return {
+      ok: false,
+      error: typeof raw.error === "string" ? raw.error : `HTTP ${res.status}`,
+    };
+  }
+  return {
+    ok: true,
+    status: {
+      pending: raw.pending === true,
+      requestedAt: typeof raw.requestedAt === "string" ? raw.requestedAt : null,
+      lastSyncedAt: typeof raw.lastSyncedAt === "string" ? raw.lastSyncedAt : null,
+    },
+  };
 }
 
 export type OrdersSummary = {

@@ -22,6 +22,7 @@
 
 import express from "express";
 import supabaseDefault from "../config/supabase.js";
+import { buildUpdatesFeed } from "../lib/updates-feed.js";
 
 const router = express.Router();
 
@@ -356,6 +357,92 @@ async function loadStoreVerificationMeta(supabase, storeId) {
  * Empty-state friendly: if a store has zero orders, returns zeroed
  * structures rather than nulls so the scanner UI can render cleanly.
  */
+/*
+  GET /home/updates — the bell feed (2026-08-05, Tony's design: bell
+  next to the cart icon, full chronology of price changes, new bottles,
+  catalog syncs, and order events; Home keeps only the top smart cards).
+
+  Scoping decisions:
+  - price changes: STORE-RELEVANT (codes from store_item_order_stats —
+    what this store actually orders), falling back to the global newest
+    when a young store has no order history yet. The catalog_sync
+    entries carry the global "N price changes" summary, so nothing is
+    hidden — just prioritized.
+  - new bottles / catalog syncs: global (same book for everyone).
+  - order events: this store only.
+  Every source is fail-soft (allSettled) — one bad query never blanks
+  the feed. Shaping/merge/sort/cap live in lib/updates-feed.js (pure,
+  pinned).
+*/
+router.get("/updates", async (req, res) => {
+  const supabase = supabaseDefault;
+  const storeId = req.store_id;
+  const DAY = 86_400_000;
+  const since30 = new Date(Date.now() - 30 * DAY).toISOString();
+  const since90 = new Date(Date.now() - 90 * DAY).toISOString();
+  try {
+    let interestingCodes = [];
+    try {
+      const { data: statRows } = await supabase
+        .from("store_item_order_stats")
+        .select("code")
+        .eq("store_id", storeId)
+        .limit(500);
+      interestingCodes = [...new Set((statRows ?? []).map((r) => r.code).filter(Boolean))];
+    } catch {
+      /* fall through to global price changes */
+    }
+
+    let priceQuery = supabase
+      .from("mlcc_items")
+      .select(
+        "code, name, bottle_size_label, bottle_size_ml, licensee_price, previous_licensee_price, min_shelf_price, price_changed_at",
+      )
+      .gte("price_changed_at", since30)
+      .order("price_changed_at", { ascending: false })
+      .limit(40);
+    if (interestingCodes.length > 0) {
+      priceQuery = priceQuery.in("code", interestingCodes);
+    }
+
+    const [priceR, newR, syncR, orderR] = await Promise.allSettled([
+      priceQuery,
+      supabase
+        .from("mlcc_items")
+        .select("code, name, bottle_size_label, bottle_size_ml, licensee_price, upc, updated_at")
+        .eq("is_new_item", true)
+        .gte("updated_at", since30)
+        .order("updated_at", { ascending: false })
+        .limit(20),
+      supabase
+        .from("mlcc_price_book_runs")
+        .select("kind, price_book_date, total_items, new_items, updated_items, completed_at")
+        .eq("status", "complete")
+        .gte("completed_at", since90)
+        .order("completed_at", { ascending: false })
+        .limit(15),
+      supabase
+        .from("milo_order_confirmations")
+        .select("ada_name, confirmation_number, net_total, delivery_date, submitted_at, placed_at")
+        .eq("store_id", storeId)
+        .gte("submitted_at", since90)
+        .order("submitted_at", { ascending: false })
+        .limit(15),
+    ]);
+
+    const rowsOf = (r) => (r.status === "fulfilled" && Array.isArray(r.value?.data) ? r.value.data : []);
+    const updates = buildUpdatesFeed({
+      priceRows: rowsOf(priceR),
+      newRows: rowsOf(newR),
+      syncRows: rowsOf(syncR),
+      orderRows: rowsOf(orderR),
+    });
+    res.json({ ok: true, updates });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 router.get("/analytics", async (req, res) => {
   const storeId = req.store_id;
   if (!storeId) {

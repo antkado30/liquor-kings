@@ -25,10 +25,13 @@ import {
 } from "./Icons";
 
 function money(n: number): string {
+  /*
+    PENNY DOCTRINE (Tony, 2026-08-05): never round money anywhere in
+    LK — exact cents always, the dashboard included.
+  */
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0,
   }).format(n);
 }
 

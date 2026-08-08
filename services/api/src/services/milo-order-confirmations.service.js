@@ -197,11 +197,14 @@ export async function persistMiloOrderConfirmations({
   }
 
   /*
-    upsert on (execution_run_id, ada_number). The unique partial index
-    guards us from duplicate inserts if the worker retries. A re-emit
-    with the same payload is a noop; a re-emit with new data (rare —
-    Stage 5 doesn't run twice for the same run) overwrites the prior
-    row. Either way the database stays consistent.
+    upsert on (execution_run_id, ada_number), backed by the FULL unique
+    index `milo_order_confirmations_run_ada_key` (migration 20260806 —
+    added after first-order night 2026-08-05, when this comment referenced
+    an index that was never migrated and EVERY worker save bounced with
+    "no unique or exclusion constraint matching the ON CONFLICT
+    specification"). A worker retry re-emit is a noop; new data for the
+    same (run, ada) overwrites. Backfilled history rows carry NULL
+    execution_run_id and never collide (NULLs are distinct).
   */
   const { data, error } = await supabase
     .from("milo_order_confirmations")

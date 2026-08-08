@@ -11,6 +11,13 @@ import { fetchTagsHtml } from "../api/tags";
 import { useCart } from "../hooks/useCart";
 import { TagPrintPreview } from "../components/TagPrintPreview";
 import {
+  detailLines,
+  lineMoney,
+  orderDeliveryDate,
+  orderMoneyView,
+  timeAgoShort,
+} from "../lib/order-sync-display";
+import {
   IconAlert,
   IconBarChart,
   IconCalendar,
@@ -180,7 +187,17 @@ export function OrderDetailPage() {
     );
   }
 
-  const lineItems = Array.isArray(order.line_items) ? order.line_items : [];
+  /*
+    #36 Phase A: once synced, MILO's CURRENT truth leads everywhere on
+    this page — totals, delivery, status, lines — with the placement
+    numbers preserved and labeled when they differ. Synced lines are
+    also the ONLY lines for rows born from the evidence backfill.
+  */
+  const mv = orderMoneyView(order);
+  const linesView = detailLines<MiloOrderDetail["line_items"][number]>(order);
+  const lineItems = linesView.lines;
+  const delivery = orderDeliveryDate(order);
+  const statusLabel = order.synced_status ?? order.status_at_placement;
   const adaLabel = order.ada_name || order.distributor_raw || "Unknown ADA";
 
   return (
@@ -213,19 +230,29 @@ export function OrderDetailPage() {
             </dt>
             <dd>{shortDate(order.placed_at ?? order.submitted_at)}</dd>
           </div>
-          {order.delivery_date ? (
+          {delivery ? (
             <div className="order-detail-hero__field">
               <dt>Delivery</dt>
-              <dd>{shortDate(order.delivery_date)}</dd>
+              <dd>{shortDate(delivery)}</dd>
             </div>
           ) : null}
-          {order.status_at_placement ? (
+          {statusLabel ? (
             <div className="order-detail-hero__field">
               <dt>Status</dt>
-              <dd>{order.status_at_placement}</dd>
+              <dd>{statusLabel}</dd>
             </div>
           ) : null}
         </dl>
+        {mv.synced ? (
+          <p className="order-detail-sync-note muted small">
+            {mv.edited
+              ? `Edited after placement — showing MILO's current numbers. `
+              : mv.adaTouched
+                ? `Distributor updated this order — totals unchanged. `
+                : ""}
+            Checked against MILO {timeAgoShort(order.synced_at, Date.now()) ?? "recently"}.
+          </p>
+        ) : null}
       </section>
 
       <section className="orders-stats order-detail-spend" aria-label="Spend summary">
@@ -234,12 +261,16 @@ export function OrderDetailPage() {
             <IconBarChart size={14} strokeWidth={2} aria-hidden />
             Net total
           </div>
-          <div className="orders-stat__value">{money(order.net_total)}</div>
-          <div className="orders-stat__meta">After tax &amp; discounts</div>
+          <div className="orders-stat__value">{money(mv.current)}</div>
+          <div className="orders-stat__meta">
+            {mv.edited ? `Placed at ${money(mv.placed)}` : "After tax & discounts"}
+          </div>
         </div>
         <div className="orders-stat">
           <div className="orders-stat__head">Gross</div>
-          <div className="orders-stat__value">{money(order.gross_total)}</div>
+          <div className="orders-stat__value">
+            {money(mv.synced && order.synced_gross_total != null ? order.synced_gross_total : order.gross_total)}
+          </div>
           <div className="orders-stat__meta">Before adjustments</div>
         </div>
         <div className="orders-stat">
@@ -277,6 +308,9 @@ export function OrderDetailPage() {
         <h2 className="order-detail-lines-head__title">
           <IconPackage size={16} strokeWidth={2} aria-hidden />
           Line items
+          {linesView.source === "synced" ? (
+            <span className="order-detail-lines-head__tag">current in MILO</span>
+          ) : null}
         </h2>
         <span className="order-detail-lines-head__count">{lineItems.length}</span>
       </div>
@@ -319,7 +353,7 @@ export function OrderDetailPage() {
                 </div>
               </div>
               <div className="order-detail-line-card__total">
-                {money(li.lineTotal)}
+                {money(lineMoney(li))}
               </div>
             </li>
           );
@@ -332,7 +366,7 @@ export function OrderDetailPage() {
             type="button"
             className="btn primary btn-block"
             disabled={reordering}
-            onClick={() => void reorderAll(order.line_items)}
+            onClick={() => void reorderAll(lineItems)}
           >
             {reordering ? "Adding to order…" : "Reorder into cart"}
           </button>
@@ -340,7 +374,7 @@ export function OrderDetailPage() {
             type="button"
             className="btn secondary btn-block"
             disabled={printingTags}
-            onClick={() => void printAllTags(order.line_items)}
+            onClick={() => void printAllTags(lineItems)}
           >
             {printingTags
               ? "Building tags…"

@@ -246,6 +246,21 @@ export function IconChevronLeft(props: IconProps) {
   });
 }
 
+export function IconRefresh(props: IconProps) {
+  // Standard refresh-cw glyph (#36 order re-sync, 2026-08-08).
+  return svg({
+    ...props,
+    children: (
+      <>
+        <path d="M3 12a9 9 0 0 1 15.36-6.36L21 8" />
+        <path d="M21 3v5h-5" />
+        <path d="M21 12a9 9 0 0 1-15.36 6.36L3 16" />
+        <path d="M3 21v-5h5" />
+      </>
+    ),
+  });
+}
+
 export function IconLoader(props: IconProps) {
   return svg({
     ...props,
