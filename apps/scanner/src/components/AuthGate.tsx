@@ -28,6 +28,7 @@ import {
   humanizeSignupError,
 } from "../api/me";
 import { fetchWithRetry } from "../api/catalog";
+import { setMlccConnected } from "../lib/mlccStatus";
 import { OnboardingActivation } from "./OnboardingActivation";
 import {
   IconAlert,
@@ -146,8 +147,12 @@ export function AuthGate({ children }: AuthGateProps) {
           if (cancelled) return;
           // getMyStoreProfile is internally bounded (8s timeout + retry).
           const profile = await getMyStoreProfile();
-          if (!cancelled && profile.ok && profile.mlcc_credentials_last_verified_at) {
-            setPendingActivation(false);
+          if (!cancelled && profile.ok) {
+            // M3: broadcast MILO status for the connect-nudge banner.
+            setMlccConnected(Boolean(profile.mlcc_credentials_last_verified_at));
+            if (profile.mlcc_credentials_last_verified_at) {
+              setPendingActivation(false);
+            }
           }
         }
       } catch {
@@ -174,6 +179,7 @@ export function AuthGate({ children }: AuthGateProps) {
         clearCurrentStoreId();
         setPendingActivation(false);
         setPendingActivationStoreId(null);
+        setMlccConnected(null);
       } else if (event === "SIGNED_IN") {
         setTimeout(() => {
           void resolveCurrentStoreIdFromSession().catch(() => {
@@ -208,8 +214,16 @@ export function AuthGate({ children }: AuthGateProps) {
   }
 
   function validateSignupStep2(): string | null {
-    if (!mlccUsername.trim() || !mlccPassword) {
-      return "MLCC username and password are required.";
+    /*
+      SIGNUP MACHINE M2 (2026-08-08): creds are optional at signup —
+      the sub-user-first connect can happen later. Both-or-neither:
+      half a pair is a mistake we catch here (server enforces the same
+      rule as mlcc_credentials_incomplete).
+    */
+    const hasUser = Boolean(mlccUsername.trim());
+    const hasPass = Boolean(mlccPassword);
+    if (hasUser !== hasPass) {
+      return "Enter both the MILO username and password — or leave both blank to connect later.";
     }
     return null;
   }
@@ -239,8 +253,11 @@ export function AuthGate({ children }: AuthGateProps) {
         return;
       }
       const profile = await getMyStoreProfile();
-      if (profile.ok && profile.mlcc_credentials_last_verified_at) {
-        setPendingActivation(false);
+      if (profile.ok) {
+        setMlccConnected(Boolean(profile.mlcc_credentials_last_verified_at));
+        if (profile.mlcc_credentials_last_verified_at) {
+          setPendingActivation(false);
+        }
       }
     } catch (err) {
       setErrorMsg(
@@ -255,6 +272,16 @@ export function AuthGate({ children }: AuthGateProps) {
 
   async function handleSignUp(e: FormEvent) {
     e.preventDefault();
+    await submitSignup({ skipCreds: false });
+  }
+
+  /**
+   * Shared signup submit (M2). skipCreds=true is the "Connect MILO
+   * later" path — the account + store are created credless
+   * (onboarding_state store_created) and the owner lands straight in
+   * the scanner; ordering unlocks after they connect in Settings.
+   */
+  async function submitSignup({ skipCreds }: { skipCreds: boolean }) {
     resetErrors();
     const step1Err = validateSignupStep1();
     if (step1Err) {
@@ -262,11 +289,12 @@ export function AuthGate({ children }: AuthGateProps) {
       setErrorMsg(step1Err);
       return;
     }
-    const step2Err = validateSignupStep2();
+    const step2Err = skipCreds ? null : validateSignupStep2();
     if (step2Err) {
       setErrorMsg(step2Err);
       return;
     }
+    const sendCreds = !skipCreds && Boolean(mlccUsername.trim()) && Boolean(mlccPassword);
 
     setSubmitting(true);
     try {
@@ -290,8 +318,8 @@ export function AuthGate({ children }: AuthGateProps) {
             password,
             store_name: storeName.trim(),
             liquor_license: liquorLicense.trim(),
-            mlcc_username: mlccUsername.trim(),
-            mlcc_password: mlccPassword,
+            mlcc_username: sendCreds ? mlccUsername.trim() : undefined,
+            mlcc_password: sendCreds ? mlccPassword : undefined,
             address_line1: addressLine1.trim() || undefined,
             city: city.trim() || undefined,
             state: stateAbbr.trim() || undefined,
@@ -330,9 +358,19 @@ export function AuthGate({ children }: AuthGateProps) {
       }
 
       if (body.store_id) setCurrentStoreId(body.store_id);
-      setPendingActivationStoreName(storeName.trim() || "your store");
-      setPendingActivationStoreId(body.store_id ?? null);
-      setPendingActivation(true);
+      if (sendCreds) {
+        // Creds provided → existing activation probe verifies them live
+        // before the scanner opens (unchanged flow).
+        setPendingActivationStoreName(storeName.trim() || "your store");
+        setPendingActivationStoreId(body.store_id ?? null);
+        setPendingActivation(true);
+      } else {
+        // Credless signup (M2 "connect later"): straight into the
+        // scanner — the shared MLCC catalog works instantly; ordering
+        // stays off until MILO connects in Settings.
+        setPendingActivation(false);
+        setMlccConnected(false);
+      }
     } catch (err) {
       setErrorMsg(
         humanizeNetworkError(
@@ -404,6 +442,8 @@ export function AuthGate({ children }: AuthGateProps) {
         onComplete={() => {
           setPendingActivation(false);
           setPendingActivationStoreId(null);
+          // Activation only completes after a live Stage-1 verify.
+          setMlccConnected(true);
         }}
       />
     );
@@ -579,18 +619,33 @@ export function AuthGate({ children }: AuthGateProps) {
           ) : (
             <form className="auth-form" onSubmit={handleSignUp}>
               <p className="auth-section-title">
-                Step 2 — MLCC connection
+                Step 2 — Connect MILO
               </p>
+              {/*
+                Sub-user first (locked 2026-08-08). Walkthrough updated
+                same day from Tony's REAL screenshots of MILO's
+                Administration → Group Management → Manage <license>
+                page: it's an INVITE flow — Members table + Invite
+                button + Invitations table (email, token, ~3-day
+                expiry; the pilot owner account was itself claimed via
+                such an invite in 2021). Steps below name only screens
+                we've seen (accuracy doctrine). Unknown until first
+                real invite: what role options the invitee gets.
+              */}
               <p className="auth-hint">
-                Same username and password you use at lara.michigan.gov (MILO).
-                We encrypt them and only use them to place orders on your
-                behalf.
+                <strong>Recommended:</strong> give Liquor Kings its own
+                MILO sign-in. In MILO, go to Administration &rarr;
+                Group Management &rarr; open your license &rarr;{" "}
+                <strong>Invite</strong>, and invite any email you
+                control. Open MILO&apos;s invitation email, create the
+                new sign-in, and enter it below — you can deactivate it
+                anytime. Your main MILO login works too. Everything is
+                encrypted and only ever used to place your orders.
               </p>
               <label className="auth-field">
-                <span className="auth-field__label">MLCC username</span>
+                <span className="auth-field__label">MILO username</span>
                 <input
                   type="text"
-                  required
                   value={mlccUsername}
                   onChange={(e) => setMlccUsername(e.target.value)}
                   className="auth-input"
@@ -599,10 +654,9 @@ export function AuthGate({ children }: AuthGateProps) {
                 />
               </label>
               <label className="auth-field">
-                <span className="auth-field__label">MLCC password</span>
+                <span className="auth-field__label">MILO password</span>
                 <input
                   type="password"
-                  required
                   value={mlccPassword}
                   onChange={(e) => setMlccPassword(e.target.value)}
                   className="auth-input"
@@ -685,10 +739,21 @@ export function AuthGate({ children }: AuthGateProps) {
                 </button>
               </div>
 
+              <button
+                type="button"
+                className="auth-btn auth-btn--ghost auth-btn--block"
+                disabled={submitting}
+                onClick={() => void submitSignup({ skipCreds: true })}
+              >
+                {submitting ? "Creating account…" : "Connect MILO later — start scanning now"}
+              </button>
+
               <p className="auth-hint auth-hint--icon">
                 <IconStore size={14} strokeWidth={1.8} aria-hidden />
-                Next we&apos;ll verify your MLCC connection (~30–60s) before
-                opening the scanner.
+                14 days free, no card needed. With MILO connected we
+                verify the login (~30–60s) before opening the scanner;
+                skip it and the scanner opens now — ordering unlocks
+                once you connect in Settings.
               </p>
             </form>
           )}

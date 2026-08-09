@@ -4,6 +4,48 @@ Founder's log. Milestone entries — the moments that mattered.
 
 ---
 
+## Entry #13 — The robot reads MILO back (2026-08-07 → 08)
+
+Friday was strategy: a competitor surfaced — CoreVue, $249/site/month,
+polished, Azure-hosted, "built for convenience stores and gas
+stations" by their own FAQ, fuel tanks as a flagship. Twenty
+screenshots became a permanent war file, and the doctrine got a name:
+ALWAYS-BETTER — strong where they're weak, beat every strongsuit.
+Tony's universal-printer question got its answer the same hour: the
+universal remote already exists, it's the print button — every printer
+on earth registers with the phone's print system, and CoreVue's
+"Zebra printer compatibility" is a compatibility list we don't need.
+Then four taps locked the business: $149/store/month flat, 14-day
+trial, MLCC recognition letter this week, self-serve signup machine
+next.
+
+Then Tony said "batch me" and the night went vertical. #36 Phase A —
+order re-sync — built 10pm to 1am: the worker's idle loop logs into
+MILO, reads the account's own order history, and pulls current truth
+into synced_* columns while placement stays immutable. 41 files
+shipped tree-identical (637/637 hashes matched both sides), bars
+181/787, two deploys by 1:00am. The first sync did something nobody
+scripted: his parents' hand-placed Jul 30 orders imported themselves —
+including Imperial Beverage Company, a distributor LK had never met —
+and the robot caught a real ADA edit ($1,183.19 → $1,108.31) that no
+human had noticed. The app got a bell that night too: the Updates tab,
+built dark on 8/5, rode the batch out.
+
+First contact broke three small things, all fixed and redeployed
+within the hour: Sync taps took a minute (worker now checks every
+2.5s — tap-to-fresh ~5s, and Orders auto-syncs on open), the $0.00
+backfill artifact put a false "Edited" chip on an untouched order
+(zero placement now reads as unknown and heals from MILO's originals),
+and date-only strings parsed as UTC shifted every calendar date a day
+early (AUG 4 for an Aug 5 order; fixed, and the parents' group
+snapped to its true JUL 30). One finding to remember: MILO's
+originalNetTotalAmt only remembers ADA edits — an owner's "Edit
+order" rewrites the baseline. MILO forgets. LK captures placement at
+submit, so LK remembers.
+
+Tony's day: Zoom at 9am, Colony till 11:30pm, shipping code till
+1:30am. His words: "successful day."
+
 ## Entry #12 — FIRST ORDER DAY (2026-08-05, a Wednesday)
 
 At 6:59 pm on the first Wednesday of the standing law — orders every

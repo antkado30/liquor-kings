@@ -19,6 +19,7 @@ const AnalyticsDashboard = lazy(() =>
     default: m.AnalyticsDashboard,
   })),
 );
+import { MlccConnectBanner } from "../components/MlccConnectBanner";
 import { ScheduledTemplateBanner } from "../components/ScheduledTemplateBanner";
 import { SmartCards } from "../components/SmartCards";
 import { VerifyMlccBanner } from "../components/VerifyMlccBanner";
@@ -403,6 +404,12 @@ export function ScannerPage() {
           </button>
         </div>
       </header>
+
+      {/*
+        Connect-MILO nudge (M3) — renders null unless the store is
+        confirmed credless (the "connect later" signup path).
+      */}
+      <MlccConnectBanner />
 
       {/*
         Offline banner — fires the moment the browser reports a network drop.

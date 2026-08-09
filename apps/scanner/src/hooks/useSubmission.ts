@@ -332,6 +332,13 @@ export function useSubmission(
     async (cartId: string, mode: RunMode): Promise<string> => {
       const triggerResult = await triggerRpaRunFromCart({ cartId, mode });
       if (!triggerResult.ok) {
+        // M4 billing gate: server 403s the money path when a trial has
+        // ended (never the pilot — see api lib/billing.js safety laws).
+        if (triggerResult.error === "billing_required") {
+          throw new Error(
+            "Your free trial has ended. Add billing in Settings ($149/month) to keep placing orders — scanning and prices stay free.",
+          );
+        }
         throw new Error(
           mode === "validate_only"
             ? `Could not start MLCC validate: ${triggerResult.error}`

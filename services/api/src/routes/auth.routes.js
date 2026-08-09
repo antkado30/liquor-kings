@@ -32,6 +32,10 @@ import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import supabase from "../config/supabase.js";
 import { encryptCredential } from "../lib/credential-encryption.js";
+import {
+  buildSignupStoreRow,
+  validateSignupCredsPair,
+} from "../lib/signup-provisioning.js";
 import { resolveAuthenticatedStore } from "../middleware/resolve-store.middleware.js";
 import { DIAGNOSTIC_KIND, logSystemDiagnostic } from "../services/diagnostics.service.js";
 
@@ -171,10 +175,15 @@ router.post("/signup", express.json(), async (req, res) => {
         .status(400)
         .json({ ok: false, error: "liquor_license_invalid" });
     }
-    if (!mlcc_username || !mlcc_password) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "mlcc_credentials_required" });
+    /*
+      SIGNUP MACHINE M1 (2026-08-08): MLCC creds are now OPTIONAL at
+      signup — the wizard's MILO-connect step (sub-user first) happens
+      after account creation. Both-or-neither: half a credential pair
+      is refused loudly, never half-stored.
+    */
+    const credsPair = validateSignupCredsPair(mlcc_username, mlcc_password);
+    if (!credsPair.ok) {
+      return res.status(400).json({ ok: false, error: credsPair.error });
     }
 
     /*
@@ -211,36 +220,42 @@ router.post("/signup", express.json(), async (req, res) => {
         .json({ ok: false, error: "auth_user_not_returned" });
     }
 
-    // 2. Encrypt MLCC password before writing.
-    let mlcc_password_encrypted;
-    try {
-      mlcc_password_encrypted = encryptCredential(mlcc_password);
-    } catch (encErr) {
-      // Roll back the auth user if we can't encrypt — never leave a
-      // user without a store.
-      await rollbackAuthUser(supabaseAdmin, userId, "credential_encryption_failed");
-      return res.status(500).json({
-        ok: false,
-        error: "credential_encryption_failed",
-        details: encErr?.message,
-      });
+    // 2. Encrypt MLCC password before writing (only when provided).
+    let mlcc_password_encrypted = null;
+    if (credsPair.hasCreds) {
+      try {
+        mlcc_password_encrypted = encryptCredential(mlcc_password);
+      } catch (encErr) {
+        // Roll back the auth user if we can't encrypt — never leave a
+        // user without a store.
+        await rollbackAuthUser(supabaseAdmin, userId, "credential_encryption_failed");
+        return res.status(500).json({
+          ok: false,
+          error: "credential_encryption_failed",
+          details: encErr?.message,
+        });
+      }
     }
 
-    // 3. Create the store row.
+    // 3. Create the store row — provisioning rules (14-day trial stamp,
+    //    Detroit timezone, onboarding state) live in the pinned pure
+    //    builder, not inline (lib/signup-provisioning.js).
     const { data: store, error: storeErr } = await supabaseAdmin
       .from("stores")
-      .insert({
-        store_name,
-        liquor_license,
-        mlcc_username,
-        mlcc_password_encrypted,
-        address_line1: address_line1 || null,
-        city: city || null,
-        state: state || "MI",
-        postal_code: postal_code || null,
-        is_active: true,
-      })
-      .select("id, store_name")
+      .insert(
+        buildSignupStoreRow({
+          storeName: store_name,
+          liquorLicense: liquor_license,
+          mlccUsername: credsPair.hasCreds ? mlcc_username : null,
+          mlccPasswordEncrypted: mlcc_password_encrypted,
+          addressLine1: address_line1,
+          city,
+          state,
+          postalCode: postal_code,
+          nowMs: Date.now(),
+        }),
+      )
+      .select("id, store_name, trial_ends_at, onboarding_state")
       .single();
     if (storeErr) {
       // Roll back the auth user so the email isn't permanently burned.
@@ -270,6 +285,9 @@ router.post("/signup", express.json(), async (req, res) => {
       store_name: store.store_name,
       user_id: userId,
       email,
+      trial_ends_at: store.trial_ends_at ?? null,
+      onboarding_state: store.onboarding_state ?? null,
+      milo_connected: credsPair.hasCreds,
     });
   } catch (e) {
     return res.status(500).json({

@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../config/supabase.js";
+import { getBillingState } from "../lib/billing.js";
 import {
   applyExecutionRunOperatorAction,
   claimNextQueuedExecutionRun,
@@ -130,6 +131,30 @@ router.post("/from-cart/:storeId/:cartId", async (req, res) => {
       error: "INVALID_MODE",
       details: `mode must be one of: ${[...VALID_FROM_CART_MODES].join(", ")}`,
     });
+  }
+
+  /*
+    M4 billing gate (2026-08-08). ONLY the money path is ever gated —
+    scan/browse/assistant stay free. Fail-open by design: with Stripe
+    env absent, or trial_ends_at NULL (grandfathered pilot store),
+    `blocked` is always false — this guard cannot lock out Colony.
+    Fetch failure → fail-open too (never let a DB blip stop an order).
+  */
+  try {
+    const { data: billingRow } = await supabase
+      .from("stores")
+      .select("billing_status, trial_ends_at")
+      .eq("id", storeId)
+      .maybeSingle();
+    const billing = getBillingState(billingRow);
+    if (billing.blocked) {
+      return res.status(403).json({
+        error: "billing_required",
+        billing_state: billing.state,
+      });
+    }
+  } catch {
+    /* fail-open */
   }
 
   const { statusCode, body } = await createExecutionRunFromCart(

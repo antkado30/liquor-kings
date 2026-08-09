@@ -9688,3 +9688,46 @@ select {
   padding: 6px 12px;
   font-size: 0.8125rem;
 }
+
+/* ---- Connect-MILO nudge banner (M3, 2026-08-08) ---------------------- */
+/* Same footprint as .price-book-age-banner so home-screen banners stack
+   consistently. Accent (not warning) palette: this is an invitation, not
+   an error — the scanner works fine without MILO connected. */
+.mlcc-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 12px 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  background: #eef4ff;
+  border: 1px solid #c6d8f7;
+  color: #1e3a5f;
+}
+
+.mlcc-banner__text {
+  flex: 1;
+}
+
+.mlcc-banner__cta {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: #1d4ed8;
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.mlcc-banner__dismiss {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: #64748b;
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 4px;
+  cursor: pointer;
+}

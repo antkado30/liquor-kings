@@ -296,6 +296,22 @@ Claude session triggers (fire into the persistent session):
 - One-offs for launch week 2026-08-05/06: today's 5pm ET play + a
   Thursday-morning post-order verification backstop.
 
+**ORDER RE-SYNC LOOP (#36 Phase A, LIVE 2026-08-08):** the worker's
+idle loop refreshes every placed order from MILO `GET /users/orders` —
+READ-ONLY, kill switch `LK_ORDER_SYNC="no"` (absent = on). Owner Sync
+taps are checked every idle tick (~2.5s; tap-to-fresh ~5s); standing
+cadence 6h for stores with a confirmation in the last 21 days. Current
+truth lands in `synced_*` columns (placement columns immutable);
+MILO orders LK never saw are IMPORTED (`origin='milo_sync'` — hand-
+placed orders appear on their own; proved night one with Imperial
+Beverage). Scanner auto-syncs when Orders opens >10 min stale.
+Spend/summary follow synced truth. FINDING (8/8): MILO's
+`originalNetTotalAmt` remembers ADA edits only — an OWNER "Edit
+order" rewrites MILO's baseline, so pre-edit truth exists only where
+we captured it at submit (the worker does; only the 8/5 backfill rows
+lack it). Files: `rpa/engine/engine-order-sync.js`,
+`workers/order-sync-loop.js`, orders routes `/sync` + `/sync/status`.
+
 ## 10. LAWS (condensed — RULEBOOK.md + latest closeout are canonical)
 
 1. **One-writer**: Tony runs all git/deploy/SQL. zsh: no `#`, no `!`,
@@ -389,6 +405,52 @@ price **$149/store/month flat** (under CoreVue's $249 umbrella; ~$1,788
 send this week** (Colony story, sub-user path, Ohio/Provi precedent) ·
 **next build after the 8/8 batch: self-serve signup machine** (the
 store-count lever — sign up, connect MILO, scan same day, no human).
+Signup-machine design locked 8/8 (tap-confirmed): **sub-user-first**
+MILO connect (owner creates an MLCC sub-user for LK; direct login as
+fallback) · **no card until the trial ends** · **PUBLIC launch from
+day one** (Tony overrode the quiet-launch recommendation) · support =
+**in-app AI + support email + Tony's number for the first 10 stores**.
+Blueprint: `docs/lk/SIGNUP-MACHINE.md`. MLCC outreach letter drafted
+8/8 (`docs/lk/mlcc-outreach-letter.md` — to mlccinfo2@michigan.gov,
+cc Licensing; Tony fills license #, city, phone).
+
+**MILO SUB-USER MECHANICS (seen 8/8 — Tony's screenshots of
+Administration → Group Management → "Manage 430342"):** sub-users are
+**INVITE-based**, not created directly. The license page shows a
+Members table (role OWNER, handle, email, last-login, "PR Roles" e.g.
+Price Reduction, per-member "Details..."), an Inactive Members table,
+an **Invite** button, and an Invitations ledger (Sent To / token /
+~3-day expiry / Active / Claimed — the pilot owner account was itself
+claimed from a system invite in Jan 2021). Onboarding walkthrough
+teaches the real steps: Group Management → open your license →
+Invite an email you control → claim via MILO's invitation email →
+enter the new sign-in in LK. **UNKNOWN until the first real invite:
+what role options an invitee gets and whether a plain member can
+place orders — verify when Colony invites LK's sub-user (that invite
+is also the eventual replacement for the pilot's main-login creds).**
+
+**SIGNUP MACHINE BUILD (sandbox 8/8, shipped in the 8/9 batch):
+M1 server** (trial_ends_at +14d Detroit-tz, creds optional at signup —
+both-or-neither `mlcc_credentials_incomplete`, onboarding state) ·
+**M2 wizard** (trial line "14 days free, no card", sub-user-first
+Step 2 with the real invite walkthrough, "Connect MILO later — start
+scanning now" credless path straight into the scanner) · **M3 nudge**
+(connect-MILO banner on scanner home via `lib/mlccStatus.ts`
+broadcast from AuthGate; Settings PUT `/mlcc-credentials` + POST
+`/verify` closes the loop — PUT works for credless stores) · **M4
+billing scaffold** (zero-dep Stripe: bare REST + node-crypto webhook
+verify in `services/api/src/lib/billing.js`; SAFETY LAWS pinned in
+`test/billing.test.js` (13): FAIL-OPEN until STRIPE_* env exists,
+GRANDFATHER — trial_ends_at NULL (Colony) never gated, past_due
+grace; only from-cart runs 403 `billing_required`; migration
+`20260808220000_billing_columns.sql`; env when money turns on:
+STRIPE_SECRET_KEY / STRIPE_PRICE_ID / STRIPE_WEBHOOK_SECRET +
+optional LK_PUBLIC_ORIGIN). Remaining rungs: **Settings billing
+panel** (trial days + add-card button) · **M5 landing-page CTA +
+public switch**. Support roadmap note (Tony 8/8): voice AI phone
+line later (post-first-strangers), honest-AI voice — never
+fake-human; his Flint-guy vision (pic of bottle/barcode, "add it to
+my cart" by chat) is already the shipped product surface.
 
 LK moats they lack: AI partner · store/resolver/price memory ·
 honesty rails (evidence receipts, accuracy + penny doctrines) ·

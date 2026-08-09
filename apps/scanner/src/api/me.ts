@@ -202,6 +202,8 @@ export function humanizeSignupError(code?: string): string {
       return "Liquor license must be 5–10 digits.";
     case "mlcc_credentials_required":
       return "MLCC username and password are required.";
+    case "mlcc_credentials_incomplete":
+      return "Enter both the MILO username and password — or leave both blank to connect later.";
     case "email_in_use":
       return "An account already exists with that email. Try signing in instead.";
     case "credential_encryption_failed":

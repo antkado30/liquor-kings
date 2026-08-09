@@ -1,3 +1,6 @@
+import billingRouter, {
+  handleStripeWebhook,
+} from "./routes/billing.routes.js";
 import cartRouter from "./routes/cart.routes.js";
 import cartSummaryRouter from "./routes/cart-summary.routes.js";
 import cartLifecycleRouter from "./routes/cart-lifecycle.routes.js";
@@ -57,6 +60,16 @@ const scannerIndexHtml = path.join(scannerDist, "index.html");
 const scannerDistReady = fs.existsSync(scannerIndexHtml);
 
 app.use(cors());
+/**
+ * Stripe webhook MUST be mounted BEFORE the json parser: signature
+ * verification (M4) needs the raw request bytes, and express.json
+ * would consume them. Auth here is the Stripe signature itself.
+ */
+app.post(
+  "/billing/webhook",
+  express.raw({ type: "application/json" }),
+  handleStripeWebhook,
+);
 /** Large enough for MLCC browser worker finalize payloads (step screenshots + boundary evidence). */
 app.use(express.json({ limit: "12mb" }));
 /**
@@ -85,6 +98,7 @@ app.use(
 app.use("/inventory", resolveAuthenticatedStore, inventoryRouter);
 app.use("/bottles", resolveAuthenticatedStore, bottlesRouter);
 app.use("/execution-runs", resolveAuthenticatedStore, executionRunsRouter);
+app.use("/billing", resolveAuthenticatedStore, billingRouter);
 app.use("/stores", resolveAuthenticatedStore, storeMlccCredentialsRouter);
 /**
  * Web Push device registration — the "order needs you" notify layer

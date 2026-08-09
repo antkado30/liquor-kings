@@ -57,3 +57,4 @@ family-audit/
 # machine-local noise — never commit. The docs themselves stay canonical and
 # versioned; Obsidian is a VIEW, never a second store (RULEBOOK #27).
 .obsidian/
+_to_delete/
