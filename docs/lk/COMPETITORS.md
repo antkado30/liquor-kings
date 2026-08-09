@@ -23,11 +23,29 @@ recon. Marketing claims are not verified product behavior.
 1. **The status quo** (biggest competitor): owner types orders into
    MILO by hand at 11pm. Free, familiar, error-prone. Most Michigan
    stores live here today.
-2. **Saxon** — #1 known player. Deep-dive sweep still pending
-   (board #42); dossier section to be built same as CoreVue's.
+2. **Saxon Inc / "Liquor Orderer"™** (saxoninc.com, Ferndale MI) —
+   #1 known player. FULL DOSSIER below (swept 2026-08-09): a 40-year
+   label-PRINTING company whose ordering app is a side product tied
+   to a paper-tag subscription.
 3. **CoreVue** (corevue.com) — #2, discovered 2026-08-07. Full
    dossier below. Established, polished, Michigan-aware.
-4. Generic back-office/inventory SaaS (not Michigan-native) — noise
+4. **"Michigan Liquor Orderer"** (iOS, free, dev Mathew Yaldo) —
+   indie app: OCR shelf-tag scan → order list. 2 ratings, 3.0★.
+   **UPGRADED THREAT-WATCH 8/9: Tony reports it "just got a huge
+   update" — he USED it before LK and still has it installed.
+   Standing recon asset: Tony can screenshot anything on demand.**
+   A store kid is building; the idea is in the air; speed matters.
+5. **"minimum."** (mobile app, v2.2.1, SEEN 8/9 — Tony's
+   screenshots): consumer-grade MLCC minimum-shelf-price catalog.
+   Dark polished UI, 11,337 Michigan listings, search, per-size
+   price chips (7 Tito's sizes), Favorites, About page showing
+   price book Aug 2 / published Aug 9 and michigan.gov LARA as
+   source — someone ELSE automates the same price-book ingest we
+   do, with a 7-day publish lag (we ingest day-of). No ordering, no
+   store accounts, "basic features only" (Tony). NOT a direct
+   competitor — but proof the niche is attracting builders and the
+   UI bar is rising. Watch quarterly.
+6. Generic back-office/inventory SaaS (not Michigan-native) — noise
    for now.
 
 Nobody in the field claims official MLCC recognition. First mover to
@@ -222,7 +240,91 @@ also OUR pitch. The market education is shared.)
 9. **No recognition either.** They claim no MLCC/state approval. The
    lane is open — we're already moving (outreach letter).
 
-## 5. STANDING RECON LIST (UNKNOWNS to verify)
+
+## 5. SAXON DOSSIER (captured 2026-08-09 — public-web sweep: saxoninc.com/liquor-orderer, both app stores, company homepage)
+
+### Identity — a printer, not a software company
+Saxon Inc, Ferndale MI, "Celebrating over 40 Years of Printing
+Innovation & Excellence." Core business is pressure-sensitive LABEL
+PRINTING (beer/beverage labels, RFID, pharma, cannabis, keg
+collars). The **"Liquor Orderer"™** app exists since Dec 2017
+(iOS v9.6.1, Nov 2025, actively maintained; Android too;
+"designed primarily for iPad") — and on their own homepage it is a
+small nav link under the label business. **Their DNA is the print
+shop; ours is the store.**
+
+### The model (CLAIM, their product page)
+Annual subscription, price NOT published ("cost and registration
+required" — call 1-800-727-1976, M–F 8:30–5). The sub bundles
+**physical consumables**: "one complete set of barcode peel-off
+shelf price tags" + "four quarterly updated tag sets per MLCC Price
+Book changes," free shipping, multi-store discounts. Workflow: scan
+THEIR shelf tag (or bottle) with camera or "scanner equipment
+provided by Saxon" → build order → state. Features: sort by
+size/ADA, Speed Keys (quick quantities), My Tag database, order
+history + duplicate-order, "Error Graphics" for submitted-order
+errors, MLCC search. Testimonial CLAIM: "reduces ordering time by
+two-thirds with no typos."
+
+### Strongsuits → match, then beat
+1. **40 years of Michigan store relationships** (the real moat —
+   they've shipped tags to these stores for decades). *Beat:* we ARE
+   the stores — the family story + counter demos + MLCC recognition
+   lane (they claim none). A printer sells TO stores; we're FROM one.
+2. **The physical tag ecosystem** (they print the thing you scan —
+   consumable lock-in + a second revenue line). *Beat:* structural
+   counter, already ours: LK scans the bottle's OWN UPC — zero
+   proprietary consumables, works minute one. And #38 universal
+   print doctrine makes tags self-serve TODAY on any printer instead
+   of quarterly by mail.
+3. **Longevity + active maintenance** (8-year-old app, updated
+   Nov 2025; 5.0★ on 5 ratings). *Beat:* ship weekly, publicly,
+   with the "improving every day" brand promise.
+4. **Human phone support** (real people, M–F business hours).
+   *Beat:* in-app AI 24/7 + founder texts — the aisle doesn't close
+   at 5pm Friday, and neither do we.
+
+### Weaknesses → attack lanes
+1. **Paper catalog physics.** Their accuracy depends on tag sets
+   mailed QUARTERLY; MLCC changes prices monthly and mid-month. Any
+   scan against a stale paper tag is a wrong price on the shelf and
+   a wrong assumption at order time. Our book is live (full-book +
+   between-book auto-ingest, "was $X" memory). The accuracy
+   doctrine eats this lane whole.
+2. **No self-serve.** Phone-call sales + shipped consumables =
+   onboarding measured in days/weeks. Ours is scan-in-ten-minutes,
+   signed up alone at 11pm.
+3. **Opaque annual pricing** vs our published $149/mo flat,
+   cancel-anytime. Annual + "call us" reads like 1995 next to a
+   price on the page.
+4. **iPad-primary, tag-first UX.** The aisle is phone-first; ours is
+   a phone PWA.
+5. **No modern layer at all**: no AI, no per-store memory, no
+   vision, no evidence receipts, no credential story, no
+   confirmation/sync intelligence claimed anywhere.
+6. **Stale-copy signals**: "MIRA Inquiries Welcome" (agency name
+   retired years ago) — the site isn't watched closely.
+7. **Tiny public footprint** for an 8-year app (5 iOS ratings):
+   either a small active base or a phone-sold base that never
+   touches the store listing — both mean the self-serve internet
+   lane is UNCONTESTED.
+
+### Standing recon offer (Tony, 8/9)
+Tony has "Michigan Liquor Orderer" installed post-update and will
+screenshot on request. Wanted when convenient: the update's
+what's-new screen · the main order-building flow end to end · any
+screen that touches MILO/submission (does it SUBMIT or just build a
+list?) · any pricing/subscription/monetization screen · the About/
+version screen.
+
+### Saxon recon still open (UNKNOWN)
+Real subscription price (quote requires a call — Tony's call
+whether to make it) · does the app SUBMIT into MILO or prep the
+order for hand-entry ("Error Graphics for submitted order errors"
+suggests some submission loop — unverified) · active store count ·
+whether the state's 2-sub-user system is used or main logins.
+
+## 6. STANDING RECON LIST (UNKNOWNS to verify)
 
 - Does CoreVue truly robot-submit into LOO, or prep orders for a
   human to submit? (Their words say submit; no evidence shown.)
@@ -233,10 +335,9 @@ also OUR pitch. The market education is shared.)
 - Real onboarding flow: what does "few days" actually involve?
 - Do they have Michigan liquor-store customers at scale, or mostly
   fuel c-stores?
-- Saxon deep-dive: same dossier treatment as this one.
 - Optional: 14-day trial recon account — **Tony's call, not mine.**
 
-## 6. UNIVERSAL PRINT DOCTRINE (#38) — the "TV remote" answer
+## 7. UNIVERSAL PRINT DOCTRINE (#38) — the "TV remote" answer
 
 Tony's ask (verbatim): "so many different brands... some stores
 already have printers, some dont, so i want liquor kings to be able
@@ -273,7 +374,7 @@ era) would need Tier 3; everything modern walks through Tier 1.
 First concrete step: **photo of Colony's label printer** → first
 presets tuned to real hardware.
 
-## 7. BOARD ITEMS BORN HERE
+## 8. BOARD ITEMS BORN HERE
 
 - **#38** label printing = universal print doctrine (Tier 1 first).
 - **#39** invoice-verify: scan delivery invoice → reconcile vs order
@@ -287,10 +388,11 @@ presets tuned to real hardware.
   entrants) + finish Saxon dossier + ingest Tony's remaining
   CoreVue screenshots.
 
-## 8. THE ONE-LINE DOCTRINE
+## 9. THE ONE-LINE DOCTRINE
 
 CoreVue sells a gas-station back office that also does liquor.
-LK is the liquor store's own robot: it scans, remembers, orders,
-proves, and never rounds a penny. Match every box they check, then
-win on the things a fuel platform can't fake: memory, honesty,
-evidence, and being FROM the aisle it serves.
+Saxon sells paper tags with an app on the side. LK is the liquor
+store's own robot: it scans, remembers, orders, proves, and never
+rounds a penny. Match every box they check, then win on the things
+a print shop and a fuel platform can't fake: a live book, memory,
+honesty, evidence, and being FROM the aisle it serves.

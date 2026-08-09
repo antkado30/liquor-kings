@@ -29,7 +29,7 @@ First customer: **Colony Party Store** — Tony's family's store
 Real money flows through this system. Competitor landscape: one real
 competitor (Saxon); the AI/memory layer is the moat.
 
-**Tony** (19, founder, non-engineer operator) runs ALL git, deploys,
+**Tony** (Antonios Kado, 19, founder, non-engineer operator) runs ALL git, deploys,
 and prod SQL with his own hands ("one-writer law"). The AI partner
 ("Fable") writes code onto his Mac via the device bridge and hands him
 labeled commands — ONE action per message, proofs designed as

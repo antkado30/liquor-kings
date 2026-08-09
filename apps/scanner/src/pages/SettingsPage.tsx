@@ -9,6 +9,7 @@ import {
   getMyStores,
   type StoreListItem,
 } from "../api/stores";
+import { BillingSection } from "../components/BillingSection";
 import { MlccCredentialsForm } from "../components/MlccCredentialsForm";
 import {
   IconAlert,
@@ -515,6 +516,9 @@ export function SettingsPage() {
           )}
         </div>
       </section>
+
+      {/* ─── Billing (M4, 2026-08-09) — trial state + Stripe checkout ─── */}
+      <BillingSection />
 
       {/* ─── Your stores (multi-store switcher) ─── */}
       <section className="settings-block" aria-labelledby="settings-stores-title">

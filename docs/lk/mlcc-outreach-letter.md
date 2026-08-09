@@ -1,4 +1,4 @@
-# MLCC Outreach Letter — ready-to-send draft (2026-08-08)
+# MLCC Outreach Letter — FINAL, blanks filled (2026-08-09)
 
 **How to send:** email it. To: **mlccinfo2@michigan.gov** (MLCC general
 inquiries) — cc **LARA-MLCC-Licensing-Information@michigan.gov**
@@ -6,8 +6,8 @@ inquiries) — cc **LARA-MLCC-Licensing-Information@michigan.gov**
 Ordering/ADA line: **800-701-0513**. Printed copy (optional):
 Michigan Liquor Control Commission, P.O. Box 30005, Lansing, MI 48909.
 
-**Fill the three [BLANKS] before sending — license number, store
-address, your phone. Everything else is ready.**
+**Blanks filled 2026-08-09 (license 430342 · Clay Township, MI 48001
+confirmed via public listings · phone from Tony). READY TO SEND.**
 
 ---
 
@@ -16,9 +16,9 @@ request for guidance**
 
 Dear Michigan Liquor Control Commission,
 
-My name is Antonio Kado. My family owns and operates Colony Party
-Store, a licensed retailer in [CITY], Michigan (license
-#[LICENSE NUMBER]). I am writing to you both as part of a licensee
+My name is Antonios Kado. My family owns and operates Colony Party
+Store, a licensed retailer at 6525 Dyke Road, Clay Township, Michigan
+48001 (license #430342). I am writing to you both as part of a licensee
 family and as the developer of the software our store now uses.
 
 Over the past year I built Liquor Kings, a tool that helps our store
@@ -59,9 +59,9 @@ owner's explicit authorization; every order retains a complete audit
 trail; and licensee data is never sold or shared.
 
 Thank you for your time and for the work the Commission does. I can
-be reached at [PHONE] or tonykado30@gmail.com.
+be reached at (810) 671-3333 or tonykado30@gmail.com.
 
 Respectfully,
 
-Antonio Kado
-Founder, Liquor Kings — on behalf of Colony Party Store, [CITY], MI
+Antonios Kado
+Founder, Liquor Kings — on behalf of Colony Party Store, Clay Township, MI

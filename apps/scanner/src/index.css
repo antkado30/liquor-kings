@@ -9731,3 +9731,38 @@ select {
   padding: 4px;
   cursor: pointer;
 }
+
+/* ---- Settings › Billing panel (M4 client, 2026-08-09) ---------------- */
+.billing-panel__title {
+  font-weight: 700;
+  font-size: 1rem;
+  margin-bottom: 4px;
+}
+
+.billing-panel--warn .billing-panel__title {
+  color: #92600a;
+}
+
+.billing-panel--alert .billing-panel__title {
+  color: #b3261e;
+}
+
+.billing-panel--ok .billing-panel__title {
+  color: #1a7f37;
+}
+
+.billing-panel .settings-btn--primary {
+  margin-top: 10px;
+}
+
+.billing-return {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.billing-return:not(.billing-return--success) {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
