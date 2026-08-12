@@ -298,6 +298,7 @@ const buildRunSummary = (run, operatorActions = []) => {
   const validateOnlyEntry = evidence.find(
     (e) =>
       e?.kind === "validate_only_summary" ||
+      e?.kind === "submit_validate_summary" ||
       (e?.kind === "rpa_step" && e?.stage === "validate_only_complete"),
   );
   const validateResult =

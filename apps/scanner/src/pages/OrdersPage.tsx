@@ -395,7 +395,7 @@ export function OrdersPage() {
 
       {!loading && orders.length > 0 ? (
         <div className="orders-toolbar">
-          <label className="orders-search">
+          <label className="orders-search search-bar-wrap">
             <span className="visually-hidden">Search orders</span>
             <input
               type="search"
@@ -404,6 +404,16 @@ export function OrdersPage() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
+            {searchQuery ? (
+              <button
+                type="button"
+                className="search-bar-clear"
+                onClick={() => setSearchQuery("")}
+                aria-label="Clear search"
+              >
+                ×
+              </button>
+            ) : null}
           </label>
 
           <div className="orders-chips" role="group" aria-label="Date filter">

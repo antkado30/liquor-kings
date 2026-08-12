@@ -1683,6 +1683,37 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
             };
           }
 
+          /*
+            Liftable pre-submit validate detail (2026-08-10 — Tony's
+            first bucket order showed "No detailed result was returned"
+            on a SUCCESSFUL submit: only validate_only runs wrote the
+            entry the summary lifts to validate_result. Submit runs now
+            record the same rich detail (totals, per-ADA, OOS,
+            messages) so the Order-placed sheet is never blank.
+          */
+          stepEvidence.push(
+            buildEvidenceEntry({
+              kind: "submit_validate_summary",
+              stage: "engine_submit",
+              message: "Pre-submit MILO validate detail (lifted to summary.validate_result)",
+              attributes: {
+                validated: engineResult.validated ?? null,
+                can_checkout: engineResult.canCheckout ?? null,
+                ada_breakdown: engineResult.adaOrders ?? null,
+                order_summary: engineResult.orderSummary ?? null,
+                items_added: null,
+                items_rejected: null,
+                out_of_stock_items: Array.isArray(engineResult.outOfStockItems)
+                  ? engineResult.outOfStockItems
+                  : null,
+                validate_messages: Array.isArray(engineResult.validationMessages)
+                  ? engineResult.validationMessages
+                  : null,
+                validate_errors: null,
+              },
+            }),
+          );
+
           // ── Duplicate-submit tripwire (same helper as the browser path) ──
           if (allowOrderSubmission) {
             const { error: tripErr, ambiguousDeaths } = await fetchAmbiguousCheckoutDeaths(

@@ -67,7 +67,8 @@ let browseSnapshot: {
   query: string;
   filters: BrowseFilters;
   sort: BrowseSort;
-} = { query: "", filters: {}, sort: "name" };
+  scrollY: number;
+} = { query: "", filters: {}, sort: "name", scrollY: 0 };
 
 export function BrowsePage() {
   const navigate = useNavigate();
@@ -93,8 +94,24 @@ export function BrowsePage() {
     if (query.trim().length >= 2) setRecentSearches(recordSearch(query));
   }, [query]);
   useEffect(() => {
-    browseSnapshot = { query, filters, sort };
+    browseSnapshot = { ...browseSnapshot, query, filters, sort };
   }, [query, filters, sort]);
+  /*
+    Scroll restore (2026-08-10, the last piece of cross-tab survival):
+    remember where the list was on unmount; after the first content
+    paint post-return, jump back. Best-effort — if the restored data
+    is shorter than before, the browser clamps harmlessly.
+  */
+  const didRestoreScroll = useRef(false);
+  useEffect(() => {
+    const onScroll = () => {
+      // Ignore arrival-clamp scrolls until the restore effect below has
+      // run, so they can't overwrite the saved spot with a transient 0.
+      if (didRestoreScroll.current) browseSnapshot.scrollY = window.scrollY;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
   const [loadingMore, setLoadingMore] = useState(false);
   const [openPicker, setOpenPicker] = useState<
     null | "category" | "ada" | "size" | "sort" | "price" | "proof"
@@ -244,6 +261,26 @@ export function BrowsePage() {
     : familyScrollMode
       ? famRes.loading || (flatListActive && listRes.loading)
       : listRes.loading;
+
+  /*
+    Restore side of scroll survival: once the first real content paints
+    after a return visit, jump back to where the list was. Double rAF
+    lets the grid actually lay out (cards + images mount) before the
+    jump — same pattern as the chat restore. Runs at most once per
+    mount; a fresh visit (scrollY 0) just unlocks capture and stays put.
+  */
+  const hasContent =
+    groups.length > 0 || famGroups.length > 0 || products.length > 0;
+  useEffect(() => {
+    if (didRestoreScroll.current || !hasContent) return;
+    const y = browseSnapshot.scrollY;
+    didRestoreScroll.current = true; // capture unlocked from here on
+    if (y > 0) {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => window.scrollTo(0, y)),
+      );
+    }
+  }, [hasContent]);
 
   /*
     "Load more" for family scrolling: fetch the next offset window and

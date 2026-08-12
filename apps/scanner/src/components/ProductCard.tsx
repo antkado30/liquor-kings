@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flagIncorrectMatch } from "../api/catalog";
 import { reportWrongPhoto, uploadBottlePhoto } from "../api/catalog-photo";
+import { packCountSuffix } from "../lib/container-label";
+import { recordRecentlyViewed } from "../lib/recently-viewed";
 import { fetchTagsHtml } from "../api/tags";
 import { downscaleImageFile } from "../lib/downscaleImage";
 import { IconAlert, IconCamera, IconCheck, IconInfo, IconTag } from "./Icons";
@@ -172,6 +174,33 @@ export function ProductCard({
     setImageFailed(false);
   }, [selectedProduct.id]);
 
+  /*
+    Recently viewed (2026-08-12, Amazon-polish sweep): every card open
+    records the family — this is the ONE wire that covers every entry
+    point (scan, search, browse, cart-line tap, more-from-brand).
+    Keyed on family + initialSelectedCode so size-chip taps inside an
+    open card don't churn the strip; a brand-swap re-records (that IS
+    a new view). Display side: Scanner idle screen.
+  */
+  useEffect(() => {
+    const rep = pickInitialSizeByCode(family.sizes, initialSelectedCode);
+    recordRecentlyViewed({
+      code: rep.code,
+      baseName: family.baseName,
+      image_url:
+        rep.imageThumbUrl ??
+        rep.imageUrl ??
+        family.sizes.find((s) => s.imageThumbUrl ?? s.imageUrl)?.imageThumbUrl ??
+        family.sizes.find((s) => s.imageUrl)?.imageUrl ??
+        null,
+      licensee_price: rep.licensee_price ?? null,
+      bottle_size_label:
+        rep.bottle_size_label ??
+        (rep.bottle_size_ml != null ? `${rep.bottle_size_ml} mL` : null),
+      category: rep.category ?? null,
+    });
+  }, [family, initialSelectedCode]);
+
   const bump = (delta: number) => {
     if (isQtyConstrained) {
       // Constrained: snap to next/prev valid quantity. Going up from 0
@@ -204,9 +233,10 @@ export function ProductCard({
   const onAdd = () => {
     if (!canAdd) return;
     const addedQty = quantity;
-    const addedSizeLabel =
+    const addedSizeLabel = `${
       selectedProduct.bottle_size_label ??
-      `${selectedProduct.bottle_size_ml ?? ""} mL`;
+      `${selectedProduct.bottle_size_ml ?? ""} mL`
+    }${packCountSuffix(selectedProduct.pack_count)}`;
     onAddToCart(selectedProduct, addedQty);
     // Reset back to 0 so the user must re-pick a qty for the next add.
     // Matches MLCC — there's no implicit "do it again at the same qty".

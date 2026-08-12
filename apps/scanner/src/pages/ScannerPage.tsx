@@ -46,6 +46,12 @@ import {
   type VisionExtracted,
 } from "../api/catalog-vision";
 import { SearchBar } from "../components/SearchBar";
+import { loadSearchHistory, recordSearch } from "../lib/search-history";
+import {
+  clearRecentlyViewed,
+  loadRecentlyViewed,
+  type RecentlyViewedEntry,
+} from "../lib/recently-viewed";
 import { useCart } from "../hooks/useCart";
 import { useCatalogSearch } from "../hooks/useCatalogSearch";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
@@ -71,6 +77,16 @@ export function ScannerPage() {
     hook so the mode is known on the first render of a mapping session.
   */
   const search = useCatalogSearch({ grouped: upcBeingMapped == null });
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => loadSearchHistory());
+  /*
+    Recently viewed strip (2026-08-12, Amazon-polish sweep). ProductCard
+    records every open (the one wire that sees all entry points); this
+    page just reads the list — refreshed each time the card closes so a
+    bottle you just looked at appears the moment you're back here.
+  */
+  const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedEntry[]>(() =>
+    loadRecentlyViewed(),
+  );
   const navigate = useNavigate();
   const isOnline = useOnlineStatus();
   /*
@@ -249,6 +265,33 @@ export function ScannerPage() {
     setCurrentFamily(fam);
     setShowProductCard(true);
   }, []);
+
+  /*
+    Recently-viewed tap → same lookup path as a barcode scan: fetch the
+    full product by the stored code, open its family tree. Codes can
+    leave the catalog between visits (price-book churn) — say so
+    instead of dying silently.
+  */
+  useEffect(() => {
+    if (!showProductCard) setRecentlyViewed(loadRecentlyViewed());
+  }, [showProductCard]);
+
+  const openRecentlyViewed = useCallback(
+    async (code: string) => {
+      setScanInFlight(true);
+      try {
+        const found = await getProductByCode(code);
+        if (found) {
+          await openFamily(found);
+        } else {
+          setToast("Couldn't load that bottle — it may have left the catalog.");
+        }
+      } finally {
+        setScanInFlight(false);
+      }
+    },
+    [openFamily],
+  );
 
   /*
     Vision capture handler (task #37, 2026-06-01). Called by
@@ -564,6 +607,74 @@ export function ScannerPage() {
           }
         />
       </div>
+      {/* Recent searches (2026-08-10, Tony's ask) — hidden in mapping mode. */}
+      {!upcBeingMapped && !search.query && recentSearches.length > 0 ? (
+        <div className="search-recent" aria-label="Recent searches">
+          <span className="search-recent__label">Recent:</span>
+          {recentSearches.map((h) => (
+            <button
+              key={h}
+              type="button"
+              className="search-recent__chip"
+              onClick={() => search.setQuery(h)}
+            >
+              {h}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {/*
+        Recently viewed (2026-08-12, Amazon-polish sweep): horizontal
+        strip of the last families opened anywhere in the app. Tap =
+        reopen the card, two taps from "wait, what was that bottle".
+        Idle-state only — hidden while searching or mapping a UPC.
+      */}
+      {!upcBeingMapped && !search.query && recentlyViewed.length > 0 ? (
+        <div className="recent-viewed" aria-label="Recently viewed">
+          <div className="recent-viewed__head">
+            <span className="search-recent__label">Recently viewed</span>
+            <button
+              type="button"
+              className="recent-viewed__clear"
+              onClick={() => {
+                clearRecentlyViewed();
+                setRecentlyViewed([]);
+              }}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="recent-viewed__row">
+            {recentlyViewed.map((e) => (
+              <button
+                key={e.code}
+                type="button"
+                className="recent-viewed__card"
+                onClick={() => void openRecentlyViewed(e.code)}
+              >
+                <span className="recent-viewed__img">
+                  {e.image_url ? (
+                    <img src={e.image_url} alt="" loading="lazy" />
+                  ) : (
+                    <PlaceholderBottle
+                      tint={tintForCategory(e.category)}
+                      name={e.baseName}
+                      seed={`rv-${e.code}`}
+                    />
+                  )}
+                </span>
+                <span className="recent-viewed__name">{e.baseName}</span>
+                <span className="recent-viewed__meta">
+                  {e.licensee_price != null ? money(e.licensee_price) : null}
+                  {e.licensee_price != null && e.bottle_size_label ? " · " : null}
+                  {e.bottle_size_label ?? null}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="scanhm-statuses">
         {scanInFlight ? (
@@ -623,7 +734,12 @@ export function ScannerPage() {
                 <button
                   type="button"
                   className="scanhm-result-row"
-                  onClick={() => void openFamily(rep)}
+                  onClick={() => {
+                    if (!upcBeingMapped && search.query.trim().length >= 2) {
+                      setRecentSearches(recordSearch(search.query));
+                    }
+                    void openFamily(rep);
+                  }}
                 >
                   <ScanResultThumb product={rep} />
                   <div className="scanhm-result-row__main">
