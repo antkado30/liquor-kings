@@ -1116,6 +1116,7 @@ export function CartDrawer({
                             bottle_size_ml: line.product.bottle_size_ml,
                             case_size: line.product.case_size,
                             ada_name: line.product.ada_name,
+                            pack_count: line.product.pack_count,
                           });
                           const lineValid = generateValidQuantities(lineRule);
                           const lineConstrained = lineValid.length > 0;

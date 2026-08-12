@@ -661,7 +661,7 @@ async function toolCheckOrderQuantity(input, { supabase }) {
   if (code && (!Number.isFinite(sizeMl) || sizeMl <= 0 || caseSize === undefined)) {
     const { data, error } = await supabase
       .from("mlcc_items")
-      .select("code,name,size_ml,case_size")
+      .select("code,name,size_ml,case_size,pack_count")
       .eq("code", code)
       // code is not unique alone (code+ada_number is) — pin to lowest ADA so a
       // multi-distributor SKU can't 500 .maybeSingle().
@@ -674,6 +674,21 @@ async function toolCheckOrderQuantity(input, { supabase }) {
     if (caseSize === undefined && data.case_size != null) {
       const cs = Number(data.case_size);
       if (Number.isInteger(cs) && cs > 0) caseSize = cs;
+    }
+    /*
+      PACK-AWARE CASE MATH (2026-08-10, the Fireball Party Bucket
+      find — mirrors apps/scanner/src/lib/mlcc-ordering-rules.ts).
+      MLCC's case_size counts BOTTLES; multi-packs are priced and
+      ordered per PACK (proven by the 8/5 real order: qty-in-packs ×
+      price-per-pack penny-matched MLCC's email). A 20-pack with
+      case 120 is SIX packs per case — without this the assistant
+      demanded 120 packs (~$2,035) instead of 6 (~$102).
+    */
+    if (caseSize !== undefined && data.pack_count != null) {
+      const pk = Number(data.pack_count);
+      if (Number.isInteger(pk) && pk > 1 && caseSize % pk === 0) {
+        caseSize = caseSize / pk;
+      }
     }
   }
   if (!Number.isFinite(sizeMl) || sizeMl <= 0) {

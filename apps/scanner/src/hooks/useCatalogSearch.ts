@@ -27,14 +27,37 @@ const GROUPED_SEARCH_ENABLED = true;
  * the flat list — mapping a UPC to a family representative would risk the
  * wrong bottle, which is the one unforgivable failure.
  */
-export function useCatalogSearch(options?: { grouped?: boolean }) {
+/*
+  Cross-tab search survival (2026-08-10, Tony: "I search something,
+  go check my cart, come back and it completely restarts"). Instances
+  that pass a persistKey snapshot their state into this module-level
+  map on every change and hydrate from it on mount — so Browse's
+  search text and results are still there after a trip to Cart, like
+  any store app you'd respect. The debounced effect still refires on
+  the restored query, so you get an instant paint from the snapshot
+  AND a silent background refresh. Scanner-home search deliberately
+  does NOT persist (no key): a stale query on the scan screen would
+  be noise, not memory.
+*/
+type SearchSnapshot = {
+  query: string;
+  results: MlccProduct[];
+  groups: FamilyGroup[];
+  hasMore: boolean;
+};
+const SEARCH_SNAPSHOTS = new Map<string, SearchSnapshot>();
+
+export function useCatalogSearch(options?: { grouped?: boolean; persistKey?: string }) {
   const groupedWanted = GROUPED_SEARCH_ENABLED && options?.grouped !== false;
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<MlccProduct[]>([]);
-  const [groups, setGroups] = useState<FamilyGroup[]>([]);
+  const snapshot = options?.persistKey
+    ? SEARCH_SNAPSHOTS.get(options.persistKey)
+    : undefined;
+  const [query, setQuery] = useState(snapshot?.query ?? "");
+  const [results, setResults] = useState<MlccProduct[]>(snapshot?.results ?? []);
+  const [groups, setGroups] = useState<FamilyGroup[]>(snapshot?.groups ?? []);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
+  const [hasMore, setHasMore] = useState(snapshot?.hasMore ?? false);
   const [error, setError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pageRef = useRef(1);
@@ -108,6 +131,12 @@ export function useCatalogSearch(options?: { grouped?: boolean }) {
       setLoadingMore(false);
     }
   }, [query, loadingMore, hasMore]);
+
+  // Snapshot writer — keeps the module-level memory current.
+  useEffect(() => {
+    if (!options?.persistKey) return;
+    SEARCH_SNAPSHOTS.set(options.persistKey, { query, results, groups, hasMore });
+  }, [options?.persistKey, query, results, groups, hasMore]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);

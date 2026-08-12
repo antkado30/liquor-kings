@@ -87,6 +87,34 @@ Tony's cell; voice AI (honest-bot, never fake-human) post-Phase-2.
 Landing page: weakest surface today — M5 rewrite carries pricing,
 trial, and the Colony story.
 
+## STANDING EXCELLENCE ITEMS (Tony, 8/10 dogfood session)
+1. **AMAZON-POLISH SWEEP (new standing lane):** "really think about
+   all the small features Amazon has — browsing between tabs,
+   clicking between tabs." First instances shipped: browse search/
+   filters survive tab trips; saved-for-later; add-guard. Keep a
+   running list: scroll-position restore, back-button sanity, chat
+   restore verify (#9), instant-feel everywhere.
+2. **AI WIRES AUDIT:** "the AI is only smart in such a way" — the
+   assistant shared the pack-math blind spot (fixed 8/10). Standing
+   rule: every catalog-truth fix lands in BOTH the app engine and
+   the assistant's tools the same day, or the AI lies politely.
+3. **PACK-AWARE CASE MATH (fixed 8/10):** MLCC case_size counts
+   bottles; packs order per pack → divide. Verify vs MILO on the
+   next bucket Check (its total ≈ $102/case, not $2,035).
+
+4. **PHOTO AUDIT (Tony 8/10): ~4,000-5,000 bottles have missing or
+   WRONG pictures** — wrong photo = accuracy-doctrine breach on the
+   product's face. Next: quantify from mlcc_items (null image_url +
+   flagged wrongs), then a systematic photo lane (Serper backlog item
+   graduates). Wrong-photo report button in-app is the cheap first
+   step.
+5. **SUBMIT-WITH-OOS FLOW (Tony 8/10, verbatim): "we should be able
+   to submit right after we validate and items are out of stock,
+   because that is how mlcc works — they just mark them out of stock
+   on the order."** Design next session: post-Check sheet gets a
+   first-class "Place anyway — MILO will mark N lines out of stock"
+   path beside Remove; money-path change, needs pins + care.
+
 ## RISK REGISTER
 Sub-user role unknown (Phase-0 experiment resolves) · one-man support
 (Phase 1 stays warm-network + geographically close on purpose) ·

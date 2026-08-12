@@ -109,16 +109,39 @@ export function getOrderingRuleDisplay(product: {
   bottle_size_ml?: number | null;
   case_size?: number | null;
   ada_name?: string | null;
+  pack_count?: number | null;
 }): OrderingRuleDisplay {
   const size = Number(product.bottle_size_ml ?? 0);
-  const caseSize = Number(product.case_size ?? 0);
+  const rawCaseSize = Number(product.case_size ?? 0);
+  /*
+    PACK-AWARE CASE MATH (2026-08-10 — Tony's Fireball Party Bucket
+    find). MLCC's book counts case_size in BOTTLES, but multi-pack
+    products (20PK buckets etc.) are priced and ORDERED per PACK —
+    proven by the 8/5 real order: a bucket line at qty-in-packs ×
+    price-per-pack cleared MILO and penny-matched MLCC's email. So a
+    "case 120" 20-pack is really SIX packs per case, not 120. Without
+    this division the app demanded 120 packs (2,400 bottles, ~$2,035)
+    instead of 6 (~$102) — a 20× money error the accuracy doctrine
+    exists to kill. When the division isn't clean we keep the raw
+    number and SAY SO rather than guess (honesty over invention);
+    MILO's live Check remains the final authority either way.
+  */
+  const packCount = Number(product.pack_count ?? 0);
+  const packAware =
+    packCount > 1 && rawCaseSize > 0 && rawCaseSize % packCount === 0;
+  const caseSize = packAware ? rawCaseSize / packCount : rawCaseSize;
+  const packNote = packAware
+    ? ` (${packCount}-pack × ${caseSize} = ${rawCaseSize} bottles)`
+    : "";
+  const packDirty =
+    packCount > 1 && rawCaseSize > 0 && rawCaseSize % packCount !== 0;
 
   // 70000-series — limited availability, full case only regardless of size.
   if (is70000Series(product.code)) {
     return {
       primary:
         caseSize > 0
-          ? `Limited item — full case only (${caseSize} per case)`
+          ? `Limited item — full case only (${caseSize} per case${packNote})`
           : "Limited item — full case only",
       secondary: product.ada_name
         ? `Distributor: ${product.ada_name}`
@@ -153,10 +176,16 @@ export function getOrderingRuleDisplay(product: {
   if (allowedSplits.length === 0) {
     if (caseSize > 0) {
       return {
-        primary: `Full case only — order in multiples of ${caseSize}`,
-        secondary: product.ada_name
-          ? `Distributor: ${product.ada_name}`
-          : null,
+        primary: packAware
+          ? caseSize === 1
+            ? `Sold by the pack — ${packCount} bottles each`
+            : `Full case only — order in multiples of ${caseSize} packs${packNote}`
+          : `Full case only — order in multiples of ${caseSize}`,
+        secondary: packDirty
+          ? `${packCount}-pack item but case ${caseSize} doesn't divide evenly — verify quantity with Check${product.ada_name ? ` · Distributor: ${product.ada_name}` : ""}`
+          : product.ada_name
+            ? `Distributor: ${product.ada_name}`
+            : null,
         isConstrained: true,
         allowedSplits: [],
         caseSize,

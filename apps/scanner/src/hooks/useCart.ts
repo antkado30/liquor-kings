@@ -323,6 +323,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       bottle_size_ml: line.product.bottle_size_ml,
       case_size: line.product.case_size,
       ada_name: line.product.ada_name,
+      pack_count: line.product.pack_count,
     });
     const valid = generateValidQuantities(rule);
     if (valid.length === 0) {

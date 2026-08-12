@@ -61,14 +61,34 @@ const SORT_OPTIONS: Array<{ value: BrowseSort; sheet: string; chip: string }> = 
   { value: "newest", sheet: "Newest", chip: "Newest" },
 ];
 
+/** Cross-tab survival snapshot (2026-08-10) — see comment at the state hooks. */
+let browseSnapshot: {
+  query: string;
+  filters: BrowseFilters;
+  sort: BrowseSort;
+} = { query: "", filters: {}, sort: "name" };
+
 export function BrowsePage() {
   const navigate = useNavigate();
   const cart = useCart();
   const storeId = getCurrentStoreId() ?? "none";
   const [toast, setToast] = useState<string | null>(null);
-  const [filters, setFilters] = useState<BrowseFilters>({});
-  const [sort, setSort] = useState<BrowseSort>("name");
-  const [query, setQuery] = useState("");
+  /*
+    Cross-tab survival (2026-08-10, Tony: "I search something, go back
+    to my cart, come back to catalogue and it completely restarts").
+    Query + filters + sort snapshot into a module-level object on
+    every change and hydrate on mount, so a Cart round-trip lands you
+    exactly where you left off. Results refetch from the restored
+    query (fresh data, same view). Amazon would; so do we.
+  */
+  const [filters, setFilters] = useState<BrowseFilters>(
+    () => browseSnapshot.filters,
+  );
+  const [sort, setSort] = useState<BrowseSort>(() => browseSnapshot.sort);
+  const [query, setQuery] = useState(() => browseSnapshot.query);
+  useEffect(() => {
+    browseSnapshot = { query, filters, sort };
+  }, [query, filters, sort]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [openPicker, setOpenPicker] = useState<
     null | "category" | "ada" | "size" | "sort" | "price" | "proof"

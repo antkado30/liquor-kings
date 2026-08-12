@@ -302,6 +302,7 @@ export function ProductCard({
         bottle_size_ml: selectedProduct.bottle_size_ml,
         case_size: selectedProduct.case_size,
         ada_name: selectedProduct.ada_name,
+        pack_count: selectedProduct.pack_count,
       }),
     [
       selectedProduct.code,
