@@ -367,7 +367,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
     for (const line of items) {
       const adaNumber = line.product.ada_number;
       const existing = byAda.get(adaNumber);
-      const liters = ((line.product.bottle_size_ml ?? 0) * line.quantity) / 1000;
+      // Pack-aware liters (2026-08-10): 6 × 20-pack × 50ml = 6L, not 0.3L.
+      const pkMul =
+        Number(line.product.pack_count) > 1 ? Number(line.product.pack_count) : 1;
+      const liters = ((line.product.bottle_size_ml ?? 0) * pkMul * line.quantity) / 1000;
       const lineSubtotal = (line.product.licensee_price ?? 0) * line.quantity;
       if (existing) {
         existing.lines.push(line);

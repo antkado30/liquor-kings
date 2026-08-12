@@ -202,6 +202,10 @@ async function validateItemsInput(items, { skipPreValidation = false, mlccLookup
       // case_size is only needed to validate full-case-only sizes (50/100ml);
       // carried through when a caller supplies it, otherwise filled by lookup.
       case_size: Number.isInteger(cs) && cs > 0 ? cs : undefined,
+      pack_count:
+        Number.isInteger(Number(item.pack_count)) && Number(item.pack_count) > 1
+          ? Number(item.pack_count)
+          : undefined,
       ada_number:
         typeof item.ada_number === "string" && item.ada_number.trim() !== "" ? item.ada_number.trim() : undefined,
       expected_name: item.expected_name ? String(item.expected_name).trim() : "",
@@ -216,7 +220,8 @@ async function validateItemsInput(items, { skipPreValidation = false, mlccLookup
     const needsLookup = normalized.some(
       (item) =>
         !item.ada_number ||
-        (isFullCaseOnlySize(item.bottle_size_ml) && item.case_size == null),
+        (isFullCaseOnlySize(item.bottle_size_ml) &&
+          (item.case_size == null || item.pack_count == null)),
     );
     if (needsLookup) {
       if (typeof mlccLookup !== "function") {
@@ -241,6 +246,10 @@ async function validateItemsInput(items, { skipPreValidation = false, mlccLookup
         if (item.case_size == null) {
           const cs = Number(lookup[item.code].case_size);
           if (Number.isInteger(cs) && cs > 0) item.case_size = cs;
+        }
+        if (item.pack_count == null && lookup[item.code].pack_count != null) {
+          const pk = Number(lookup[item.code].pack_count);
+          if (Number.isInteger(pk) && pk > 1) item.pack_count = pk;
         }
       }
     }

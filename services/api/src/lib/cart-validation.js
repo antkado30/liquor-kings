@@ -42,7 +42,7 @@ export async function validateCartByCodes(supabase, items) {
 
   const { data, error } = await supabase
     .from("mlcc_items")
-    .select("code,name,size_ml,ada_number,case_size")
+    .select("code,name,size_ml,ada_number,case_size,pack_count")
     .in("code", codes);
   if (error) {
     return { ok: false, error: `catalog lookup failed: ${error.message}` };
@@ -69,6 +69,12 @@ export async function validateCartByCodes(supabase, items) {
       case_size:
         meta.case_size != null && Number(meta.case_size) > 0
           ? Number(meta.case_size)
+          : undefined,
+      // Pack-aware case math (2026-08-10): the validator divides the
+      // bottle-count case by the pack for multi-pack products.
+      pack_count:
+        meta.pack_count != null && Number(meta.pack_count) > 1
+          ? Number(meta.pack_count)
           : undefined,
     });
   }

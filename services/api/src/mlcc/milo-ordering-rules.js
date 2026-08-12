@@ -77,7 +77,7 @@ export const KNOWN_ADAS = Object.freeze({
  *   those sizes the quantity cannot be verified and is rejected.
  * @returns {{valid: boolean, reason?: string, suggestedAlternatives?: number[]}}
  */
-export function validateQuantityForSize(quantity, sizeML, code, caseSize) {
+export function validateQuantityForSize(quantity, sizeML, code, caseSize, packCount) {
   const q = Number(quantity);
   if (!Number.isFinite(q) || q <= 0 || !Number.isInteger(q)) {
     return { valid: false, reason: "Quantity must be a positive integer" };
@@ -105,12 +105,32 @@ export function validateQuantityForSize(quantity, sizeML, code, caseSize) {
   // size is product-specific (50ml minis ship 60 or 144 to a case depending
   // on the product), so it must be supplied to verify the quantity.
   if (allowedMultiples.length === 0) {
-    const cs = Number(caseSize);
+    let cs = Number(caseSize);
     if (!Number.isInteger(cs) || cs <= 0) {
       return {
         valid: false,
         reason: `Size ${sizeML}ml is full-case-only; cannot verify quantity ${q} without a known case size`,
       };
+    }
+    /*
+      PACK-AWARE CASE MATH (2026-08-10, the Fireball Party Bucket find;
+      mirrors apps/scanner lib/mlcc-ordering-rules.ts). MLCC counts
+      case_size in BOTTLES; multi-pack products are priced and ORDERED
+      per PACK (proven by the 8/5 real order — qty-in-packs cleared MILO
+      and penny-matched MLCC's email). A 20-pack with case 120 is SIX
+      packs per case. Without this the validator blocked qty 6 with
+      "not a whole multiple of the 120-bottle case" — demanding 120
+      PACKS (2,400 bottles, ~$2,035) for one $102 case. Dirty division
+      (case % pack !== 0) keeps bottle math untouched — honesty over
+      guessing; MILO live-check stays the final authority.
+    */
+    const pk = Number(packCount);
+    const packAware = Number.isInteger(pk) && pk > 1 && cs % pk === 0;
+    const bottlesPerCase = cs;
+    let unit = "bottle";
+    if (packAware) {
+      cs = cs / pk;
+      unit = "pack";
     }
     if (q % cs === 0) return { valid: true };
     const suggestions = [];
@@ -120,7 +140,9 @@ export function validateQuantityForSize(quantity, sizeML, code, caseSize) {
     if (!suggestions.includes(fullCaseAbove)) suggestions.push(fullCaseAbove);
     return {
       valid: false,
-      reason: `Size ${sizeML}ml is full-case-only; quantity ${q} is not a whole multiple of the ${cs}-bottle case`,
+      reason: packAware
+        ? `Size ${sizeML}ml is full-case-only; quantity ${q} is not a whole multiple of ${cs} packs (${pk}-pack × ${cs} = ${bottlesPerCase} bottles per case)`
+        : `Size ${sizeML}ml is full-case-only; quantity ${q} is not a whole multiple of the ${cs}-${unit} case`,
       suggestedAlternatives: suggestions.sort((a, b) => a - b),
     };
   }
@@ -163,7 +185,10 @@ export function validateAdaMinimums(cartItems) {
   const byAda = {};
   for (const item of cartItems) {
     const ada = String(item.ada_number ?? "unknown");
-    const liters = ((Number(item.bottle_size_ml) || 0) * (Number(item.quantity) || 0)) / 1000;
+    // Pack-aware liters (2026-08-10): a 20-pack bucket line at qty 6 is
+    // 6 × 20 × 50ml = 6L toward the ADA minimum, not 0.3L.
+    const pkMul = Number(item.pack_count) > 1 ? Number(item.pack_count) : 1;
+    const liters = ((Number(item.bottle_size_ml) || 0) * pkMul * (Number(item.quantity) || 0)) / 1000;
     if (!byAda[ada]) byAda[ada] = { liters: 0, meetsMinimum: false };
     byAda[ada].liters += liters;
   }
@@ -188,6 +213,7 @@ export function validateCart(cartItems) {
       item.bottle_size_ml,
       item.code,
       item.case_size,
+      item.pack_count,
     );
     if (!result.valid) {
       errors.push({

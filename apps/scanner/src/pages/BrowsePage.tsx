@@ -15,6 +15,7 @@
  *   - "Load more" button at the bottom paginates via cursor.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { loadSearchHistory, recordSearch } from "../lib/search-history";
 import { Link, useNavigate } from "react-router-dom";
 import {
   browseFamilies,
@@ -86,6 +87,11 @@ export function BrowsePage() {
   );
   const [sort, setSort] = useState<BrowseSort>(() => browseSnapshot.sort);
   const [query, setQuery] = useState(() => browseSnapshot.query);
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => loadSearchHistory());
+  /** Call when a search leads somewhere real (product/family opened). */
+  const commitSearchToHistory = useCallback(() => {
+    if (query.trim().length >= 2) setRecentSearches(recordSearch(query));
+  }, [query]);
   useEffect(() => {
     browseSnapshot = { query, filters, sort };
   }, [query, filters, sort]);
@@ -306,7 +312,8 @@ export function BrowsePage() {
     setInitialCode(p.code);
     setCurrentFamily(fam);
     setShowProductCard(true);
-  }, []);
+    commitSearchToHistory();
+  }, [commitSearchToHistory]);
 
   const loadMore = useCallback(async () => {
     if (!cursor || loadingMore) return;
@@ -475,15 +482,48 @@ export function BrowsePage() {
         <h1>Browse</h1>
       </header>
 
-      <input
-        type="search"
-        className="search-bar-input browse-search"
-        placeholder="Search bottles by name or MLCC code..."
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        enterKeyHint="search"
-        autoComplete="off"
-      />
+      {/*
+        Clear button + recent searches (2026-08-10, Tony's ask). The ×
+        appears whenever there's text; recent chips appear under an
+        EMPTY box, tap to re-run. History records when a search leads
+        to opening a product (high-signal only — not every keystroke).
+      */}
+      <div className="search-bar-wrap">
+        <input
+          type="search"
+          className="search-bar-input browse-search"
+          placeholder="Search bottles by name or MLCC code..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          enterKeyHint="search"
+          autoComplete="off"
+        />
+        {query ? (
+          <button
+            type="button"
+            className="search-bar-clear"
+            onClick={() => setQuery("")}
+            aria-label="Clear search"
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
+      {!query && recentSearches.length > 0 ? (
+        <div className="search-recent" aria-label="Recent searches">
+          <span className="search-recent__label">Recent:</span>
+          {recentSearches.map((h) => (
+            <button
+              key={h}
+              type="button"
+              className="search-recent__chip"
+              onClick={() => setQuery(h)}
+            >
+              {h}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="browse-chips browse-chips-v2" role="group" aria-label="Filters">
         <BrowseFilterChip

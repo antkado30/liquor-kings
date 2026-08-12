@@ -655,6 +655,7 @@ async function toolCheckOrderQuantity(input, { supabase }) {
   const code = input.code ? String(input.code).trim() : null;
   let caseSize = Number(input.case_size);
   if (!Number.isInteger(caseSize) || caseSize <= 0) caseSize = undefined;
+  let packCount;
 
   // Look up size_ml / case_size from the code when either is needed. case_size
   // is required to verify full-case-only sizes (50ml / 100ml).
@@ -675,27 +676,18 @@ async function toolCheckOrderQuantity(input, { supabase }) {
       const cs = Number(data.case_size);
       if (Number.isInteger(cs) && cs > 0) caseSize = cs;
     }
-    /*
-      PACK-AWARE CASE MATH (2026-08-10, the Fireball Party Bucket
-      find — mirrors apps/scanner/src/lib/mlcc-ordering-rules.ts).
-      MLCC's case_size counts BOTTLES; multi-packs are priced and
-      ordered per PACK (proven by the 8/5 real order: qty-in-packs ×
-      price-per-pack penny-matched MLCC's email). A 20-pack with
-      case 120 is SIX packs per case — without this the assistant
-      demanded 120 packs (~$2,035) instead of 6 (~$102).
-    */
-    if (caseSize !== undefined && data.pack_count != null) {
+    // Pack-aware case math (2026-08-10): pass the pack through to the
+    // shared validator instead of pre-dividing, so reasons read right.
+    if (data.pack_count != null) {
       const pk = Number(data.pack_count);
-      if (Number.isInteger(pk) && pk > 1 && caseSize % pk === 0) {
-        caseSize = caseSize / pk;
-      }
+      if (Number.isInteger(pk) && pk > 1) packCount = pk;
     }
   }
   if (!Number.isFinite(sizeMl) || sizeMl <= 0) {
     return { error: "provide either size_ml or code" };
   }
 
-  const result = validateQuantityForSize(quantity, sizeMl, code, caseSize);
+  const result = validateQuantityForSize(quantity, sizeMl, code, caseSize, packCount);
   const allowed = SPLIT_CASE_RULES_BY_SIZE_ML[sizeMl];
   return {
     quantity,

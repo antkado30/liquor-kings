@@ -1117,7 +1117,7 @@ export async function processOneRpaRun({ apiBaseUrl, workerId }) {
     if (!Array.isArray(codes) || codes.length === 0) return {};
     const { data, error } = await workerSupabase
       .from("mlcc_items")
-      .select("code, ada_number, case_size")
+      .select("code, ada_number, case_size, pack_count")
       .in("code", codes);
     if (error) {
       throw new Error(`mlccLookup failed: ${error.message}`);

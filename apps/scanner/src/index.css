@@ -9842,3 +9842,49 @@ select {
   opacity: 0.5;
   cursor: default;
 }
+
+/* ---- Search clear + recent chips (2026-08-10) ------------------------ */
+.search-bar-wrap {
+  position: relative;
+}
+
+.search-bar-wrap .search-bar-clear {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: rgba(128, 128, 128, 0.25);
+  color: inherit;
+  border-radius: 999px;
+  width: 24px;
+  height: 24px;
+  line-height: 1;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.search-recent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 12px 0;
+}
+
+.search-recent__label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+}
+
+.search-recent__chip {
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
