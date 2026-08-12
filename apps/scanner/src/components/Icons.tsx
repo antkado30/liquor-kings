@@ -346,6 +346,14 @@ export function IconShare(props: IconProps) {
   });
 }
 
+/** #28 save-for-later (2026-08-10): classic bookmark. */
+export function IconBookmark(props: IconProps) {
+  return svg({
+    ...props,
+    children: <path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />,
+  });
+}
+
 export function IconTag(props: IconProps) {
   return svg({
     ...props,

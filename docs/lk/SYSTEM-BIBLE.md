@@ -56,13 +56,15 @@ brew has flyctl 0.4.78 (Depot path OK; its classic builder is broken);
 a pinned **0.4.74 lives at `~/.fly/bin/flyctl`** — the known-honest
 fallback is `~/.fly/bin/flyctl deploy -a liquor-kings --strategy
 rolling --wait-timeout 900 --depot=false --build-arg GIT_SHA=$(git
-rev-parse --short HEAD)`. Deploy verification targets **`/scanner/`**
-assets, never the root (task #30 will bake a GIT_SHA stamp + verify
-script). The mid-rolling "app is not listening" fly WARNING is a benign
-timing artifact seen on every deploy.
+rev-parse --short HEAD)`. **Deploy verification (#30 DONE, live 8/10): `curl -s
+https://liquor-kings.fly.dev/health` returns `git_sha` — must match
+`git rev-parse --short HEAD`. One line, zero phantom doubt.** The
+mid-rolling "app is not listening" fly WARNING is a benign timing
+artifact seen on every deploy. (Fly CLI sessions expire — a deploy
+may open a browser re-login first; normal.)
 
 **Bars**: vitest on Tony's Mac is the only test run that counts.
-Current: API 762/762 (65 files), scanner 151/151 (20 files), tsc clean.
+Current: API 805/805 (69 files), scanner 189/189 (24 files), tsc clean.
 
 ## 3. THE DATABASE — every table (source: `supabase/migrations/`, 64 migrations)
 

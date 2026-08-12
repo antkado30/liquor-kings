@@ -117,7 +117,7 @@ export function CartPage() {
             setInitialCode(undefined);
           }}
           onAddToCart={(product, quantity) => {
-            cart.addItem(product, quantity);
+            cart.addItemGuarded(product, quantity);
             const sizeLabel = `${product.bottle_size_label ?? `${product.bottle_size_ml ?? ""} mL`}${nonGlassContainerSuffix(product.container)}${packCountSuffix(product.pack_count)}`;
             setToast(`Added ${quantity} × ${sizeLabel}`);
           }}

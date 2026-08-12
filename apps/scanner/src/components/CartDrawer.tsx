@@ -60,6 +60,7 @@ import {
   IconCheck,
   IconClipboardList,
   IconFileText,
+  IconBookmark,
   IconTrash,
   IconX,
 } from "./Icons";
@@ -260,6 +261,10 @@ export function CartDrawer({
     groupedByAda,
     totalCost,
     clearCart,
+    savedItems,
+    saveForLater,
+    moveSavedToCart,
+    removeSaved,
     incrementQuantity,
     decrementQuantity,
     removeItem,
@@ -1231,6 +1236,17 @@ export function CartDrawer({
                                     like an alarm button. Now: square icon button on the right
                                     edge with aria-label for screen readers + title tooltip.
                                   */}
+                                  {/* #28: park the line for another week. */}
+                                  <button
+                                    type="button"
+                                    className="cart-line-remove-btn cart-line-save-btn"
+                                    disabled={isBusy}
+                                    onClick={() => saveForLater(lineId)}
+                                    aria-label={`Save ${line.product.name} for later`}
+                                    title="Save for later"
+                                  >
+                                    <IconBookmark size={16} />
+                                  </button>
                                   <button
                                     type="button"
                                     className="cart-line-remove-btn"
@@ -1278,6 +1294,51 @@ export function CartDrawer({
                 })}
               </div>
             )}
+
+            {/* ─── #28 Saved for later (2026-08-10, Amazon-style) ───────── */}
+            {savedItems.length > 0 ? (
+              <section className="saved-later" aria-label="Saved for later">
+                <div className="saved-later__head">
+                  <IconBookmark size={15} aria-hidden />
+                  <span>Saved for later ({savedItems.length})</span>
+                </div>
+                <ul className="saved-later__list">
+                  {savedItems.map((line) => {
+                    const id = `${line.product.code}::${line.product.ada_number}`;
+                    return (
+                      <li key={id} className="saved-later__row">
+                        <div className="saved-later__info">
+                          <span className="saved-later__name">{line.product.name}</span>
+                          <span className="muted small">
+                            {line.quantity} × {money(line.product.licensee_price ?? 0)}
+                          </span>
+                        </div>
+                        <div className="saved-later__actions">
+                          <button
+                            type="button"
+                            className="saved-later__btn"
+                            disabled={isBusy}
+                            onClick={() => moveSavedToCart(id)}
+                          >
+                            Move to cart
+                          </button>
+                          <button
+                            type="button"
+                            className="cart-line-remove-btn"
+                            disabled={isBusy}
+                            onClick={() => removeSaved(id)}
+                            aria-label={`Remove ${line.product.name} from saved`}
+                            title="Remove"
+                          >
+                            <IconTrash size={14} />
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ) : null}
           </>
         ) : null}
 

@@ -166,7 +166,7 @@ export function InventoryPage() {
         row.reorder_quantity && row.reorder_quantity > 0
           ? row.reorder_quantity
           : 1;
-      cart.addItem(product, qty);
+      cart.addItemGuarded(product, qty);
       setToast(`Added ${product.name} ×${qty} to your order`);
       setTimeout(() => setToast(null), 2800);
     } finally {

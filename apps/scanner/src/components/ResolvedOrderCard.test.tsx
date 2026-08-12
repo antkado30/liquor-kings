@@ -29,9 +29,17 @@ import { recordAssistantMemory } from "../api/assistant";
 
 const addItem = vi.fn();
 const updateQuantity = vi.fn();
+/*
+  #29 (2026-08-10): the card adds through the guarded door now. In
+  these pins the guard itself is out of scope (pinned in add-guard
+  + useCart.guard tests), so the mock routes addItemGuarded straight
+  to the same spy — every assertion below still verifies the real
+  outcome: which SKU and qty got added.
+*/
 const cart = {
   items: [],
   addItem,
+  addItemGuarded: addItem,
   updateQuantity,
 } as unknown as CartContextValue;
 

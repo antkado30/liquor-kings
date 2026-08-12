@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { AddGuardDialog } from "./components/AddGuardDialog";
 import { AuthGate } from "./components/AuthGate";
 import { BottomTabBar } from "./components/BottomTabBar";
 import { OrderStatusPill } from "./components/OrderStatusPill";
@@ -122,6 +123,12 @@ export default function App() {
               survives navigation. Returns null when no order is tracked.
             */}
             <OrderStatusPill />
+            {/*
+              Add-guard confirm (#29, 2026-08-10) — global, renders
+              null until a guarded add trips. Lives at root so every
+              surface shares one dialog.
+            */}
+            <AddGuardDialog />
           </ActiveOrderProvider>
         </BrowserRouter>
       </CartProvider>

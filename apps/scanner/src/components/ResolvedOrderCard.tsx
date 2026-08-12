@@ -217,7 +217,7 @@ export function ResolvedOrderCard({
       // stacking (3 + 6 = 9). New items are added normally.
       const inCart = cart.items.some((it) => it.product.code === c.code);
       if (inCart) cart.updateQuantity(c.code, r.qty);
-      else cart.addItem(toProduct(c), r.qty);
+      else cart.addItemGuarded(toProduct(c), r.qty);
       receipt.push({ code: c.code, name: c.name, size: sizeLabel(c), qty: r.qty });
       // LEARN-ON-SWAP (the moat, 2026-07-24, Tony's call: every swap teaches
       // silently): choosing a DIFFERENT bottle than the resolver's pick is a

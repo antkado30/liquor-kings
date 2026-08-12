@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import type { CartItem, MlccProduct } from "../types";
+import { addGuardVerdict, type AddGuardVerdict } from "../lib/add-guard";
 import { Sentry } from "../lib/sentry";
 import {
   generateValidQuantities,
@@ -18,6 +19,8 @@ import {
 } from "../lib/mlcc-ordering-rules";
 
 const STORAGE_KEY = "lk-scanner-cart-v1";
+/** #28 save-for-later (2026-08-10, "Amazon-style"): its own bucket. */
+const SAVED_STORAGE_KEY = "lk-scanner-saved-v1";
 
 type PersistedCartV1 = {
   version: 1;
@@ -80,6 +83,33 @@ function loadCart(): CartItem[] {
   }
 }
 
+function loadSaved(): CartItem[] {
+  try {
+    const raw = localStorage.getItem(SAVED_STORAGE_KEY);
+    if (raw == null || raw === "") return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return [];
+    const o = parsed as Record<string, unknown>;
+    if (o.version !== 1) return [];
+    if (!Array.isArray(o.lines)) return [];
+    return o.lines.filter(isPlainCartItem);
+  } catch (error) {
+    captureStorageError(error);
+    return [];
+  }
+}
+
+function persistSaved(lines: CartItem[]): void {
+  try {
+    localStorage.setItem(
+      SAVED_STORAGE_KEY,
+      JSON.stringify({ version: 1, lines, updatedAt: new Date().toISOString() }),
+    );
+  } catch (error) {
+    captureStorageError(error);
+  }
+}
+
 function saveCart(lines: CartItem[]): void {
   try {
     const payload: PersistedCartV1 = {
@@ -93,10 +123,47 @@ function saveCart(lines: CartItem[]): void {
   }
 }
 
+/**
+ * A guarded add waiting on the owner's confirm (#29 UI wiring,
+ * 2026-08-10). Set by addItemGuarded when the add-guard trips
+ * (duplicate line and/or unusually big line); rendered by the global
+ * AddGuardDialog; resolved by confirmPendingAdd / cancelPendingAdd.
+ */
+export type PendingAdd = {
+  product: MlccProduct;
+  quantity: number;
+  verdict: AddGuardVerdict;
+};
+
 export type CartContextValue = {
   items: CartItem[];
   groupedByAda: AdaGroup[];
   addItem: (product: MlccProduct, quantity: number) => void;
+  /**
+   * The guarded door (#29): same signature as addItem, but runs the
+   * add-guard first. Clean adds go straight through; trips park in
+   * pendingAdd for the global confirm dialog. Use this on
+   * SINGLE-LINE, user-initiated surfaces (scan, browse, search,
+   * resolve cards). Bulk restores/reorders keep raw addItem on
+   * purpose — re-adding a known past order line by line would spam
+   * confirms.
+   */
+  addItemGuarded: (product: MlccProduct, quantity: number) => void;
+  pendingAdd: PendingAdd | null;
+  confirmPendingAdd: () => void;
+  cancelPendingAdd: () => void;
+  /**
+   * #28 save-for-later (2026-08-10, "Amazon-style"). A saved line is
+   * OUT of the cart: it doesn't count toward totals, rules, Check, or
+   * Place — it's a parking spot for "not this week." Restore merges
+   * back through raw addItem (deliberate action, no guard prompt).
+   * Prices on a saved line can go stale; the cart re-prices nothing —
+   * rule/Check validation catches reality when it returns.
+   */
+  savedItems: CartItem[];
+  saveForLater: (lineId: string) => void;
+  moveSavedToCart: (lineId: string) => void;
+  removeSaved: (lineId: string) => void;
   removeItem: (mlccCode: string) => void;
   updateQuantity: (mlccCode: string, quantity: number) => void;
   incrementQuantity: (lineId: string) => void;
@@ -145,6 +212,84 @@ export function CartProvider({ children }: { children: ReactNode }) {
       }
       return [...prev, { product, quantity: q }];
     });
+  }, []);
+
+  /*
+    #29 guard wiring (2026-08-10). The decision engine (lib/add-guard,
+    shipped 8/8 with 8 pins) finally gets a door. itemsRef (already
+    maintained for the persist debounce) gives the CURRENT cart
+    synchronously, so the verdict never races a pending setItems.
+  */
+  const [pendingAdd, setPendingAdd] = useState<PendingAdd | null>(null);
+
+  const addItemGuarded = useCallback(
+    (product: MlccProduct, quantity: number) => {
+      const k = lineKey(product);
+      const existing = itemsRef.current.find((c) => lineKey(c.product) === k);
+      const verdict = addGuardVerdict({
+        addQty: quantity,
+        existingQty: existing?.quantity ?? 0,
+        unitPrice: product.licensee_price ?? null,
+        name: product.name,
+      });
+      if (!verdict) {
+        addItem(product, quantity);
+        return;
+      }
+      setPendingAdd({ product, quantity, verdict });
+    },
+    [addItem],
+  );
+
+  const confirmPendingAdd = useCallback(() => {
+    setPendingAdd((pending) => {
+      if (pending) addItem(pending.product, pending.quantity);
+      return null;
+    });
+  }, [addItem]);
+
+  const cancelPendingAdd = useCallback(() => setPendingAdd(null), []);
+
+  /* #28 save-for-later — state, persistence, moves. */
+  const [savedItems, setSavedItems] = useState<CartItem[]>(() => loadSaved());
+  const savedRef = useRef(savedItems);
+  savedRef.current = savedItems;
+  useEffect(() => {
+    const t = window.setTimeout(() => persistSaved(savedRef.current), 100);
+    return () => {
+      window.clearTimeout(t);
+      persistSaved(savedRef.current);
+    };
+  }, [savedItems]);
+
+  const saveForLater = useCallback((lineId: string) => {
+    const line = itemsRef.current.find((c) => lineKey(c.product) === lineId);
+    if (!line) return;
+    setItems((prev) => prev.filter((c) => lineKey(c.product) !== lineId));
+    setSavedItems((prev) => {
+      // Same product saved twice → merge quantities (mirrors cart merge).
+      const idx = prev.findIndex((c) => lineKey(c.product) === lineId);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: next[idx].quantity + line.quantity };
+        return next;
+      }
+      return [...prev, line];
+    });
+  }, []);
+
+  const moveSavedToCart = useCallback(
+    (lineId: string) => {
+      const line = savedRef.current.find((c) => lineKey(c.product) === lineId);
+      if (!line) return;
+      setSavedItems((prev) => prev.filter((c) => lineKey(c.product) !== lineId));
+      addItem(line.product, line.quantity);
+    },
+    [addItem],
+  );
+
+  const removeSaved = useCallback((lineId: string) => {
+    setSavedItems((prev) => prev.filter((c) => lineKey(c.product) !== lineId));
   }, []);
 
   const removeItem = useCallback((mlccCode: string) => {
@@ -247,6 +392,14 @@ export function CartProvider({ children }: { children: ReactNode }) {
       items,
       groupedByAda,
       addItem,
+      addItemGuarded,
+      pendingAdd,
+      confirmPendingAdd,
+      cancelPendingAdd,
+      savedItems,
+      saveForLater,
+      moveSavedToCart,
+      removeSaved,
       removeItem,
       updateQuantity,
       incrementQuantity,
@@ -260,6 +413,14 @@ export function CartProvider({ children }: { children: ReactNode }) {
       items,
       groupedByAda,
       addItem,
+      addItemGuarded,
+      pendingAdd,
+      confirmPendingAdd,
+      cancelPendingAdd,
+      savedItems,
+      saveForLater,
+      moveSavedToCart,
+      removeSaved,
       removeItem,
       updateQuantity,
       incrementQuantity,

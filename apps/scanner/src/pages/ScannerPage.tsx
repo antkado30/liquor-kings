@@ -727,7 +727,7 @@ export function ScannerPage() {
             setUpcScanContext(null);
           }}
           onAddToCart={(product, quantity) => {
-            cart.addItem(product, quantity);
+            cart.addItemGuarded(product, quantity);
             // Task #58 (2026-05-31): card stays open after Add so the
             // user can pick another size of the same brand without re-
             // scanning. Toast still fires for global feedback; the

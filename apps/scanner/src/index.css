@@ -9766,3 +9766,79 @@ select {
   background: #f8fafc;
   border-color: #e2e8f0;
 }
+
+/* ---- #28 Saved for later (2026-08-10) -------------------------------- */
+.cart-line-save-btn {
+  margin-right: 4px;
+}
+
+.saved-later {
+  margin: 14px 0 4px;
+  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  padding-top: 12px;
+}
+
+.saved-later__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-bottom: 8px;
+}
+
+.saved-later__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.saved-later__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.saved-later__info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.saved-later__name {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-later__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.saved-later__btn {
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  background: transparent;
+  color: inherit;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.saved-later__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
