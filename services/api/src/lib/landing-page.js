@@ -279,6 +279,17 @@ export function landingPageHtml() {
   .price__list li b { font-weight: 600; }
   .price__foot { margin-top: 18px; font-size: 14px; color: rgba(12, 20, 16, 0.55); }
 
+  /* tags aside — the cheeky one-liner (Tony YES, 8/10) */
+  .tags-aside { padding: 74px 0; text-align: center; }
+  .tags-aside .kicker { margin-bottom: 16px; }
+  .tags-aside p {
+    font-family: "Fraunces", Georgia, serif;
+    font-size: clamp(22px, 3.2vw, 34px);
+    line-height: 1.35;
+    max-width: 30ch;
+    margin: 0 auto;
+  }
+
   /* promise */
   .promise { text-align: center; padding: 110px 0; }
   .promise p {
@@ -422,6 +433,14 @@ export function landingPageHtml() {
   </div>
 </section>
 
+<section class="tags-aside">
+  <div class="wrap">
+    <div class="kicker rv">One more thing</div>
+    <p class="rv">Oh &mdash; and it prints your shelf tags.
+    <span class="em">Any printer you already own.</span></p>
+  </div>
+</section>
+
 <section class="price">
   <div class="wrap">
     <div class="kicker rv">Pricing</div>
@@ -435,6 +454,7 @@ export function landingPageHtml() {
         <li><b>14 days free</b> &mdash; covers two order days</li>
         <li>No card to start</li>
         <li>Cancel anytime</li>
+        <li>More than one store? <b>$99/month</b> each after the first</li>
       </ul>
       <a class="btn" href="/signup">Start free</a>
       <div class="price__foot">Built in Michigan, for Michigan stores.</div>

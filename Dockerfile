@@ -54,6 +54,7 @@ FROM node:22-bookworm-slim AS production
 # manual `fly deploy` runs working (release falls back to "unknown").
 ARG GIT_SHA=""
 ENV SENTRY_RELEASE=$GIT_SHA
+ENV GIT_SHA=$GIT_SHA
 
 ENV NODE_ENV=production
 ENV PORT=8080

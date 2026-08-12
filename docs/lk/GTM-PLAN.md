@@ -40,6 +40,17 @@ ADA rep networks, real marketing, press. Public ≠ promoted: the door
 is open from day one (locked decision honored); promotion waits for
 proof.
 
+## PRICING (evolved 8/10)
+$149/store/month flat · **multi-store: $99/month each store after the
+first** (Tony's call 8/9 — the 20-store fish pays $2,030 vs CoreVue's
+$4,980; $99 CONFIRMED by Tony 8/10). Published
+pricing STAYS PUBLISHED (decision discussion 8/10): store owners are
+scarred by call-us vendors (processors/POS), transparency is the
+honesty brand aimed at money, and self-serve conversion requires a
+visible price. Doctrine: HIDE how it works, SHOW what it costs.
+Whale deals (10+ stores): page price is the floor of the
+conversation — annual/custom stays negotiable in the room.
+
 ## ALWAYS-BETTER MATRIX (beat every strongsuit)
 
 vs **hand-typed MILO** (the real #1 competitor): we win on speed

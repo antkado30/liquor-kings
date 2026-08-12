@@ -400,7 +400,9 @@ support, "few days" onboarding, 14-day trial, month-to-month.
 
 **BUSINESS DECISIONS LOCKED (Tony, 2026-08-08, tap-confirmed):**
 price **$149/store/month flat** (under CoreVue's $249 umbrella; ~$1,788
-/store/yr; room to raise as modules stack) · **14-day free trial**
+/store/yr; room to raise as modules stack; **multi-store 8/9-10:
+$99/mo each store after the first — CONFIRMED 8/10;
+published-pricing doctrine: hide how it works, show what it costs**) · **14-day free trial**
 (covers two Wednesday orders) · **MLCC recognition letter: draft +
 send this week** (Colony story, sub-user path, Ohio/Provi precedent) ·
 **next build after the 8/8 batch: self-serve signup machine** (the

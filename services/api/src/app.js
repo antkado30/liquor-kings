@@ -276,7 +276,18 @@ if (scannerDistReady) {
 }
 
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", message: "Liquor Kings API running" });
+  /*
+    Board #30 (2026-08-10): deploy truth-probe. The deploy command
+    passes --build-arg GIT_SHA=$(git rev-parse --short HEAD); the
+    Dockerfile bakes it into the image env. Batch-day verification is
+    now ONE curl: /health shows exactly which commit is serving —
+    ends the phantom-deploy class of doubt (the 8/4 war) for good.
+  */
+  res.json({
+    status: "ok",
+    git_sha: process.env.GIT_SHA || process.env.SENTRY_RELEASE || null,
+    message: "Liquor Kings API running",
+  });
 });
 
 /*

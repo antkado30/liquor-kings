@@ -202,7 +202,13 @@ also OUR pitch. The market education is shared.)
    signup**. Matched and undercut — LOCKED 2026-08-08 (Tony,
    tap-confirmed): **$149/store/month flat, 14-day free trial** (two
    Wednesday orders of proof) vs their $249 + 14 days. Same
-   no-contract cleanliness, $100/mo cheaper, liquor-native.
+   no-contract cleanliness, $100/mo cheaper, liquor-native. PLUS
+   (confirmed 8/10) PUBLISHED multi-store pricing — **$99/mo each
+   store after the first** — which NEITHER competitor publishes
+   (CoreVue: none; Saxon: "multi-store discounts," unpriced,
+   phone-only). Also on the page (8/10): the tags one-liner — "any
+   printer you already own" — aimed straight at Saxon's tag-
+   subscription lock-in.
 10. **"Few days" onboarding**. *Beat:* self-serve SAME-DAY is the
     standing goal — scan a bottle in the first ten minutes.
 11. **Support in a few hours by email**. *Beat:* AI partner inside
