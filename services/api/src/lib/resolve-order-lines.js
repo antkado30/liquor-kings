@@ -13,6 +13,8 @@
  * this layer is testable and boring on purpose.
  */
 
+import { loadFlagshipMap } from "./brand-flagships.js";
+
 // Flavor/variant words. A candidate whose name contains one of these that the
 // search terms did NOT ask for is penalized, so the PLAIN base product surfaces
 // above flavored line-extensions (plain Svedka over Svedka Banana).
@@ -36,6 +38,14 @@ export const FLAVOR_WORDS = [
   // alone are risky — ROOT is a real liqueur brand — but the compound is
   // unambiguous; includes() matches the two-word phrase).
   "root beer",
+  // 2026-08-12 (the CAPTAIN MORGAN ICED TEA whiff — "captain morgans fifth
+  // x 3" resolved to the RTD iced tea): ready-to-drink cocktail lines are
+  // variants, never a brand's base spirit. Compounds/unambiguous words only.
+  // "sweet tea" is deliberately ABSENT — Firefly's FLAGSHIP is Sweet Tea
+  // Vodka (the Skrewball-peanut rule). "margarita" is safe even though
+  // Margaritaville is a brand: typing "margaritaville" waives it via the
+  // t.includes(f) check.
+  "iced tea", "margarita", "daiquiri", "colada", "mojito", "sangria", "mai tai",
   // Premium / limited editions — always step-ups, never a base bottle. (We do
   // NOT include "black"/"gold"/"collectors"/"edition": those can BE the regular
   // product for some brands, so penalizing them could hide a real base.)
@@ -123,13 +133,58 @@ export const FLAGSHIP_ALIASES = {
   skrewball: ["skrewball", "peanut", "butter"],
   carolans: ["carolans", "irish", "cream"],
   fireball: ["fireball", "cinnamon"],
+  /*
+   * CAPTAIN MORGAN (2026-08-12, Tony's SQL dump — catalog truth): the
+   * flagship is stored ABBREVIATED as "CAPT MORGAN SPICED RUM (P R)"
+   * (41307 is the 750) while flavors are fully spelled. Injecting
+   * "spiced" is what saves the flagship from its own flavor penalty
+   * (the Carolans irish-cream case) and demotes White Rum / Iced Tea /
+   * Sliced Apple by a missing term. "capt" (not "captain") anchors the
+   * abbreviated spelling; the fully-spelled flavors still match it as
+   * a substring of "captain". TWO-token keys below cover how people
+   * actually write it.
+   */
+  captain: ["capt", "morgan", "spiced", "rum"],
+  "captain morgan": ["capt", "morgan", "spiced", "rum"],
+  "captain morgans": ["capt", "morgan", "spiced", "rum"],
+  "capt morgan": ["capt", "morgan", "spiced", "rum"],
+  "capt morgans": ["capt", "morgan", "spiced", "rum"],
+  "capt morg": ["capt", "morgan", "spiced", "rum"],
+  "captain morg": ["capt", "morgan", "spiced", "rum"],
 };
 
-/** Bare-brand → flagship terms; anything more specific passes through. */
-export function applyFlagshipAlias(terms) {
+/** "morgans" → "morgan" for key lookup; real brands ending in s survive
+    because their EXACT key is tried first (keys length ≤3 never touched). */
+function depluralizeKey(t) {
+  return t.length > 3 && t.endsWith("s") && !t.endsWith("ss") ? t.slice(0, -1) : t;
+}
+
+/** Bare-brand → flagship terms; anything more specific passes through.
+    Keys are one OR two distinctive tokens ("captain morgans" is still a
+    bare brand — 2026-08-12); any extra distinctive word disables the
+    alias. The static map (curated, in-code) is consulted FIRST; the
+    dynamic map (derived brand_flagships table, loaded per resolve with
+    a 5-min cache) covers EVERY other brand — Tony's 2026-08-12 law:
+    "it has to work for EVERY bottle." */
+export function applyFlagshipAlias(terms, dynamicMap = null) {
   const distinctive = (terms || []).filter((t) => !GENERIC_WORDS.has(t));
-  if (distinctive.length === 1 && FLAGSHIP_ALIASES[distinctive[0]]) {
-    return FLAGSHIP_ALIASES[distinctive[0]];
+  const keys = [];
+  if (distinctive.length === 1) {
+    keys.push(distinctive[0], depluralizeKey(distinctive[0]));
+  } else if (distinctive.length === 2) {
+    keys.push(
+      `${distinctive[0]} ${distinctive[1]}`,
+      `${depluralizeKey(distinctive[0])} ${depluralizeKey(distinctive[1])}`,
+    );
+  }
+  for (const k of keys) {
+    if (FLAGSHIP_ALIASES[k]) return FLAGSHIP_ALIASES[k];
+  }
+  if (dynamicMap && typeof dynamicMap.get === "function") {
+    for (const k of keys) {
+      const hit = dynamicMap.get(k);
+      if (Array.isArray(hit) && hit.length > 0) return hit;
+    }
   }
   return terms;
 }
@@ -161,6 +216,21 @@ const MISSING_TERM_PENALTY = 60;
 // Age/variety demotion — kept BELOW MISSING_TERM_PENALTY so a correct-brand
 // aged bottle ("KIRKLAND CANADIAN 6 YR") still beats a different brand.
 const VARIANT_PENALTY = 40;
+
+/*
+ * ORDERED-BEFORE BONUS (2026-08-12, the captain-morgan-iced-tea whiff).
+ * A candidate this store has ACTUALLY ORDERED (per its MILO confirmations)
+ * gets a bonus — deliberately smaller than EVERY real penalty (variant 40,
+ * missing-term 60, flavor 100, lead 150) so history is a TIE-BREAKER, never
+ * an override:
+ *   - "captain morgans fifth": Original Spiced and Iced Tea both eat a
+ *     +100 flavor penalty (spiced / iced tea) — history crowns the bottle
+ *     the store actually buys. Per store, automatic, no curation.
+ *   - "captain morgan iced tea" typed: the iced-tea penalty is WAIVED by
+ *     the typed words; the flagship still eats +100 — the typed variant
+ *     wins even against history. Typed words always outrank habit.
+ */
+export const ORDERED_BEFORE_BONUS = 35;
 
 // Mutually-exclusive spirit categories. If the user names one and a candidate
 // is a DIFFERENT one, it's the wrong product (McCormick Vodka vs McCormick Gin).
@@ -203,12 +273,59 @@ function consonantSkeleton(word) {
     .replace(/(.)\1+/g, "$1");
 }
 
+/*
+ * Flavor presence with MLCC-truncation tolerance (2026-08-12, Tony's
+ * Captain Morgan SQL dump: "TROPICL PNCH" escaped the "punch" penalty
+ * because the flavor check was a plain substring). A flavor word is
+ * present when:
+ *   (a) the name contains it outright (unchanged), OR
+ *   (b) for single words ≥5 chars: a NAME TOKEN of equal-or-shorter
+ *       length has the identical consonant skeleton (PNCH ↔ punch,
+ *       VANIL ↔ vanilla). The ≤-length guard matters: truncations are
+ *       never LONGER than the word, which keeps PANACHE (7 chars, also
+ *       pnch) from eating a "punch" penalty.
+ * A plain-prefix rule was tried and REVERTED in the same commit: "OLD 7
+ * BLACK" (the standard Jack Daniel's) read as truncated BLACKberry —
+ * whole real words that prefix a longer flavor are exactly the class
+ * the FLAVOR_WORDS comment bans. Skeletons don't collide there (black →
+ * blck ≠ blackberry → blckbr).
+ * Compound flavors ("root beer", "iced tea") keep plain substring — a
+ * truncated half of a compound is too ambiguous to accuse.
+ */
+export function flavorPresentIn(lname, f) {
+  if (lname.includes(f)) return true;
+  if (f.includes(" ")) return false;
+  if (f.length >= 5) {
+    const sk = consonantSkeleton(f);
+    // ≥3: vanilla's skeleton is only "vnl" — a ≥4 guard missed VANIL. The
+    // ≤-length token guard is what prevents collisions, not skeleton size.
+    if (sk.length >= 3) {
+      return lname
+        .split(/[^a-z0-9]+/)
+        .some((tok) => tok.length >= 3 && tok.length <= f.length && consonantSkeleton(tok) === sk);
+    }
+  }
+  return false;
+}
+
 function termPresentIn(lname, strippedName, t, idx) {
   if (/^\d+$/.test(t)) return new RegExp(`\\b${t}\\b`).test(lname);
   const st = t.replace(/[^a-z0-9]/g, "");
   let present = lname.includes(t) || (st.length >= 3 && strippedName.includes(st));
   if (!present && t.length >= 6) {
     present = lname.includes(t.slice(0, 5)) || strippedName.includes(st.slice(0, 5));
+  }
+  if (!present) {
+    // NAME-TOKEN-IS-A-PREFIX truncation (2026-08-12, Tony's Morgan SQL dump:
+    // the flagship lives as "CAPT MORGAN SPICED RUM" / "CAPT MORG LONG ISL
+    // ICED TEA" — MLCC chops words to 4+ chars, so "captain" and "morgans"
+    // read as MISSING from the very bottle they name). A name token of ≥4
+    // chars that the typed word STARTS WITH is that word truncated:
+    // capt→captain, morg→morgans. Strictly-longer guard keeps a full word
+    // from being "truncated" by itself (includes already handled equality).
+    present = lname
+      .split(/[^a-z0-9]+/)
+      .some((tok) => tok.length >= 4 && t.length > tok.length && t.startsWith(tok));
   }
   if (!present && st.length >= 3) {
     // MLCC abbreviation match (2026-07-25, the Michter's-10 whiff): "SNGL
@@ -296,12 +413,20 @@ export function scoreCandidate(name, terms, prefer, extra = {}) {
     }
   });
 
-  let flavorPenalty = 0;
-  for (const f of FLAVOR_WORDS) {
-    if (lname.includes(f) && !lterms.some((t) => f.includes(t) || t.includes(f))) {
-      flavorPenalty += 1;
-    }
-  }
+  /*
+   * MAXIMAL-HIT dedupe (2026-08-12, the Malibu margin distortion):
+   * "PINEAPPLE" used to fire BOTH the apple and pineapple penalties
+   * (likewise straw/blue/blackBERRY + berry, pepperMINT + mint) — the
+   * direction was harmless but the doubled margin bought false-green
+   * badges. A flavor hit that is a substring of ANOTHER hit is the same
+   * evidence, counted once.
+   */
+  const flavorHits = FLAVOR_WORDS.filter(
+    (f) => flavorPresentIn(lname, f) && !lterms.some((t) => f.includes(t) || t.includes(f)),
+  );
+  const flavorPenalty = flavorHits.filter(
+    (f) => !flavorHits.some((g) => g !== f && g.includes(f)),
+  ).length;
   score += flavorPenalty * 100;
 
   // Age statement ("10 yr") / variety pack — a step-up, demoted (below the
@@ -333,6 +458,9 @@ export function scoreCandidate(name, terms, prefer, extra = {}) {
   if (proofMatch && !String(extra?.rawText || "").includes(proofMatch[1])) {
     score += 25;
   }
+
+  // Store history tie-breaker — see ORDERED_BEFORE_BONUS above.
+  if (extra?.orderedBefore === true) score -= ORDERED_BEFORE_BONUS;
 
   // Category conflict: user named a distinct spirit category and the candidate
   // is a different one (McCormick Vodka vs McCormick Gin). Word-boundary so
@@ -447,7 +575,12 @@ async function queryByTerms(supabase, terms) {
   return q.limit(400);
 }
 
-export async function resolveOrderLine(supabase, line) {
+export async function resolveOrderLine(supabase, line, opts = {}) {
+  // opts.orderedCodes: Set of normalized MLCC codes this store has actually
+  // ordered (fetchOrderedCodeSet) — the tie-breaker signal. Optional and
+  // fail-soft: absent/empty Set = scoring identical to before.
+  const orderedCodes =
+    opts?.orderedCodes instanceof Set ? opts.orderedCodes : null;
   // Explicit operator-authored terms pass through untouched; tokenized
   // free text gets brand-synonym expansion (stoli→stolichnaya) THEN the
   // bare-brand → flagship expansion (Tony's law). Synonyms run first so a
@@ -455,7 +588,10 @@ export async function resolveOrderLine(supabase, line) {
   const baseTerms =
     Array.isArray(line.terms) && line.terms.length
       ? applyBrandSynonyms(line.terms.map((t) => String(t).toLowerCase()).slice(0, 6))
-      : applyFlagshipAlias(applyBrandSynonyms(tokenizeName(line.name)));
+      : applyFlagshipAlias(
+          applyBrandSynonyms(tokenizeName(line.name)),
+          await loadFlagshipMap(supabase),
+        );
   if (baseTerms.length === 0) {
     return { best: null, alternates: [], exactHit: false, total: 0, terms: baseTerms, confidence: "none" };
   }
@@ -498,20 +634,46 @@ export async function resolveOrderLine(supabase, line) {
    * bans. sizeMismatch rides the return so the tool result, the model's
    * words, and the card all tell the same truth.
    */
-  const sizeMismatch = Boolean(line.sizeMl) && all.length > 0 && exact.length === 0;
-  const pool = line.sizeMl && exact.length > 0 ? exact : all;
+  let sizeMismatch = Boolean(line.sizeMl) && all.length > 0 && exact.length === 0;
+  let pool = line.sizeMl && exact.length > 0 ? exact : all;
   // rawText: the line as the human wrote it (proof-number waivers read it —
   // "Smirnoff 100" typed deliberately must not demote SMIRNOFF 100).
   const rawText = String(line.rawText ?? line.name ?? "").toLowerCase();
-  pool.sort(
-    (a, b) =>
-      scoreCandidate(a.name, baseTerms, line.prefer, { row: a, rawText }) -
-        scoreCandidate(b.name, baseTerms, line.prefer, { row: b, rawText }) ||
-      a.name.localeCompare(b.name),
-  );
+  // ONE scorer for sort AND the confidence margins below — if they used
+  // different extras the badge would measure a different race than the
+  // one that picked the winner.
+  const scoreFor = (c) =>
+    scoreCandidate(c.name, baseTerms, line.prefer, {
+      row: c,
+      rawText,
+      orderedBefore:
+        orderedCodes != null &&
+        orderedCodes.has(String(c.code ?? "").trim().replace(/^0+(?=\d)/, "")),
+    });
+  /*
+   * PRODUCT TRUTH BEATS SIZE TRUTH (2026-08-12, found by the Morgan
+   * fixture: "captain morgan iced tea" at a fifth — the iced tea only
+   * exists at 375/1750, so the size filter silently swapped in the
+   * SPICED flagship at 750. A different product at the right size is a
+   * WORSE lie than the right product at a different size.) When the
+   * best candidate ignoring size beats the best size-exact candidate by
+   * at least a full distinctive word (MISSING_TERM_PENALTY), the owner
+   * named a product that doesn't come in that size: surface the named
+   * product, flag the size mismatch, wear review. A same-product size
+   * gap never triggers this (its score is identical across sizes).
+   */
+  if (line.sizeMl && exact.length > 0 && all.length > exact.length) {
+    const bestExactScore = Math.min(...exact.map(scoreFor));
+    const bestAll = [...all].sort((a, b) => scoreFor(a) - scoreFor(b))[0];
+    if (scoreFor(bestAll) + MISSING_TERM_PENALTY <= bestExactScore) {
+      pool = all;
+      sizeMismatch = true;
+    }
+  }
+  pool.sort((a, b) => scoreFor(a) - scoreFor(b) || a.name.localeCompare(b.name));
 
   const ranked = pool.slice(0, 6);
-  const exactHit = line.sizeMl ? exact.length > 0 : null;
+  const exactHit = line.sizeMl ? exact.length > 0 && !sizeMismatch : null;
   /*
    * EVIDENCE-BASED CONFIDENCE (2026-07-24 calibration — stress-catalog run,
    * N=200 seed=20260724, docs/lk/stress-catalog-2026-07-24.md). The old rule
@@ -548,10 +710,7 @@ export async function resolveOrderLine(supabase, line) {
       confidence = "review";
     } else {
       const rival = ranked.find((c) => c.name !== ranked[0].name);
-      const margin = rival
-        ? scoreCandidate(rival.name, baseTerms, line.prefer, { row: rival, rawText }) -
-          scoreCandidate(ranked[0].name, baseTerms, line.prefer, { row: ranked[0], rawText })
-        : Infinity;
+      const margin = rival ? scoreFor(rival) - scoreFor(ranked[0]) : Infinity;
       confidence = cov.allCovered && margin >= VARIANT_PENALTY ? "high" : "medium";
     }
   } else if (exactHit === null && bestCov && !leadMissing) {
@@ -576,10 +735,7 @@ export async function resolveOrderLine(supabase, line) {
         all.filter((c) => c.name === ranked[0].name).map((c) => c.bottle_size_ml),
       ).size;
       const rival = ranked.find((c) => c.name !== ranked[0].name);
-      const margin = rival
-        ? scoreCandidate(rival.name, baseTerms, line.prefer, { row: rival, rawText }) -
-          scoreCandidate(ranked[0].name, baseTerms, line.prefer, { row: ranked[0], rawText })
-        : Infinity;
+      const margin = rival ? scoreFor(rival) - scoreFor(ranked[0]) : Infinity;
       confidence =
         eligibleCount >= 2 && sameNameSizes <= 1 && margin >= VARIANT_PENALTY
           ? "high"

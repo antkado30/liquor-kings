@@ -121,6 +121,53 @@ export async function listOrders(opts?: {
   };
 }
 
+/**
+ * "You've ordered this before" (2026-08-12, Amazon-polish sweep).
+ * One call per family open covers every size chip; results cached per
+ * store+codes for 5 minutes so chip-flipping and reopen churn is free.
+ * Fail-soft everywhere: history is a nicety — an error just means the
+ * line doesn't render.
+ */
+export type OrderHistoryEntry = {
+  times_ordered: number;
+  last_ordered_at: string | null;
+  last_quantity: number | null;
+};
+
+const HISTORY_TTL_MS = 5 * 60_000;
+const historyCache = new Map<
+  string,
+  { at: number; history: Record<string, OrderHistoryEntry> }
+>();
+
+export async function getOrderHistoryForCodes(
+  codes: string[],
+): Promise<Record<string, OrderHistoryEntry>> {
+  const clean = codes.map((c) => c.trim()).filter(Boolean).slice(0, 40);
+  if (clean.length === 0) return {};
+  const cacheKey = `${getCurrentStoreId() ?? "none"}:${[...clean].sort().join(",")}`;
+  const hit = historyCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < HISTORY_TTL_MS) return hit.history;
+
+  try {
+    const res = await fetchWithRetry(
+      `${BASE}/history-for-codes?codes=${encodeURIComponent(clean.join(","))}`,
+      { method: "GET", headers: await authHeaders() },
+      { maxRetries: 1, baseDelayMs: 400, timeoutMs: 8_000 },
+    );
+    if (await handleAuthFailure(res)) return {};
+    const raw = (await res.json()) as Record<string, unknown>;
+    if (!res.ok || raw.ok !== true || typeof raw.history !== "object" || raw.history == null) {
+      return {};
+    }
+    const history = raw.history as Record<string, OrderHistoryEntry>;
+    historyCache.set(cacheKey, { at: Date.now(), history });
+    return history;
+  } catch {
+    return {};
+  }
+}
+
 export type GetOrderResult =
   | { ok: true; order: MiloOrderDetail }
   | { ok: false; error: string };

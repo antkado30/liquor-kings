@@ -47,6 +47,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import express from "express";
 import supabaseDefault from "../config/supabase.js";
 import { resolveOrderLine } from "../lib/resolve-order-lines.js";
+import { fetchOrderedCodeSet } from "../lib/order-history-for-codes.js";
 
 const router = express.Router();
 
@@ -312,9 +313,13 @@ router.post("/identify-from-image", async (req, res) => {
   // user instead of returning random catalog rows.
   if (extracted.brand && extracted.brand.length > 0) {
     // ONE MATCHER LAW: the photo becomes an order line; the resolver ranks.
+    // Ordered-before tie-breaker rides along (2026-08-12) — a photographed
+    // bare brand resolves to the bottle THIS store actually buys.
+    const orderedCodes = await fetchOrderedCodeSet(supabaseDefault, req.store_id ?? null);
     const resolved = await resolveOrderLine(
       supabaseDefault,
       visionLineFromExtracted(extracted),
+      { orderedCodes },
     );
     candidates = [resolved.best, ...(resolved.alternates || [])].filter(Boolean);
     resolve = {

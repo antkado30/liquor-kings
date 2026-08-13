@@ -162,7 +162,7 @@ router.post("/resolve-order", async (req, res) => {
     return res.status(400).json({ error: "text is required" });
   }
   try {
-    const result = await resolveOrderList({ text });
+    const result = await resolveOrderList({ text, storeId: req.store_id ?? null });
     return res.json(result);
   } catch (e) {
     const message = e?.message || String(e);

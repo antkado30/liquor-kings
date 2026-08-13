@@ -12,6 +12,7 @@
 
 import express from "express";
 import supabaseDefault from "../config/supabase.js";
+import { buildOrderHistoryForCodes } from "../lib/order-history-for-codes.js";
 
 const router = express.Router();
 
@@ -151,6 +152,47 @@ router.get("/sync/status", async (req, res) => {
  * line items. Scoped to the resolved store so you can't pull another
  * store's order via a guessed UUID.
  */
+/**
+ * GET /orders/history-for-codes?codes=a,b,c — "You've ordered this
+ * before" for the ProductCard (2026-08-12, Amazon-polish sweep).
+ * Bounded scan of the store's last 60 confirmations. Per code: how
+ * many orders contained it, when the latest was, and that order's
+ * quantity. Registered BEFORE /:id so Express doesn't eat the path.
+ */
+router.get("/history-for-codes", async (req, res) => {
+  const storeId = req.store_id;
+  if (!storeId) {
+    return res
+      .status(403)
+      .json({ ok: false, error: "Store context not resolved" });
+  }
+  const raw = typeof req.query.codes === "string" ? req.query.codes : "";
+  const codes = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 40); // a family card never has more sizes than this
+  if (codes.length === 0) {
+    return res.json({ ok: true, history: {} });
+  }
+
+  const { data, error } = await supabaseDefault
+    .from("milo_order_confirmations")
+    .select("placed_at, created_at, line_items, synced_line_items")
+    .eq("store_id", storeId)
+    .order("placed_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(60);
+
+  if (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+  return res.json({
+    ok: true,
+    history: buildOrderHistoryForCodes(Array.isArray(data) ? data : [], codes),
+  });
+});
+
 router.get("/:id", async (req, res) => {
   const storeId = req.store_id;
   if (!storeId) {

@@ -3,6 +3,10 @@ import { flagIncorrectMatch } from "../api/catalog";
 import { reportWrongPhoto, uploadBottlePhoto } from "../api/catalog-photo";
 import { packCountSuffix } from "../lib/container-label";
 import { recordRecentlyViewed } from "../lib/recently-viewed";
+import {
+  getOrderHistoryForCodes,
+  type OrderHistoryEntry,
+} from "../api/orders";
 import { fetchTagsHtml } from "../api/tags";
 import { downscaleImageFile } from "../lib/downscaleImage";
 import { IconAlert, IconCamera, IconCheck, IconInfo, IconTag } from "./Icons";
@@ -182,6 +186,28 @@ export function ProductCard({
     open card don't churn the strip; a brand-swap re-records (that IS
     a new view). Display side: Scanner idle screen.
   */
+  /*
+    "You've ordered this before" (2026-08-12, Amazon-polish sweep):
+    one bulk fetch per family open covers every size chip; the line
+    under the details grid answers "do I already get this? how many
+    do I usually get?" per SELECTED size. Fail-soft: no history (or
+    an error) simply renders nothing.
+  */
+  const [orderHistory, setOrderHistory] = useState<Record<
+    string,
+    OrderHistoryEntry
+  > | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setOrderHistory(null);
+    void getOrderHistoryForCodes(family.sizes.map((s) => s.code)).then((h) => {
+      if (!cancelled) setOrderHistory(h);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [family]);
+
   useEffect(() => {
     const rep = pickInitialSizeByCode(family.sizes, initialSelectedCode);
     recordRecentlyViewed({
@@ -590,6 +616,42 @@ export function ProductCard({
             <dd>{selectedProduct.proof ?? "—"}</dd>
           </div>
         </dl>
+
+        {(() => {
+          const hist =
+            orderHistory?.[
+              String(selectedProduct.code).trim().replace(/^0+(?=\d)/, "")
+            ] ?? null;
+          if (!hist || hist.times_ordered < 1) return null;
+          let lastWhen: string | null = null;
+          if (hist.last_ordered_at) {
+            const d = new Date(hist.last_ordered_at);
+            if (!Number.isNaN(d.getTime())) {
+              lastWhen = d.toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+              });
+            }
+          }
+          return (
+            <div className="product-card-ordered" aria-label="Your order history for this size">
+              <span className="product-card-ordered__icon" aria-hidden>
+                <IconCheck />
+              </span>
+              <span>
+                You order this size — {hist.times_ordered}{" "}
+                {hist.times_ordered === 1 ? "order" : "orders"}
+                {hist.last_quantity != null || lastWhen ? (
+                  <span className="muted">
+                    {" · last"}
+                    {hist.last_quantity != null ? ` ${hist.last_quantity}` : ""}
+                    {lastWhen ? ` on ${lastWhen}` : ""}
+                  </span>
+                ) : null}
+              </span>
+            </div>
+          );
+        })()}
 
         {/*
           MLCC ordering rule callout (task #43, 2026-05-30). Sits above

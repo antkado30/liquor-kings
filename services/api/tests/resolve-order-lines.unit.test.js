@@ -580,3 +580,252 @@ describe("confidence calibration (2026-07-24)", () => {
     expect(s).toBeLessThan(60);
   });
 });
+
+/*
+ * 2026-08-12 — the CAPTAIN MORGAN ICED TEA whiff. Tony pasted a big order,
+ * "captain morgans fifth x 3" resolved to the RTD iced tea. Two fixes pinned
+ * here: RTD cocktail lines are flavor-penalized compounds, and the store's
+ * own order history breaks flavor ties (ORDERED_BEFORE_BONUS) without ever
+ * outvoting typed words.
+ */
+import { ORDERED_BEFORE_BONUS } from "../src/lib/resolve-order-lines.js";
+
+describe("RTD cocktail variants (iced tea / margarita class)", () => {
+  it("an unrequested ICED TEA variant is penalized like any flavor", () => {
+    const terms = ["captain", "morgans"];
+    const icedTea = scoreCandidate("CAPTAIN MORGAN ICED TEA", terms, null);
+    const plainRum = scoreCandidate("CAPTAIN MORGAN WHITE RUM", terms, null);
+    expect(plainRum).toBeLessThan(icedTea);
+  });
+
+  it("typing 'iced tea' waives the penalty — the variant becomes reachable", () => {
+    const terms = ["captain", "morgan", "iced", "tea"];
+    const icedTea = scoreCandidate("CAPTAIN MORGAN ICED TEA", terms, null);
+    const flagship = scoreCandidate("CAPTAIN MORGAN ORIGINAL SPICED", terms, null);
+    expect(icedTea).toBeLessThan(flagship);
+  });
+
+  it("margarita RTDs are demoted, but the MARGARITAVILLE brand itself is waived", () => {
+    const bare1800 = scoreCandidate("1800 ULTIMATE MARGARITA", ["1800"], null);
+    const silver = scoreCandidate("1800 SILVER", ["1800"], null);
+    expect(silver).toBeLessThan(bare1800);
+    // Brand waiver: typing "margaritaville" must not penalize its own bottles.
+    const mvGold = scoreCandidate("MARGARITAVILLE GOLD", ["margaritaville"], null);
+    expect(mvGold).toBeLessThan(100); // no flavor penalty applied
+  });
+});
+
+describe("ORDERED_BEFORE_BONUS — store history breaks ties, never overrides words", () => {
+  it("captain morgans (bare): both variants eat flavor penalties; history crowns the store's bottle", () => {
+    const terms = ["captain", "morgans"];
+    const flagship = scoreCandidate("CAPTAIN MORGAN ORIGINAL SPICED", terms, null, {
+      orderedBefore: true,
+    });
+    const icedTea = scoreCandidate("CAPTAIN MORGAN ICED TEA", terms, null, {
+      orderedBefore: false,
+    });
+    expect(flagship).toBeLessThan(icedTea);
+  });
+
+  it("typed variant words ALWAYS beat history (cherry asked, plain in history)", () => {
+    const terms = ["smirnoff", "cherry"];
+    const cherry = scoreCandidate("SMIRNOFF CHERRY", terms, null, { orderedBefore: false });
+    const plain = scoreCandidate("SMIRNOFF 80", terms, null, { orderedBefore: true });
+    // Plain is missing "cherry" (+60); the -35 history bonus must not save it.
+    expect(cherry).toBeLessThan(plain);
+  });
+
+  it("history never rescues a wrong brand (lead penalty dwarfs the bonus)", () => {
+    const terms = ["titos"];
+    const right = scoreCandidate("TITO'S HANDMADE VODKA", terms, null, { orderedBefore: false });
+    const wrong = scoreCandidate("ATWATER VODKA", terms, null, { orderedBefore: true });
+    expect(right).toBeLessThan(wrong);
+  });
+
+  it("the bonus is strictly smaller than every real penalty", () => {
+    expect(ORDERED_BEFORE_BONUS).toBeLessThan(40); // VARIANT_PENALTY
+  });
+
+  it("end-to-end: a NON-aliased brand where every family member is flavored — history picks the store's bottle, badge stays honest", async () => {
+    // Malibu-shaped: the flagship IS a flavor (coconut), the rival is another
+    // flavor — both eat +100, structure alone can't crown a winner. The
+    // store's own history decides, and the 35-point margin (< VARIANT_PENALTY)
+    // correctly reads as contested → CHECK, not green.
+    const rows = [
+      { code: "7701", name: "MALIBU COCONUT RUM", bottle_size_ml: 750, is_combo: false },
+      { code: "7702", name: "MALIBU PINEAPPLE RUM", bottle_size_ml: 750, is_combo: false },
+    ];
+    const fake = {
+      from: () => ({
+        select: () => {
+          const b = {
+            or: () => b,
+            ilike: () => b,
+            limit: () => Promise.resolve({ data: rows, error: null }),
+          };
+          return b;
+        },
+      }),
+    };
+    const r = await resolveOrderLine(
+      fake,
+      { name: "malibu", sizeMl: 750, rawText: "malibu fifth x 3" },
+      { orderedCodes: new Set(["7701"]) },
+    );
+    expect(r.best?.code).toBe("7701");
+    // Margin is the 35-point history bonus (< VARIANT_PENALTY 40): the win is
+    // real but contested — the badge must say CHECK, not high.
+    expect(r.confidence).toBe("medium");
+  });
+});
+
+describe("flavor truncation tolerance (the TROPICL PNCH class, 2026-08-12)", () => {
+  it("MLCC-truncated PNCH still eats the 'punch' flavor penalty", () => {
+    const terms = ["captain", "morgans"];
+    const punch = scoreCandidate("CAPTAIN MORGAN TROPICL PNCH PL", terms, null);
+    const white = scoreCandidate("CAPTAIN MORGAN WHITE RUM", terms, null);
+    expect(white).toBeLessThan(punch);
+  });
+
+  it("typing 'punch' waives it regardless of the name's spelling", () => {
+    const terms = ["captain", "morgan", "tropical", "punch"];
+    const punch = scoreCandidate("CAPTAIN MORGAN TROPICL PNCH PL", terms, null);
+    const white = scoreCandidate("CAPTAIN MORGAN WHITE RUM", terms, null);
+    // The punch bottle is now the intent; white rum is missing 'punch' (+60)
+    // and 'tropical' (+60).
+    expect(punch).toBeLessThan(white);
+  });
+
+  it("VANIL truncation is caught by the skeleton rule", () => {
+    const s = scoreCandidate("STOLICHNAYA VANIL", ["stolichnaya"], null);
+    expect(s).toBeGreaterThanOrEqual(100); // vanilla penalty fired
+  });
+
+  it("whole real words that PREFIX a longer flavor are never accused (BLACK ≠ blackberry)", () => {
+    const terms = ["jack", "daniels"];
+    const standard = scoreCandidate("J DANIELS OLD 7 BLACK", terms, null);
+    expect(standard).toBeLessThan(100); // no blackberry penalty
+  });
+
+  it("a LONGER token with the same skeleton is never accused (PANACHE ≠ punch)", () => {
+    const s = scoreCandidate("PANACHE VODKA", ["panache"], null);
+    expect(s).toBeLessThan(100); // no punch penalty
+  });
+
+  it("compound flavors still need the full phrase (no half-compound accusations)", () => {
+    // "iced" alone in a name must not fire the "iced tea" penalty.
+    const s = scoreCandidate("ICED VODKA CO", ["iced", "vodka", "co"], null);
+    expect(s).toBeLessThan(100);
+  });
+});
+
+/*
+ * 2026-08-12 pt.2 — the REAL Captain Morgan family, verbatim from Tony's
+ * prod SQL dump. MLCC stores the flagship ABBREVIATED ("CAPT MORGAN SPICED
+ * RUM (P R)") and the flavors fully spelled — so "captain morgans" could
+ * not even SEE the bottle it named. Pins: the token-prefix truncation
+ * bridge (capt→captain, morg→morgans), the two-token flagship alias, and
+ * the guards that keep JACKSON MORGAN (a different brand) out of the race.
+ */
+describe("Captain Morgan — catalog-truth fixture (Tony's SQL, 2026-08-12)", () => {
+  const MORGAN_ROWS = [
+    { code: "41307", name: "CAPT MORGAN SPICED RUM (P R)", bottle_size_ml: 750, is_combo: false },
+    { code: "41297", name: "CAPT MORGAN SPICED RUM (PR) PL", bottle_size_ml: 750, is_combo: false },
+    { code: "41317", name: "CAPT MORGAN SILVER SPICED RUM", bottle_size_ml: 750, is_combo: false },
+    { code: "5246", name: "CAPTAIN MORGAN SPICED-100", bottle_size_ml: 750, is_combo: false },
+    { code: "10923", name: "CAPTAIN MORGAN WHITE RUM", bottle_size_ml: 750, is_combo: false },
+    { code: "22339", name: "CAPTAIN MORGAN SLICED APPLE", bottle_size_ml: 750, is_combo: false },
+    { code: "34124", name: "CAPTAIN MORGAN CHILI LIME", bottle_size_ml: 750, is_combo: false },
+    { code: "12294", name: "CAPTAIN MORGAN COCONUT RUM", bottle_size_ml: 750, is_combo: false },
+    { code: "6108", name: "CAPT MORG LONG ISL ICED TEA", bottle_size_ml: 375, is_combo: false },
+    { code: "5538", name: "CAPT MORG LONG ISL ICED TEA", bottle_size_ml: 1750, is_combo: false },
+    { code: "85440", name: "CAPT MORGAN PRIVATE STOCK", bottle_size_ml: 750, is_combo: false },
+    { code: "76811", name: "CAPT MORGAN SPICED RUM (PR) W/ 50mL CAPT MORGAN SPICED RUM (P R) PL", bottle_size_ml: 750, is_combo: true },
+    { code: "16789", name: "JACKSON MORGAN SALTED CARAMEL", bottle_size_ml: 750, is_combo: false },
+    { code: "30721", name: "CAPTAIN APPLE JACK", bottle_size_ml: 750, is_combo: false },
+  ];
+  const fake = (rows) => ({
+    from: () => ({
+      select: () => {
+        const b = {
+          or: () => b,
+          ilike: () => b,
+          limit: () => Promise.resolve({ data: rows, error: null }),
+        };
+        return b;
+      },
+    }),
+  });
+
+  it("token-prefix truncation: 'captain'/'morgans' read as PRESENT in CAPT MORG names", () => {
+    const cov = termCoverage("CAPT MORG LONG ISL ICED TEA", ["captain", "morgans"]);
+    expect(cov.leadCovered).toBe(true);
+    expect(cov.allCovered).toBe(true);
+  });
+
+  it("the alias fires on the TWO-token bare brand", () => {
+    expect(applyFlagshipAlias(["captain", "morgans"])).toEqual(["capt", "morgan", "spiced", "rum"]);
+    expect(applyFlagshipAlias(["captain"])).toEqual(["capt", "morgan", "spiced", "rum"]);
+    // Any extra distinctive word disables it — typed intent passes through.
+    expect(applyFlagshipAlias(["captain", "morgan", "white"])).toEqual(["captain", "morgan", "white"]);
+  });
+
+  it("'captain morgans fifth x 3' → THE flagship 41307, not a flavor, not white rum", async () => {
+    const r = await resolveOrderLine(fake(MORGAN_ROWS), {
+      name: "captain morgans",
+      sizeMl: 750,
+      rawText: "captain morgans fifth x 3",
+    });
+    expect(r.best?.code).toBe("41307");
+  });
+
+  it("history refines glass vs plastic within the flagship (Colony buys the PL)", async () => {
+    const r = await resolveOrderLine(
+      fake(MORGAN_ROWS),
+      { name: "captain morgans", sizeMl: 750, rawText: "captain morgans fifth" },
+      { orderedCodes: new Set(["41297"]) },
+    );
+    expect(r.best?.code).toBe("41297");
+  });
+
+  it("'captain morgan iced tea' reaches the RTD — and size honesty flags the missing fifth", async () => {
+    const r = await resolveOrderLine(fake(MORGAN_ROWS), {
+      name: "captain morgan iced tea",
+      sizeMl: 750,
+      rawText: "captain morgan iced tea fifth",
+    });
+    // No 750 exists for the iced tea — the resolver may surface it but must
+    // say the size is a mismatch and never wear a confident badge.
+    expect(r.best?.name).toBe("CAPT MORG LONG ISL ICED TEA");
+    expect(r.sizeMismatch).toBe(true);
+    expect(r.confidence).toBe("review");
+  });
+
+  it("'captain morgan white rum' still resolves to white rum (typed variant wins)", async () => {
+    const r = await resolveOrderLine(fake(MORGAN_ROWS), {
+      name: "captain morgan white rum",
+      sizeMl: 750,
+      rawText: "captain morgan white rum fifth",
+    });
+    expect(r.best?.code).toBe("10923");
+  });
+
+  it("JACKSON MORGAN and CAPTAIN APPLE JACK never win the captain's race", async () => {
+    const r = await resolveOrderLine(fake(MORGAN_ROWS), {
+      name: "captain morgans",
+      sizeMl: 750,
+      rawText: "captain morgans fifth",
+    });
+    const names = [r.best, ...r.alternates].filter(Boolean).map((c) => c.name);
+    expect(names[0]).not.toMatch(/JACKSON|APPLE JACK/);
+  });
+
+  it("jackson morgan salted caramel resolves inside ITS brand", async () => {
+    const r = await resolveOrderLine(fake(MORGAN_ROWS), {
+      name: "jackson morgan salted caramel",
+      sizeMl: 750,
+      rawText: "jackson morgan salted caramel",
+    });
+    expect(r.best?.code).toBe("16789");
+  });
+});

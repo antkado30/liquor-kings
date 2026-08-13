@@ -1077,7 +1077,37 @@ export function CartDrawer({
         {state.kind !== "submitDone" ? (
           <>
             {items.length === 0 ? (
-              <p className="drawer-empty muted">Your cart is empty — scan items to add them</p>
+              /*
+                Empty cart with somewhere to GO (2026-08-12, Amazon-polish
+                sweep): scan is not the only door — the weekly flow usually
+                starts from a past order or the catalog. Buttons close the
+                drawer first so the destination isn't under an overlay.
+              */
+              <div className="drawer-empty-state">
+                <p className="drawer-empty muted">Your cart is empty — scan a bottle to add it</p>
+                <div className="drawer-empty-actions">
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    onClick={() => {
+                      handleClose();
+                      navigate("/browse");
+                    }}
+                  >
+                    Browse catalog
+                  </button>
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    onClick={() => {
+                      handleClose();
+                      navigate("/orders");
+                    }}
+                  >
+                    Reorder a past order
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="drawer-ada-groups">
                 {groupedByAda.map((group) => {

@@ -35,6 +35,7 @@ import {
   SPLIT_CASE_RULES_BY_SIZE_ML,
 } from "../mlcc/milo-ordering-rules.js";
 import { validateCartByCodes } from "./cart-validation.js";
+import { fetchOrderedCodeSet } from "./order-history-for-codes.js";
 import {
   normalizePhrase,
   memoryKey,
@@ -797,12 +798,18 @@ async function toolResolveBottles(input, { supabase, storeId, emitProgress = () 
   });
   let memoryIndex = new Map();
   const memorySkuByCode = new Map();
+  // Ordered-before tie-breaker (2026-08-12): one bounded fetch covers every
+  // line in the wave. Fail-soft empty Set — resolving never waits on history.
+  let orderedCodes = new Set();
   if (storeId) {
-    memoryIndex = await fetchMemoryIndex(
-      supabase,
-      storeId,
-      prepared.map((p) => p.phrase),
-    );
+    [memoryIndex, orderedCodes] = await Promise.all([
+      fetchMemoryIndex(
+        supabase,
+        storeId,
+        prepared.map((p) => p.phrase),
+      ),
+      fetchOrderedCodeSet(supabase, storeId),
+    ]);
     const pinnedCodes = [
       ...new Set(
         prepared
@@ -881,12 +888,16 @@ async function toolResolveBottles(input, { supabase, storeId, emitProgress = () 
           };
         }
 
-        const r = await resolveOrderLine(supabase, {
-          name: effName,
-          sizeMl,
-          prefer,
-          rawText: raw || effName,
-        });
+        const r = await resolveOrderLine(
+          supabase,
+          {
+            name: effName,
+            sizeMl,
+            prefer,
+            rawText: raw || effName,
+          },
+          { orderedCodes },
+        );
         const bestFmt = fmt(r.best);
         return {
           requested: {
@@ -1294,7 +1305,7 @@ function extractJsonArray(text) {
  * best match + alternates + confidence. This NEVER writes to the cart; the
  * client adds confirmed lines via the normal authenticated cart API.
  */
-export async function resolveOrderList({ text, supabase = supabaseDefault }) {
+export async function resolveOrderList({ text, supabase = supabaseDefault, storeId = null }) {
   const trimmed = String(text || "").trim();
   if (!trimmed) throw new Error("resolveOrderList: text is required");
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -1331,9 +1342,11 @@ export async function resolveOrderList({ text, supabase = supabaseDefault }) {
     })
     .filter(Boolean);
 
+  // Ordered-before tie-breaker (2026-08-12) — one fetch for the whole list.
+  const orderedCodes = await fetchOrderedCodeSet(supabase, storeId);
   const lines = await Promise.all(
     candidates.map(async (c) => {
-      const r = await resolveOrderLine(supabase, c);
+      const r = await resolveOrderLine(supabase, c, { orderedCodes });
       return {
         input: { name: c.name, size: c.size, qty: c.qty },
         name: c.name,

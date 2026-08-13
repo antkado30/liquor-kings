@@ -56,7 +56,11 @@ brew has flyctl 0.4.78 (Depot path OK; its classic builder is broken);
 a pinned **0.4.74 lives at `~/.fly/bin/flyctl`** — the known-honest
 fallback is `~/.fly/bin/flyctl deploy -a liquor-kings --strategy
 rolling --wait-timeout 900 --depot=false --build-arg GIT_SHA=$(git
-rev-parse --short HEAD)`. **Deploy verification (#30 DONE, live 8/10): `curl -s
+rev-parse --short HEAD)`. **LAW (2026-08-12): deploys run from the REPO
+ROOT (`cd ~/dev/liquor-kings`)** — running from services/api broke the
+remote builder ("failed to parse daemon host") and uploaded a 361MB
+context (no .dockerignore there; the root one excludes node_modules/
+rpa-output). Root context is ~2MB. **Deploy verification (#30 DONE, live 8/10): `curl -s
 https://liquor-kings.fly.dev/health` returns `git_sha` — must match
 `git rev-parse --short HEAD`. One line, zero phantom doubt.** The
 mid-rolling "app is not listening" fly WARNING is a benign timing
@@ -64,7 +68,10 @@ artifact seen on every deploy. (Fly CLI sessions expire — a deploy
 may open a browser re-login first; normal.)
 
 **Bars**: vitest on Tony's Mac is the only test run that counts.
-Current: API 805/805 (69 files), scanner 189/189 (24 files), tsc clean.
+Current (2026-08-12 close, pending batch): API 855/855 (72 files),
+scanner 214/214 (28 files), tsc clean. Prod (643b4d0) was cut at
+812/214. Sandbox full-suite runs need dummy `SUPABASE_URL` +
+`SUPABASE_SERVICE_ROLE_KEY` exported (no .env there).
 
 ## 3. THE DATABASE — every table (source: `supabase/migrations/`, 64 migrations)
 
@@ -164,6 +171,17 @@ the app's own surfaces); the schema below is the always-true map.
   by resolve-card swaps and chat; surfaced as "★ remembered" pins and
   the Settings "Saved matches" section (list + two-tap forget only —
   the UI can never invent memory).
+- **`brand_flagships`** (2026-08-12, pending-batch migration
+  `sql/2026-08-12-brand-flagships.sql`) — bare-brand → flagship alias
+  terms for EVERY brand, derived by the SIZE-LADDER LAW (the flagship
+  has the deepest size ladder; flavors/proof-lines/aged/combos
+  demoted). Built by `scripts/build-brand-flagships.mjs` (dry-run
+  default; `--write`; ambiguous picks go to a review CSV only —
+  a knowledge row must never guess). `source='curated'` rows are
+  sacred (builder never touches them) — fixing a wrong flagship is
+  ONE UPDATE, no deploy. Read by the resolver via `loadFlagshipMap`
+  (5-min cache, fail-soft empty). Static in-code FLAGSHIP_ALIASES
+  outrank it (curated > derived).
 
 ### Legacy / support tables
 - **`bottles`** + **`inventory`** — pre-mlcc_items store-scoped bottle

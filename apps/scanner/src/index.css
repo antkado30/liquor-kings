@@ -9975,3 +9975,45 @@ select {
   font-size: 11px;
   opacity: 0.65;
 }
+
+/* ---- "You order this size" history line on the product card ---- */
+
+.product-card-ordered {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(31, 79, 58, 0.08);
+  border: 1px solid rgba(31, 79, 58, 0.22);
+  font-size: 13px;
+}
+
+.product-card-ordered__icon {
+  display: inline-flex;
+  align-items: center;
+  color: #1f4f3a;
+}
+
+.product-card-ordered__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ---- Empty-cart state with forward paths ---- */
+
+.drawer-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px 4px;
+}
+
+.drawer-empty-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
