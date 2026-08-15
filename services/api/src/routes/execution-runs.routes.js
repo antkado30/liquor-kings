@@ -27,6 +27,7 @@ import {
 } from "../services/execution-run.service.js";
 import { enforceParamStoreMatches } from "../middleware/store-param.middleware.js";
 import { requireServiceRole } from "../middleware/require-service-role.middleware.js";
+import { recordWorkerClaimHeartbeat } from "../lib/deep-health.js";
 
 const router = express.Router();
 
@@ -69,6 +70,10 @@ let lastReapAtMs = 0;
 
 router.post("/claim-next", requireServiceRole, async (req, res) => {
   const { workerId, workerNotes } = req.body ?? {};
+
+  // Worker pulse for /health/deep — throttled to 1 write/min, fail-soft,
+  // fire-and-forget: the claim hot path never waits on ops bookkeeping.
+  void recordWorkerClaimHeartbeat(supabase, workerId);
 
   // Self-healing: sweep up runs whose worker died mid-run (stuck "running"
   // with a cold heartbeat). Best-effort — a reap failure must never block

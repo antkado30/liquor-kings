@@ -8,6 +8,8 @@ import executionRunsRouter from "./routes/execution-runs.routes.js";
 import express from "express";
 import cors from "cors";
 import { Sentry } from "./lib/sentry.js";
+import supabase from "./config/supabase.js";
+import { runDeepHealth } from "./lib/deep-health.js";
 import bottlesRouter from "./routes/bottles.routes.js";
 import inventoryRouter from "./routes/inventory.routes.js";
 import { resolveAuthenticatedStore } from "./middleware/resolve-store.middleware.js";
@@ -287,6 +289,22 @@ app.get("/health", (req, res) => {
     status: "ok",
     git_sha: process.env.GIT_SHA || process.env.SENTRY_RELEASE || null,
     message: "Liquor Kings API running",
+  });
+});
+
+/*
+ * Deep health (2026-08-13, launch-readiness sweep): DB + catalog +
+ * worker-heartbeat in one probe, 200/503 so an uptime monitor can
+ * alert by status code alone. Point cron-job.org (already in the
+ * stack for the price-book cron) at this URL with email-on-failure —
+ * that's the whole alerting build. See src/lib/deep-health.js.
+ */
+app.get("/health/deep", async (req, res) => {
+  const result = await runDeepHealth(supabase);
+  res.status(result.ok ? 200 : 503).json({
+    status: result.ok ? "ok" : "degraded",
+    git_sha: process.env.GIT_SHA || process.env.SENTRY_RELEASE || null,
+    ...result,
   });
 });
 
