@@ -1,0 +1,9 @@
+16b0217da94de4edd6f95d457e9351bb6735fdad  apps/scanner/src/components/ProductCard.tsx
+18deb0fb645869a53444ab3e0988af6fe96a6b17  apps/scanner/src/index.css
+40887d58489e725b1445a46a3980c2c0a5053e7d  apps/scanner/src/lib/recently-viewed.test.ts
+ed88cdd4d54b2542d445aa3f45d152425c1b7169  apps/scanner/src/lib/recently-viewed.ts
+970f9b14da5bfea7bfff6e5435123dc7066bc9c8  apps/scanner/src/pages/BrowsePage.tsx
+25e2d2175a5bafb2869b068c877e451eee178717  apps/scanner/src/pages/OrdersPage.tsx
+625d8463782223da3ab6abf57d28ecd37588770d  apps/scanner/src/pages/ScannerPage.tsx
+caed7afc23bd7f0b2da51c35b2487179f4c36bb1  services/api/src/services/execution-run.service.js
+f9bb3cfced1c4d4b22739ce0da19e333ae25735c  services/api/src/workers/execution-worker.js

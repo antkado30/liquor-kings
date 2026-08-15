@@ -307,6 +307,8 @@ export function landingPageHtml() {
   }
   .foot__row { display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; }
   .foot__name { font-family: "Fraunces", serif; font-weight: 700; letter-spacing: 0.2em; color: var(--cream-dim); font-size: 14px; }
+  .foot__legal a { color: var(--cream-faint); text-decoration: none; border-bottom: 1px solid var(--line); }
+  .foot__legal a:hover { color: var(--cream-dim); }
   /* CONTACT-SLOT: when officialized, add support email / phone here. */
 
   /* reveal on scroll */
@@ -474,6 +476,7 @@ export function landingPageHtml() {
   <div class="wrap foot__row">
     <span class="foot__name">LIQUOR&nbsp;KINGS</span>
     <span>Built in Michigan &nbsp;&middot;&nbsp; &copy; 2026 Liquor Kings</span>
+    <span class="foot__legal"><a href="/terms">Terms</a> &nbsp;&middot;&nbsp; <a href="/privacy">Privacy</a></span>
     <!-- CONTACT-SLOT: public support email / phone goes here once officialized -->
   </div>
 </footer>

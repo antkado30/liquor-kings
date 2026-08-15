@@ -1,0 +1,8 @@
+193121ac3aff98edd55436e6ca3b1a76e50a0f69  .gitignore
+0e9de321a911dc0ba0efdb1901a61f6dd67945c4  apps/scanner/src/components/AuthGate.tsx
+80c508b275ff36012b89a73bfdb2938dfa132d91  apps/scanner/src/index.css
+f62ab6cce4cfe777bc587a9d52ddb8a829fa5f50  docs/lk/runbooks/HERD-RUNBOOK.md
+4f841dae83e6786ae995fcad2cbd285a019bb3b0  services/api/scripts/verify-catalog-photos.mjs
+dfab0ef8304ecbe36b56938be48dca97dee1aec7  services/api/src/lib/landing-page.js
+99ac2b341781ef28a589b8b190eb4934aeeb438f  services/api/src/lib/photo-verify.js
+1fa5f19b93c594c31362b61804371392983f2320  services/api/tests/photo-verify.unit.test.js

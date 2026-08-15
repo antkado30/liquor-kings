@@ -57,4 +57,7 @@ family-audit/
 # machine-local noise — never commit. The docs themselves stay canonical and
 # versioned; Obsidian is a VIEW, never a second store (RULEBOOK #27).
 .obsidian/
-_to_delete/
+
+# Generated review/result CSVs (builder + photo verify) — regenerate on every run
+services/api/scripts/brand-flagships-review.csv
+services/api/scripts/photo-verify-results.csv

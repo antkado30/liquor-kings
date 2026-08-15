@@ -20,6 +20,16 @@
  * Everything here is pure and pinned; the script owns IO.
  */
 
+/*
+ * TRANSCRIBE-THEN-JUDGE (v2, 2026-08-14 — the taste run caught both
+ * passes hallucinating DIFFERENT label text off 360px thumbnails:
+ * "label shows Prestige Vodka" vs "label clearly displays POPOV 80").
+ * Both prompts now force the model to REPORT what the label actually
+ * reads BEFORE any verdict — perception before judgment — and the
+ * decision layer cross-checks the two transcriptions (below). The
+ * script also now sends FULL-resolution images, never thumbs.
+ */
+
 /** Pass 1 — the skeptic. */
 export function buildSkepticPrompt(item) {
   return [
@@ -32,8 +42,13 @@ export function buildSkepticPrompt(item) {
     `MLCC names are abbreviated — expand them mentally (CAPT MORG = Captain`,
     `Morgan, VANIL = Vanilla, PNCH = Punch, "PL" suffix = plastic bottle).`,
     ``,
-    `Look at the image. Answer with STRICT JSON only, no prose:`,
-    `{"verdict":"match"|"wrong"|"unsure","reason":"<one short sentence>","confidence":0.0-1.0}`,
+    `STEP 1 — TRANSCRIBE: read the label. Report ONLY words you can`,
+    `actually see (brand + product line). If the text is too small or`,
+    `blurry to read, say so — NEVER guess text you cannot see.`,
+    `STEP 2 — JUDGE against the product above.`,
+    ``,
+    `Answer with STRICT JSON only, no prose:`,
+    `{"label_reads":"<exact words legible on the label, or 'illegible'>","verdict":"match"|"wrong"|"unsure","reason":"<one short sentence>","confidence":0.0-1.0}`,
     ``,
     `Rules:`,
     `- "match" = same brand AND same product line (flavor/variant matters:`,
@@ -42,7 +57,7 @@ export function buildSkepticPrompt(item) {
     `  listing is acceptable) — but say so in reason.`,
     `- Wrong brand, wrong flavor/variant, a different product entirely,`,
     `  a logo/box/glass-of-drink instead of the bottle → "wrong".`,
-    `- Blurry, generic, or genuinely can't tell → "unsure", never guess.`,
+    `- label_reads is "illegible" or you genuinely can't tell → "unsure".`,
   ].join("\n");
 }
 
@@ -50,22 +65,29 @@ export function buildSkepticPrompt(item) {
 export function buildDefenderPrompt(item) {
   return [
     `A previous reviewer claims this catalog photo does NOT show the`,
-    `product below. Your job is to DEFEND the photo: find every honest`,
-    `reason it could be correct.`,
+    `product below. Give the photo a fair, honest second look.`,
     `  MLCC name: ${item.name}`,
     `  Size: ${item.bottle_size_label ?? (item.bottle_size_ml != null ? `${item.bottle_size_ml} mL` : "unknown")}`,
     `  Category: ${item.category ?? "unknown"}`,
     ``,
     `MLCC names are abbreviated (CAPT MORG = Captain Morgan, VANIL =`,
-    `Vanilla). Consider label redesigns, regional variants, and size`,
-    `differences (size alone never condemns a photo).`,
+    `Vanilla).`,
+    ``,
+    `STEP 1 — TRANSCRIBE: read the label. Report ONLY words you can`,
+    `actually see. NEVER report text you cannot actually read — an`,
+    `honest "illegible" is a valid answer.`,
+    `STEP 2 — JUDGE:`,
+    `- The transcribed BRAND differs from the product's brand →`,
+    `  "undeniably_wrong". A different brand has NO defense.`,
+    `- Same brand but a clearly different flavor/variant/line →`,
+    `  "undeniably_wrong". A variant mismatch is a wrong photo.`,
+    `- Same brand + same line with label-redesign, angle, regional, or`,
+    `  bottle-SIZE differences → "defensible" (size never condemns).`,
+    `- Illegible or genuinely ambiguous → "defensible" with reason`,
+    `  "illegible" (a photo is never condemned on unreadable evidence).`,
     ``,
     `Answer with STRICT JSON only:`,
-    `{"verdict":"defensible"|"undeniably_wrong","reason":"<one short sentence>","confidence":0.0-1.0}`,
-    ``,
-    `Only say "undeniably_wrong" when no honest defense exists (clearly a`,
-    `different brand, flavor, or product). If there is ANY reasonable`,
-    `case the photo is right, say "defensible".`,
+    `{"label_reads":"<exact words legible on the label, or 'illegible'>","verdict":"defensible"|"undeniably_wrong","reason":"<one short sentence>","confidence":0.0-1.0}`,
   ].join("\n");
 }
 
@@ -79,6 +101,8 @@ export function parseVerdict(text, allowed) {
     return {
       verdict: obj.verdict,
       reason: typeof obj.reason === "string" ? obj.reason.slice(0, 300) : "",
+      label_reads:
+        typeof obj.label_reads === "string" ? obj.label_reads.slice(0, 200) : null,
       confidence:
         typeof obj.confidence === "number" && obj.confidence >= 0 && obj.confidence <= 1
           ? obj.confidence
@@ -89,23 +113,90 @@ export function parseVerdict(text, allowed) {
   }
 }
 
+// Category words carry no identity — a transcription overlap must rest
+// on at least one word that isn't one of these.
+const GENERIC_LABEL_WORDS = new Set([
+  "rum", "vodka", "gin", "whiskey", "whisky", "tequila", "bourbon", "brandy",
+  "liqueur", "wine", "scotch", "proof", "the", "and", "old", "distilled",
+  "premium", "original", "imported", "ml", "liter",
+]);
+
+/** Distinctive tokens of a transcription / product name. */
+export function labelTokens(s) {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !GENERIC_LABEL_WORDS.has(w));
+}
+
+function isIllegible(v) {
+  const lr = String(v?.label_reads ?? "").toLowerCase();
+  return lr === "" || lr.includes("illegible");
+}
+
+/** ≥1 shared DISTINCTIVE token between two texts (prefix-tolerant both
+    ways for MLCC truncations: capt↔captain). */
+export function tokensAgree(a, b) {
+  const ta = labelTokens(a);
+  const tb = labelTokens(b);
+  return ta.some((x) =>
+    tb.some(
+      (y) => x === y || (x.length >= 4 && y.startsWith(x)) || (y.length >= 4 && x.startsWith(y)),
+    ),
+  );
+}
+
 /**
- * The decision matrix. skeptic / defender are parsed verdicts (or null
- * for unparseable). Returns the ledger verdict.
+ * The decision matrix (v2 — evidence-stability guards added after the
+ * thumbnail-hallucination taste run).
+ *
+ *   - A MATCH must be grounded: the skeptic's transcription has to
+ *     share a distinctive word with the MLCC name, or the "match" was
+ *     imagined → unsure.
+ *   - A CONFIRMED_WRONG must be coherent: when both passes transcribe
+ *     text but the transcriptions share NOTHING, the passes read
+ *     different labels off the same pixels — the evidence itself is
+ *     unstable → unsure, never a confident verdict in either direction.
+ *   - Illegible never condemns and never confidently matches.
  */
-export function decideVerdict(skeptic, defender) {
+export function decideVerdict(skeptic, defender, opts = {}) {
+  const itemName = opts?.itemName ?? null;
   if (!skeptic) return { verdict: "unsure", reason: "pass 1 unparseable — kept for human eyes" };
+
   if (skeptic.verdict === "match") {
+    if (isIllegible(skeptic)) {
+      return { verdict: "unsure", reason: "match claimed on an illegible label — kept for human eyes" };
+    }
+    if (itemName && skeptic.label_reads != null && !tokensAgree(skeptic.label_reads, itemName)) {
+      return {
+        verdict: "unsure",
+        reason: `match claimed but transcription ("${skeptic.label_reads}") shares nothing with the product name — kept for human eyes`,
+      };
+    }
     return { verdict: "match", reason: skeptic.reason };
   }
   if (skeptic.verdict === "unsure") {
     return { verdict: "unsure", reason: skeptic.reason };
   }
+
   // skeptic says wrong → the defender must ALSO condemn, independently.
   if (!defender) {
     return { verdict: "overruled", reason: "pass 2 unparseable — one accusation is never enough" };
   }
   if (defender.verdict === "undeniably_wrong") {
+    if (
+      skeptic.label_reads != null &&
+      defender.label_reads != null &&
+      !isIllegible(skeptic) &&
+      !isIllegible(defender) &&
+      !tokensAgree(skeptic.label_reads, defender.label_reads)
+    ) {
+      return {
+        verdict: "unsure",
+        reason: `passes transcribed different labels ("${skeptic.label_reads}" vs "${defender.label_reads}") — evidence unstable, kept for human eyes`,
+      };
+    }
     return {
       verdict: "confirmed_wrong",
       reason: `skeptic: ${skeptic.reason} | defender agreed: ${defender.reason}`,

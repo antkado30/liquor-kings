@@ -10017,3 +10017,18 @@ select {
   flex-wrap: wrap;
   justify-content: center;
 }
+
+/* ---- Signup clickwrap line (2026-08-14, stranger-readiness) ---- */
+
+.auth-legal {
+  margin: 10px 0 0;
+  font-size: 12px;
+  opacity: 0.65;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.auth-legal a {
+  color: inherit;
+  text-decoration: underline;
+}

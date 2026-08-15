@@ -126,9 +126,25 @@ async function askVision(anthropic, prompt, img) {
 }
 
 async function verifyOne(anthropic, item) {
-  const url = item.image_thumb_url || item.image_url; // thumb = cheaper tokens, same truth
+  /*
+   * FULL image, never the thumb (v2 law — the taste run proved 360px
+   * thumbs make both passes hallucinate label text). Thumb is only a
+   * fallback when the full image itself is unfetchable/oversized;
+   * verdicts from a thumb can still only land as match/overruled/
+   * unsure because the transcription guards catch unstable reads.
+   */
+  const url = item.image_url || item.image_thumb_url;
   try {
-    const img = await fetchImageAsBase64(url);
+    let img;
+    try {
+      img = await fetchImageAsBase64(url);
+    } catch (e) {
+      if (item.image_thumb_url && url !== item.image_thumb_url) {
+        img = await fetchImageAsBase64(item.image_thumb_url);
+      } else {
+        throw e;
+      }
+    }
     const skepticRaw = await askVision(anthropic, buildSkepticPrompt(item), img);
     const skeptic = parseVerdict(skepticRaw, ["match", "wrong", "unsure"]);
     let defender = null;
@@ -136,7 +152,7 @@ async function verifyOne(anthropic, item) {
       const defenderRaw = await askVision(anthropic, buildDefenderPrompt(item), img);
       defender = parseVerdict(defenderRaw, ["defensible", "undeniably_wrong"]);
     }
-    const decision = decideVerdict(skeptic, defender);
+    const decision = decideVerdict(skeptic, defender, { itemName: item.name });
     return {
       code: item.code,
       verdict: decision.verdict,

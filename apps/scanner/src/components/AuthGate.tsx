@@ -755,6 +755,24 @@ export function AuthGate({ children }: AuthGateProps) {
                 skip it and the scanner opens now — ordering unlocks
                 once you connect in Settings.
               </p>
+
+              {/*
+                Clickwrap line (2026-08-14, stranger-readiness sweep):
+                the legal pages existed since 6/06 but NOTHING linked
+                to them — a paying stranger must see what they're
+                agreeing to at the moment of account creation.
+              */}
+              <p className="auth-legal">
+                By creating an account you agree to the{" "}
+                <a href="/terms" target="_blank" rel="noopener noreferrer">
+                  Terms of Service
+                </a>{" "}
+                and{" "}
+                <a href="/privacy" target="_blank" rel="noopener noreferrer">
+                  Privacy Policy
+                </a>
+                .
+              </p>
             </form>
           )}
         </div>

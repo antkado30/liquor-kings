@@ -1,0 +1,10 @@
+87a87bf086566e25ee93359a2913258491899ac0  services/api/scripts/load-test.mjs
+514bedc8cfe6337530d744f501a516e79e3e6fad  services/api/scripts/verify-catalog-photos.mjs
+bc1eeb2388bc8468e574a73476fef1cecfdbb7fb  services/api/src/app.js
+483d77e8ff6478c008ce94f0ddd5683022ff165b  services/api/src/lib/deep-health.js
+98e8fa50f386cab67a59c5c5e1de9a977cee1a4e  services/api/src/lib/photo-verify.js
+f162d425ad5761b61964ac72cdfb06157eacd8b9  services/api/src/routes/execution-runs.routes.js
+42e79877668a64cb6badf88226751f6bf0d5b7dd  services/api/tests/deep-health.unit.test.js
+e88bfa7eaa3e5ae3c5437508b1b74e0f9511f07b  services/api/tests/photo-verify.unit.test.js
+461eb44acc73b144229423bc8e92363fbda5669f  sql/2026-08-13-ops-heartbeats.sql
+64e642b721bbe7f945e46fce3167f6248e480c78  sql/2026-08-14-catalog-photo-verifications.sql
