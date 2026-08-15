@@ -1938,9 +1938,20 @@ router.get("/items/grouped", async (req, res) => {
       req.query.packs === "singles" || req.query.packs === "packs"
         ? req.query.packs
         : null;
+    /*
+      ONE SEARCH BRAIN (2026-08-15, Tony's renovation trigger: "ole smoky
+      + 50ml starts trippen"). The size filter used to be deliberately
+      absent here — the client dropped to the FLAT browse path when a
+      size was picked, which swapped the abbreviation-aware ranked
+      search for a dumb substring match. Same typed words, dumber brain,
+      just because a size was on. Now grouped search takes the size like
+      any other filter: cards simply contain the matching size only.
+    */
+    const bottleSizeMl = Number.parseInt(String(req.query.bottle_size_ml ?? ""), 10);
     const applyGroupedBrowseFilters = (q) => {
       let out = q;
       if (category) out = out.eq("category", category);
+      if (Number.isFinite(bottleSizeMl)) out = out.eq("bottle_size_ml", bottleSizeMl);
       if (Number.isFinite(minPrice)) out = out.gte("licensee_price", minPrice);
       if (Number.isFinite(maxPrice)) out = out.lte("licensee_price", maxPrice);
       if (Number.isFinite(minProof)) out = out.gte("proof", minProof);

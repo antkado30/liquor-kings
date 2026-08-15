@@ -240,3 +240,66 @@ export async function getBrowseFacets(): Promise<GetBrowseFacetsResult> {
   }
   return { ok: true, facets: raw.facets as BrowseFacets };
 }
+
+/*
+  CONTEXTUAL FACETS (2026-08-15, filter renovation): counts computed
+  against the CURRENTLY narrowed catalog via the browse_facets_contextual
+  RPC — each dimension excludes its own filter (the standard faceting
+  rule), so pickers show what you'd GET, and the page can show a live
+  "N bottles match". Fail-soft: any error → ok:false and the UI falls
+  back to the global facet counts.
+*/
+export type ContextualFacets = {
+  total: number;
+  categories: Array<{ name: string; count: number }>;
+  adas: Array<{ number: string; name: string; count: number }>;
+  sizes: Array<{ ml: number; label: string; count: number }>;
+  priceRange: { min: number | null; max: number | null };
+  proofRange: { min: number | null; max: number | null };
+};
+
+export async function getContextualFacets(
+  filters: BrowseFilters,
+): Promise<{ ok: true; facets: ContextualFacets } | { ok: false }> {
+  try {
+    const params = new URLSearchParams();
+    if (filters.category) params.set("category", filters.category);
+    if (filters.ada_number) params.set("ada_number", filters.ada_number);
+    if (filters.bottle_size_ml != null) params.set("bottle_size_ml", String(filters.bottle_size_ml));
+    if (filters.min_price != null) params.set("min_price", String(filters.min_price));
+    if (filters.max_price != null) params.set("max_price", String(filters.max_price));
+    if (filters.min_proof != null) params.set("min_proof", String(filters.min_proof));
+    if (filters.max_proof != null) params.set("max_proof", String(filters.max_proof));
+    if (filters.new_only) params.set("new_only", "1");
+    if (filters.container) params.set("container", filters.container);
+    if (filters.packs) params.set("packs", filters.packs);
+    if (filters.ordered_only) params.set("ordered_only", "1");
+    if (filters.q) params.set("q", filters.q);
+    const res = await fetchWithRetry(
+      `${BASE}/facets-contextual?${params.toString()}`,
+      { method: "GET", headers: await authHeaders() },
+      { maxRetries: 1, baseDelayMs: 400, timeoutMs: 8_000 },
+    );
+    if (!res.ok) return { ok: false };
+    const raw = (await res.json()) as Record<string, unknown>;
+    if (raw.ok !== true || typeof raw.facets !== "object" || raw.facets == null) {
+      return { ok: false };
+    }
+    const f = raw.facets as Record<string, unknown>;
+    const price = (f.price ?? {}) as { min?: number | null; max?: number | null };
+    const proof = (f.proof ?? {}) as { min?: number | null; max?: number | null };
+    return {
+      ok: true,
+      facets: {
+        total: typeof f.total === "number" ? f.total : 0,
+        categories: Array.isArray(f.categories) ? (f.categories as ContextualFacets["categories"]) : [],
+        adas: Array.isArray(f.adas) ? (f.adas as ContextualFacets["adas"]) : [],
+        sizes: Array.isArray(f.sizes) ? (f.sizes as ContextualFacets["sizes"]) : [],
+        priceRange: { min: price.min ?? null, max: price.max ?? null },
+        proofRange: { min: proof.min ?? null, max: proof.max ?? null },
+      },
+    };
+  } catch {
+    return { ok: false };
+  }
+}

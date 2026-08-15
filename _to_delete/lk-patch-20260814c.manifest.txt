@@ -1,0 +1,1 @@
+8cd3d70c99bee1578d3adcca6d0096b3af2cb85f  services/api/scripts/verify-catalog-photos.mjs

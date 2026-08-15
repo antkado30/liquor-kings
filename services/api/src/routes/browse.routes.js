@@ -455,6 +455,57 @@ router.get("/browse", async (req, res) => {
  * price-book ingest), but for V1 we just query each time. The
  * underlying tables are indexed and each query returns < 100 rows.
  */
+/**
+ * GET /catalog/browse/facets-contextual — the advanced-filter engine
+ * (2026-08-15 full-renovation mandate). Same query params as /browse;
+ * returns per-option result counts computed against the CURRENTLY
+ * filtered catalog using the standard faceting rule (each dimension's
+ * counts apply every filter except its own) + the live result total —
+ * so the filter sheet can say "Show 213 bottles" and never offer a
+ * dead-end option unlabeled. One RPC round trip
+ * (sql/2026-08-15-browse-facets-contextual.sql). If the RPC isn't
+ * applied yet the client falls back to the global /browse/facets.
+ */
+router.get("/browse/facets-contextual", async (req, res) => {
+  const storeId = req.store_id;
+  if (!storeId) {
+    return res.status(403).json({ ok: false, error: "Store context not resolved" });
+  }
+  const num = (v) => {
+    const n = Number.parseFloat(String(v ?? ""));
+    return Number.isFinite(n) ? n : null;
+  };
+  const container =
+    req.query.container === "glass" || req.query.container === "plastic"
+      ? req.query.container
+      : null;
+  const packs =
+    req.query.packs === "singles" || req.query.packs === "packs" ? req.query.packs : null;
+  const { data, error } = await supabaseDefault.rpc("browse_facets_contextual", {
+    p_category: typeof req.query.category === "string" && req.query.category ? req.query.category : null,
+    p_ada_number: typeof req.query.ada_number === "string" && req.query.ada_number ? req.query.ada_number : null,
+    p_bottle_size_ml: Number.isFinite(Number.parseInt(String(req.query.bottle_size_ml ?? ""), 10))
+      ? Number.parseInt(String(req.query.bottle_size_ml), 10)
+      : null,
+    p_min_price: num(req.query.min_price),
+    p_max_price: num(req.query.max_price),
+    p_min_proof: num(req.query.min_proof),
+    p_max_proof: num(req.query.max_proof),
+    p_new_only: req.query.new_only === "1" || req.query.new_only === "true",
+    p_container: container,
+    p_packs: packs,
+    p_ordered_only: req.query.ordered_only === "1" || req.query.ordered_only === "true",
+    p_store_id: storeId,
+    p_q: typeof req.query.q === "string" && req.query.q.trim() ? req.query.q.trim() : null,
+  });
+  if (error) {
+    // Includes migration-not-applied — the client treats this as
+    // "contextual unavailable" and uses the global facets instead.
+    return res.status(500).json({ ok: false, error: error.message, rpc_missing: true });
+  }
+  return res.json({ ok: true, facets: data });
+});
+
 router.get("/browse/facets", async (req, res) => {
   const storeId = req.store_id;
   if (!storeId) {

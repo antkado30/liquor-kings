@@ -172,6 +172,8 @@ export async function searchProductsGrouped(
     newOnly?: boolean;
     container?: "glass" | "plastic";
     packs?: "singles" | "packs";
+    /** ONE SEARCH BRAIN (2026-08-15): size rides the smart search now. */
+    bottleSizeMl?: number;
   },
 ): Promise<FamilyGroup[]> {
   const q = query.trim();
@@ -188,6 +190,7 @@ export async function searchProductsGrouped(
   if (options?.newOnly) params.set("new_only", "1");
   if (options?.container) params.set("container", options.container);
   if (options?.packs) params.set("packs", options.packs);
+  if (options?.bottleSizeMl != null) params.set("bottle_size_ml", String(options.bottleSizeMl));
   const res = await fetchWithRetry(`${BASE}/items/grouped?${params.toString()}`, {
     credentials: "same-origin",
   });

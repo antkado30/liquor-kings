@@ -10032,3 +10032,17 @@ select {
   color: inherit;
   text-decoration: underline;
 }
+
+/* ---- Filter renovation (2026-08-15): contextual counts + live total ---- */
+
+.browse-sheet__li--zero {
+  opacity: 0.38;
+}
+
+.browse-count {
+  margin: 8px 14px 0;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}

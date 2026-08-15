@@ -21,6 +21,8 @@ import {
   browseFamilies,
   browseProducts,
   getBrowseFacets,
+  getContextualFacets,
+  type ContextualFacets,
   type BrowseFacets,
   type BrowseFilters,
   type BrowseSort,
@@ -132,6 +134,36 @@ export function BrowsePage() {
   const facets = facetsRes.data ?? null;
 
   /*
+    CONTEXTUAL COUNTS (2026-08-15 filter renovation): the global facets
+    above stay the OPTION UNIVERSE (every category/size/ADA that exists);
+    this layer fetches what each option would yield GIVEN the other
+    active filters (faceting rule — own dimension excluded). Options
+    the contextual layer doesn't mention yield 0 → greyed, so the
+    pickers can never walk you into "No bottles match" blind. Falls
+    back silently to global counts when the RPC isn't deployed.
+  */
+  const ctxKey = `browse:ctxfacets:${storeId}:${JSON.stringify({ filters, q: query.trim() || null })}`;
+  const ctxRes = useCachedResource<ContextualFacets | null>(
+    ctxKey,
+    async () => {
+      const r = await getContextualFacets({ ...filters, q: query.trim() || null });
+      return r.ok ? r.facets : null;
+    },
+    30_000,
+  );
+  const ctx = ctxRes.data ?? null;
+  /** Contextual count for an option; null = layer unavailable (use global). */
+  const ctxCount = (
+    dim: "category" | "ada" | "size",
+    key: string | number,
+  ): number | null => {
+    if (!ctx) return null;
+    if (dim === "category") return ctx.categories.find((c) => c.name === key)?.count ?? 0;
+    if (dim === "ada") return ctx.adas.find((a) => a.number === key)?.count ?? 0;
+    return ctx.sizes.find((s) => s.ml === key)?.count ?? 0;
+  };
+
+  /*
     Grouped search in Browse (2026-07-11 pt.2 — Tony: family cards
     "should be everywhere", after finding the flat grid here on his first
     live look). When a SEARCH TERM is typed (and no size filter — asking
@@ -142,7 +174,13 @@ export function BrowsePage() {
     list below, which owns the fuzzy fallback — so misspellings behave
     exactly as before. useCachedResource treats a null key as disabled.
   */
-  const groupedMode = query.trim().length >= 2 && filters.bottle_size_ml == null;
+  /*
+    ONE SEARCH BRAIN (2026-08-15, the "ole smoky + 50ml" renovation
+    trigger): a typed query ALWAYS uses the smart grouped search now —
+    the size filter rides along instead of silently downgrading the
+    search to the flat substring match. Cards simply carry the one size.
+  */
+  const groupedMode = query.trim().length >= 2;
   const groupsKey = groupedMode
     ? `browse:groups:${storeId}:${JSON.stringify({ filters, query: query.trim() })}`
     : null;
@@ -163,6 +201,7 @@ export function BrowsePage() {
         newOnly: filters.new_only || undefined,
         container: filters.container ?? undefined,
         packs: filters.packs ?? undefined,
+        bottleSizeMl: filters.bottle_size_ml ?? undefined,
       });
       return { groups };
     },
@@ -632,6 +671,19 @@ export function BrowsePage() {
         ) : null}
       </div>
 
+      {/*
+        Live result count (2026-08-15 renovation): the contextual-facets
+        total, shown whenever something narrows the catalog — filters
+        stop being a prayer. Quietly absent until the RPC ships.
+      */}
+      {ctx && (hasAnyFilter || query.trim().length >= 2) ? (
+        <p className="browse-count" aria-live="polite">
+          {ctx.total === 0
+            ? "Nothing matches — loosen a filter"
+            : `${ctx.total.toLocaleString()} bottle${ctx.total === 1 ? "" : "s"} match`}
+        </p>
+      ) : null}
+
       {error ? (
         <div className="banner banner-err">Couldn&apos;t load: {error}</div>
       ) : null}
@@ -852,20 +904,23 @@ export function BrowsePage() {
                         All categories
                       </BrowseSheetRow>
                     </li>
-                    {facets?.categories.map((c) => (
-                      <li key={c.name}>
-                        <BrowseSheetRow
-                          selected={filters.category === c.name}
-                          onClick={() => {
-                            setFilters((f) => ({ ...f, category: c.name }));
-                            setOpenPicker(null);
-                          }}
-                        >
-                          <span>{c.name}</span>
-                          <span className="muted small">{c.count}</span>
-                        </BrowseSheetRow>
-                      </li>
-                    ))}
+                    {facets?.categories.map((c) => {
+                      const n = ctxCount("category", c.name) ?? c.count;
+                      return (
+                        <li key={c.name} className={n === 0 ? "browse-sheet__li--zero" : undefined}>
+                          <BrowseSheetRow
+                            selected={filters.category === c.name}
+                            onClick={() => {
+                              setFilters((f) => ({ ...f, category: c.name }));
+                              setOpenPicker(null);
+                            }}
+                          >
+                            <span>{c.name}</span>
+                            <span className="muted small">{n}</span>
+                          </BrowseSheetRow>
+                        </li>
+                      );
+                    })}
                   </>
                 ) : null}
                 {openPicker === "ada" ? (
@@ -881,20 +936,23 @@ export function BrowsePage() {
                         All distributors
                       </BrowseSheetRow>
                     </li>
-                    {facets?.adas.map((a) => (
-                      <li key={a.number}>
-                        <BrowseSheetRow
-                          selected={filters.ada_number === a.number}
-                          onClick={() => {
-                            setFilters((f) => ({ ...f, ada_number: a.number }));
-                            setOpenPicker(null);
-                          }}
-                        >
-                          <span>{a.name}</span>
-                          <span className="muted small">{a.count}</span>
-                        </BrowseSheetRow>
-                      </li>
-                    ))}
+                    {facets?.adas.map((a) => {
+                      const n = ctxCount("ada", a.number) ?? a.count;
+                      return (
+                        <li key={a.number} className={n === 0 ? "browse-sheet__li--zero" : undefined}>
+                          <BrowseSheetRow
+                            selected={filters.ada_number === a.number}
+                            onClick={() => {
+                              setFilters((f) => ({ ...f, ada_number: a.number }));
+                              setOpenPicker(null);
+                            }}
+                          >
+                            <span>{a.name}</span>
+                            <span className="muted small">{n}</span>
+                          </BrowseSheetRow>
+                        </li>
+                      );
+                    })}
                   </>
                 ) : null}
                 {openPicker === "size" ? (
@@ -910,20 +968,23 @@ export function BrowsePage() {
                         All sizes
                       </BrowseSheetRow>
                     </li>
-                    {facets?.sizes.map((s) => (
-                      <li key={s.ml}>
-                        <BrowseSheetRow
-                          selected={filters.bottle_size_ml === s.ml}
-                          onClick={() => {
-                            setFilters((f) => ({ ...f, bottle_size_ml: s.ml }));
-                            setOpenPicker(null);
-                          }}
-                        >
-                          <span>{s.label}</span>
-                          <span className="muted small">{s.count}</span>
-                        </BrowseSheetRow>
-                      </li>
-                    ))}
+                    {facets?.sizes.map((s) => {
+                      const n = ctxCount("size", s.ml) ?? s.count;
+                      return (
+                        <li key={s.ml} className={n === 0 ? "browse-sheet__li--zero" : undefined}>
+                          <BrowseSheetRow
+                            selected={filters.bottle_size_ml === s.ml}
+                            onClick={() => {
+                              setFilters((f) => ({ ...f, bottle_size_ml: s.ml }));
+                              setOpenPicker(null);
+                            }}
+                          >
+                            <span>{s.label}</span>
+                            <span className="muted small">{n}</span>
+                          </BrowseSheetRow>
+                        </li>
+                      );
+                    })}
                   </>
                 ) : null}
                 {openPicker === "sort" ? (
@@ -982,8 +1043,15 @@ export function BrowsePage() {
                         type="button"
                         className="browse-chip"
                         onClick={() => {
+                          // One tap = filtered (Tony's preset call, 2026-08-15).
                           setPriceMinInput(preset.min);
                           setPriceMaxInput(preset.max);
+                          setFilters((f) => ({
+                            ...f,
+                            min_price: preset.min === "" ? null : Number(preset.min),
+                            max_price: preset.max === "" ? null : Number(preset.max),
+                          }));
+                          setOpenPicker(null);
                         }}
                       >
                         {preset.label}
@@ -1051,6 +1119,12 @@ export function BrowsePage() {
                         onClick={() => {
                           setProofMinInput(preset.min);
                           setProofMaxInput(preset.max);
+                          setFilters((f) => ({
+                            ...f,
+                            min_proof: preset.min === "" ? null : Number(preset.min),
+                            max_proof: preset.max === "" ? null : Number(preset.max),
+                          }));
+                          setOpenPicker(null);
                         }}
                       >
                         {preset.label}

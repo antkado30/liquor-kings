@@ -1,0 +1,7 @@
+cdab7e3b7ad30b71cce96d3cad02904e06d0ad2c  apps/scanner/src/api/browse.ts
+3286526e9a79d1c868252b600908e7752e9fb52c  apps/scanner/src/api/catalog.ts
+b81ba6a87059573f9e0526852d6a819e2965c2d9  apps/scanner/src/index.css
+f5054e24e589adcfc52f8eeae1991c2e8999ed2f  apps/scanner/src/pages/BrowsePage.tsx
+b87914d0f5481e3618d6ceec51359d9a4e2b1209  services/api/src/routes/browse.routes.js
+042b567b314a9e766f5eb9cd9bce8622c2b90d4c  services/api/src/routes/price-book.routes.js
+25c7942c665263d55fa8280f53d3fdb4bc0f8865  sql/2026-08-15-browse-facets-contextual.sql

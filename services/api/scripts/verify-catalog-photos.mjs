@@ -95,6 +95,22 @@ async function applyConfirmedWrong() {
   console.log(`DONE — cleared ${cleared}/${rows.length}. They now show honest placeholders and queue for re-sourcing.`);
 }
 
+/*
+ * NORMALIZE-TO-1568 (v2.1 — the full-res taste run threw 23/50 errors:
+ * 1.5–3MB originals blew past the API's per-image byte cap and leaned
+ * on rate limits). Anthropic downscales anything past ~1568px server-
+ * side anyway, so pre-shrinking with sharp loses NOTHING the model
+ * would see, kills the size errors, and cuts image tokens ~40%. sharp
+ * is already a dependency (thumbs script); if it ever fails to load we
+ * fall back to raw bytes with a strict cap.
+ */
+let sharpMod = null;
+try {
+  sharpMod = (await import("sharp")).default;
+} catch {
+  console.warn("(sharp unavailable — sending raw images with a strict size cap)");
+}
+
 async function fetchImageAsBase64(url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`image fetch ${res.status}`);
@@ -104,7 +120,17 @@ async function fetchImageAsBase64(url) {
   );
   if (!mediaType) throw new Error(`unsupported content-type ${type}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > 4.5 * 1024 * 1024) throw new Error(`image too large (${buf.length}b)`);
+  if (buf.length > 15 * 1024 * 1024) throw new Error(`image too large (${buf.length}b)`);
+
+  if (sharpMod) {
+    const out = await sharpMod(buf)
+      .resize(1568, 1568, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    return { mediaType: "image/jpeg", data: out.toString("base64") };
+  }
+  // No sharp: base64 inflates 4/3, API cap is ~5MB — stay safely under.
+  if (buf.length > 3.5 * 1024 * 1024) throw new Error(`image too large without sharp (${buf.length}b)`);
   return { mediaType, data: buf.toString("base64") };
 }
 
@@ -181,7 +207,10 @@ async function main() {
     console.error("Missing ANTHROPIC_API_KEY in env");
     process.exit(1);
   }
-  const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
+  // maxRetries 5: big-image bursts lean on rate limits; the SDK's
+  // exponential backoff absorbs 429s instead of surfacing them as
+  // error verdicts (v2.1, after the 23/50-error taste run).
+  const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY, maxRetries: 5 });
 
   // Already-checked codes (resume support).
   const done = new Set();
